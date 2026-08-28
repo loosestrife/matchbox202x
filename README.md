@@ -358,3 +358,10 @@ To allow asynchronous X11 ClientMessage flows to act like synchronous API calls 
 * put a bunch of app packages in /usr/local/lib/matchboxes 
 * matchbox202x launch --app cool-ebooks
 * while in one sense x11 is an optimization not an initial requirement, it is necessary to ensure that when matchbox202x launch --app cool-ebooks shoves the html into a browser launched remotely, matchbox202x gets the DISPLAY from the ssh -X and routes intents back to the same session as the DISPLAY
+
+### 9.2 Android Enclave
+* matchbox202x app on fdroid that loads html cards and provides localhost:12345, maps intents to android intents, and sideloads packages from /Matchbox
+* matchbox202x app does a ssh -X to user-laptop, and allows apps from user-laptop to display html cards
+
+### 9.3 X modifications
+* once everyone is using matchbox202x, the planned fast path can be implemented, and the unix desktop can be what it should have been in the 1990's
