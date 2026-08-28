@@ -1,6 +1,5 @@
 # UNIX Desktop & Application Platform Specification
 **Version 0.1.0-DRAFT**  
-**Directory:** `matchbox202x`  
 **Status:** Proposal / Reference Specification
 
 ---
@@ -31,7 +30,7 @@ This specification defines a unified, lightweight desktop platform constructed e
 +-----------------------------------------------------------------------+
 
 
-### Core Design Philosophy
+### 0 Core Design Philosophy
 1. **Standardized Manifest (`index.toml`):** Application metadata, runtime dependencies (Nix/Pypi/NPM/Cpan), file permissions, visual UI cards, and external command surfaces are declared in a single, developer-friendly TOML file with minimal differences from (`Cargo.toml`, `pyproject.toml`, `package.json`).
 2. **Universal IPC Surface (`libplatform`):** Applications communicate via **Intents** (directed requests) and **Events** (state broadcasts). `libplatform` abstracts wire-level X11 messages into canonical JSON streams over `stdin`/`stdout` for scripts, standard C API structs for ELF objects, websockets for the http bridge, window.libserver.onMyEvent for html cards
 2. **The Display Server is the IPC Bus:** Following single control multiple data, native X11 `ClientMessage` events handle all intent routing, event broadcasting, and service discovery.  Therefore your system has exactly two event/intent buses, DISPLAY:99 and DISPLAY:0, which, get bridged to http://localhost:12345 and http://localhost:12354 for slow-path convenience
@@ -39,6 +38,14 @@ This specification defines a unified, lightweight desktop platform constructed e
 4. **Decoupled HTML/CSS Visual Layer:** The simplest card is actually an HTML file rendered by a system web browser attached to the X server.  System styling is then inherited directly via `_XSETTINGS_SETTINGS`.
 5. **Zero-Copy POSIX Data Transfer:** Large inter-app file transfers bypass IPC buffer copies entirely by leveraging POSIX filesystem hard-links (`link(2)`) and atomic unlinks (`unlink(2)`), coordinated through the intent server, seamlessly becoming scp between devices.  Inter-app streaming goes unix domain sockets or tls sockets configured by the intent server, and apps connected with a unix domain socket can upgrade that to posix shared memory.
 6. **Zero Invention Design** matchbox202x doesn't invent anything, because everything has already been invented.
+7. **Back to the 90's** ssh -X into your old solaris box and fire applescript intents just like you remember from your dreams.
+8. **Gnu Network Object Model Environment** java-based cards (with their index.toml in their .jar file) can move between devices
+
+# 0.1 Back In My Day
+* **Endpoints ride the environment.** The app doesnt think about the session it reads $DISPLAY. Zero configuration.
+* **Credentials ride the same channel they protect.** sshd wrote a fake cookie and set XAUTHORITY; the secret and the address arrived together.
+* **One forwarded channel per machine-pair**, everything multiplexed. Ten windows, one connection.  Single control channel.
+* **Membership is the connection.** Client dies → socket closes → server notices → gone. No unregister protocol, no keepalives, no ghosts.
 
 ---
 
@@ -114,6 +121,7 @@ Applications not installed in libserver are simply `my-cool-app.toml` files.  Th
 ### 2.1 Canonical `index.toml` Schema
 
 ```toml
+#!/usr/bin/matchbox202x
 [package]
 id = "org.unix.editor"
 version = "1.0.0"
@@ -303,7 +311,6 @@ Protocol Steps:
       "intent": "sys.TransferFile",
       "source_path": "~/.cache/cool-ebook/out_1042.wav",
       "target_app": "org.unix.cool-tts",
-      "read_only": false
     }
 
     Mediation & Link: The system supervisor (sysd), running with elevated privilege relative to app sandboxes, verifies permissions, hard-links the inode into cool-tts's storage space (~/.cache/cool-tts/inbound_8801.wav), and unlinks it from cool-ebook's directory.
@@ -365,3 +372,24 @@ To allow asynchronous X11 ClientMessage flows to act like synchronous API calls 
 
 ### 9.3 X modifications
 * once everyone is using matchbox202x, the planned fast path can be implemented, and the unix desktop can be what it should have been in the 1990's
+#### Requests (client → server)
+RegisterIntent(action: ATOM, win: WINDOW, flags) → status   # exclusive claim by default
+ReleaseIntent(action: ATOM)
+SubscribeEvent(event: ATOM, win: WINDOW) → sub_id
+Unsubscribe(sub_id)
+SendIntent(dest: APP_ATOM | BROADCAST, action: ATOM,
+           payload: ATOM(prop on sender), channel: CARD32, flags)
+SetClientPolicy(...)          # intent-server only, XACE-gated
+GetRegistry()                 # snapshot; intent-server bootstrap/discovery
+
+#### Events (server → client)
+IntentDelivery { action, payload_prop, sender_client, channel }
+EventDelivery  { event, payload_prop, sender_client }
+RegistryChanged { kind: claimed/released/conflict, action }  # lets intent server arbitrate
+IntentError    { channel, code }   # undeliverable, no claimant, denied
+
+
+### 9.4 Security
+* the initial matchbox202x server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the matchbox202x client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0
+* to prevent LocalStorage and BroadcastChannel collisions, the matchbox202x server has to keep track of allocating :5xxxx for cool-app html and keys
+* when the X server is modified, it needs to include some X security extensions that do the obvious things
