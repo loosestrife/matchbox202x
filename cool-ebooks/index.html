@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>EPUB Web Reader</title>
+  <!-- Load JSZip (dependency for epub.js) and epub.js via CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+  <script src="http://localhost:12345/matchbox202x.js"></script>
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #viewer {
+      width: 800px;
+      height: 600px;
+      border: 1px solid #ccc;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      margin-top: 15px;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    button {
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="controls">
+    <input type="file" id="file-input" accept=".epub" />
+    <button id="prev">‹ Previous</button>
+    <button id="next">Next ›</button>
+  </div>
+
+  <!-- Container where epub.js renders the iframe -->
+  <div id="viewer"></div>
+
+  <script>
+    let book;
+    let rendition;
+
+    document.getElementById('file-input').addEventListener('change', function (e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+
+      reader.onload = function (event) {
+        const bookData = event.target.result;
+
+        // Clear previous reader instance if loading a new file
+        if (rendition) rendition.destroy();
+
+        // 1. Initialize the Book object with the File ArrayBuffer
+        book = ePub(bookData);
+
+        // 2. Render the book into the target container element
+        rendition = book.renderTo("viewer", {
+          width: "100%",
+          height: "100%",
+          spread: "always" // Shows facing pages when space allows
+        });
+
+        // 3. Display the initial page
+        rendition.display();
+      };
+
+      reader.readAsArrayBuffer(file);
+    });
+
+    // Pagination controls
+    document.getElementById('next').addEventListener('click', () => rendition && rendition.next());
+    document.getElementById('prev').addEventListener('click', () => rendition && rendition.prev());
+
+    // Keyboard navigation (Left / Right Arrows)
+    document.addEventListener('keyup', (e) => {
+      if (!rendition) return;
+      if (e.key === 'ArrowRight') rendition.next();
+      if (e.key === 'ArrowLeft') rendition.prev();
+    });
+  </script>
+
+</body>
+</html>

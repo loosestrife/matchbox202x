@@ -1,0 +1,13 @@
+[package]
+id = "org.videolan.vlc"
+name = "VLC"
+
+[intents.media.PlayStream]
+handler = "vlc"
+accepts_mime = [
+  "video/x-raw-yuv",
+  "video/mp4",
+  "audio/pcm"
+]
+
+media.transports = ["file", "socket", "shm"]

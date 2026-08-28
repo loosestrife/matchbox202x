@@ -1,0 +1,19 @@
+[package]
+id = "org.unix.cooltts"
+version = "0.1.0"
+name = "Cool TTS Service"
+description = "Text-to-speech service engine using Qwen-TTS and Chonkie"
+exec = "main.py"
+
+[dependencies]
+"nix:python" = "3.11"
+"python:soundfile" = ">=0.13.0"
+"python:chonkie" = ">=1.7.0"
+"python:qwen-tts" = "*"
+
+[permissions]
+filesystem = ["/tmp"]
+
+# Intent Receivers (CLI / Stdin Surface)
+[intents.receivers]
+"ui.TextToSpeech" = { exec = "main.py" }

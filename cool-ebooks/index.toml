@@ -1,0 +1,14 @@
+[package]
+id = "org.unix.cool-ebooks"
+version = "0.1.0"
+name = "Cool Ebooks"
+description = "EPub Demonstrator"
+
+[[cards]]
+id = "main"
+path = "index.html"
+title = "Cool Ebooks"
+
+# Intent Receivers Surface
+[intents.receivers]
+"file.open" = { handler = "index.html" }

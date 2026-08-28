@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FFmpeg Settings & Pipeline</title>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, sans-serif;
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      padding: 1rem;
+      background: #181818;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      height: 100vh;
+      box-sizing: border-box;
+    }
+    .card-title {
+      font-size: 1.2rem;
+      font-weight: bold;
+      border-bottom: 1px solid #333;
+      padding-bottom: 0.5rem;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    label {
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+    select, input, button {
+      padding: 0.5rem;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #282828;
+      color: #fff;
+      font-size: 0.95rem;
+    }
+    button {
+      background: #0066cc;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 0.5rem;
+    }
+    button:hover { background: #0055bb; }
+    .status-box {
+      background: #111;
+      padding: 0.75rem;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid #333;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card-title">FFmpeg Transcode Engine</div>
+
+  <div class="form-group">
+    <label for="output-format">Target Format (emits_mime)</label>
+    <select id="output-format">
+      <option value="video/mp4">video/mp4 (H.264 / AAC)</option>
+      <option value="video/webm">video/webm (VP9 / Opus)</option>
+      <option value="audio/m4a">audio/m4a (AAC Audio Only)</option>
+      <option value="audio/ogg">audio/ogg (Opus Audio Only)</option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label for="transport-mode">Negotiated Transport Mode</label>
+    <select id="transport-mode">
+      <option value="file">file (POSIX Hard-Link Blob)</option>
+      <option value="socket">socket (Direct Socket Stream)</option>
+      <option value="shm">shm (POSIX Shared Memory)</option>
+    </select>
+  </div>
+
+  <button id="btn-process">Start Transform Pipeline</button>
+
+  <div class="status-box" id="log">Awaiting media.TransformStream intent...</div>
+
+  <script>
+    const log = document.getElementById('log');
+    const formatSelect = document.getElementById('output-format');
+    const transportSelect = document.getElementById('transport-mode');
+    let activeIntent = null;
+
+    function appendLog(msg) {
+      log.textContent += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // Helper to send intent payload back to platform IPC
+    function sendIntentResponse(action, payload, channel = null) {
+      const msg = {
+        type: "intent",
+        action: action,
+        disposition: "final-response",
+        channel: channel,
+        payload: payload
+      };
+
+      if (window.libplatform && window.libplatform.sendIntent) {
+        window.libplatform.sendIntent(action, payload, channel);
+      } else {
+        window.postMessage(msg, "*");
+      }
+    }
+
+    // Handle inbound media.TransformStream intent
+    function handleTransformIntent(data) {
+      if (!data || data.action !== "media.TransformStream") return;
+      activeIntent = data;
+
+      const payload = data.payload || {};
+      appendLog(`Received Transform Intent from XID ${data.sender}`);
+      appendLog(`Input MIME: ${payload.mime || 'unknown'}`);
+      appendLog(`Requested Transport: ${payload.transport || 'file'}`);
+
+      // Auto-select match parameters if provided in intent payload
+      if (payload.target_mime) formatSelect.value = payload.target_mime;
+      if (payload.transport) transportSelect.value = payload.transport;
+    }
+
+    // Execute transcode action
+    document.getElementById('btn-process').addEventListener('click', () => {
+      if (!activeIntent) {
+        appendLog("Error: No active transform intent context!");
+        return;
+      }
+
+      const targetMime = formatSelect.value;
+      const transport = transportSelect.value;
+      const channel = activeIntent.channel;
+
+      appendLog(`Initiating transform pipeline -> ${targetMime} via ${transport}...`);
+
+      // 1. Dispatch transform request to background daemon/binary
+      const resultPayload = {
+        status: "processing",
+        source_file: activeIntent.payload.source_path,
+        target_mime: targetMime,
+        transport: transport,
+        output_endpoint: transport === "file" 
+          ? `/tmp/ffmpeg_out_${Date.now()}.${targetMime.split('/')[1]}`
+          : `/tmp/ffmpeg_${Date.now()}.sock`
+      };
+
+      // 2. Respond to caller with target connection details
+      sendIntentResponse("sys.SendData", resultPayload, channel);
+      appendLog("Transform job emitted to background engine.");
+    });
+
+    window.addEventListener('message', (e) => handleTransformIntent(e.data));
+    if (window.libplatform && window.libplatform.onIntent) {
+      window.libplatform.onIntent(handleTransformIntent);
+    }
+  </script>
+</body>
+</html>
