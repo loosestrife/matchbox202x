@@ -1,9 +1,14 @@
 const express = require('express');
 const path = require('path');
 const { spawn } = require('child_process');
+const { HttpError, isHttpError } = require('http-errors');
+
+
+const appRegistry = require('./app-registry');
+
+
 
 const app = express();
-
 app.use(express.json());
 
 // Enable CORS for external HTML cards fetching from localhost
@@ -31,15 +36,12 @@ app.post('/intent/:namespace/:action', (req, res) => {
 
   console.log(`[INTENT] ${intentName} -> Target: ${targetApp}`);
 
-  // Set multipart response headers for streaming updates + final payload
   res.setHeader('Content-Type', 'multipart/mixed; boundary=intent_boundary');
   res.setHeader('Libplatform-Bridge', '1.0');
 
-  // Emit initial processing status chunk
   res.write(`--intent_boundary\r\nContent-Type: application/json\r\n\r\n`);
   res.write(JSON.stringify({ intent: `${intentName}Processing`, status: "dispatched" }) + '\r\n');
 
-  // Dispatch via local libplatform CLI executable
   const child = spawn('libplatform', [
     '--app', targetApp,
     '--intent', intentName,
@@ -57,6 +59,7 @@ app.post('/intent/:namespace/:action', (req, res) => {
   });
 });
 
-app.listen(12345, () => {
+// this is for localhost only, use tailscale to bridge it
+app.listen(12345, 'localhost', () => {
   console.log('matchbox202x intent server running on http://localhost:12345');
 });

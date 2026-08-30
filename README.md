@@ -7,39 +7,16 @@
 ## High-Level Architectural Description
 
 ### Executive Overview
-The modern Linux and UNIX desktop ecosystem suffers from severe fragmentation, redundant abstractions, and excessive resource overhead. Over the past two decades, traditional system interfaces have been systematically obscured by multi-layered IPC daemons (`dbus-daemon`), custom compositors, sandboxing runtimes (Flatpak, Snap), language-isolated package manifests (`package.json`, `Cargo.toml`, `pyproject.toml`), and heavy web-runtime wrappers.
+The modern UNIX desktop ecosystem suffers from severe fragmentation, redundant abstractions, and excessive resource overhead. Over the past two decades, traditional system interfaces have been systematically obscured by multi-layered IPC daemons (`dbus-daemon`), custom compositors, sandboxing runtimes (Flatpak, Snap), language-isolated package manifests (`package.json`, `Cargo.toml`, `pyproject.toml`), and heavy web-runtime wrappers.
 
 This specification defines a unified, lightweight desktop platform constructed entirely from proven, off-the-shelf POSIX and X11 primitives. It proves that a fully capable, sandboxed, intent-driven, mobile/tablet-friendly operating system requires zero custom IPC protocols, no dedicated system bus daemons, and no bespoke package management infrastructure.
 
-+-----------------------------------------------------------------------+
-|                    Application Package (.zip / ELF)                   |
-|                        Manifest: index.toml                           |
-+-----------------------------------------------------------------------+
-|   Web Cards (HTML/CSS)   |   Programs and Scripts   |   ELF Plugins   |
-+--------------------------+----------------------+---------------------+
-│                 libplatform (IPC Bridge)                              |
-|          X11 ClientMessage (Intents, Events, Channels)                |
-+-----------------------------------------------------------------------+
-|                        X11 Display Server                             |
-|    Session Bus (:0)  <------------------------->  System Bus (:99)    |
-|   (Graphics/Input)                                 (Headless)         |
-+-----------------------------------------------------------------------+
-|             Window Manager: Matchbox (Card-Deck Layout)               |
-+-----------------------------------------------------------------------+
-|       POSIX Filesystem Layer (Zero-Copy Hard-Link Transfers)          |
-+-----------------------------------------------------------------------+
-
-
 ### 0 Core Design Philosophy
-1. **Standardized Manifest (`index.toml`):** Application metadata, runtime dependencies (Nix/Pypi/NPM/Cpan), file permissions, visual UI cards, and external command surfaces are declared in a single, developer-friendly TOML file with minimal differences from (`Cargo.toml`, `pyproject.toml`, `package.json`).
-2. **Universal IPC Surface (`libplatform`):** Applications communicate via **Intents** (directed requests) and **Events** (state broadcasts). `libplatform` abstracts wire-level X11 messages into canonical JSON streams over `stdin`/`stdout` for scripts, standard C API structs for ELF objects, websockets for the http bridge, window.libserver.onMyEvent for html cards
-2. **The Display Server is the IPC Bus:** Following single control multiple data, native X11 `ClientMessage` events handle all intent routing, event broadcasting, and service discovery.  Therefore your system has exactly two event/intent buses, DISPLAY:99 and DISPLAY:0, which, get bridged to http://localhost:12345 and http://localhost:12354 for slow-path convenience
-3. **Card-Deck Window Orchestration:** User interface navigation can use existing 1-window managers (`matchbox-window-manager`) where top-level application windows map to "Cards" in a full-screen deck.  Cards can either be filled with html, or, filled with normal x stuff.
-4. **Decoupled HTML/CSS Visual Layer:** The simplest card is actually an HTML file rendered by a system web browser attached to the X server.  System styling is then inherited directly via `_XSETTINGS_SETTINGS`.
-5. **Zero-Copy POSIX Data Transfer:** Large inter-app file transfers bypass IPC buffer copies entirely by leveraging POSIX filesystem hard-links (`link(2)`) and atomic unlinks (`unlink(2)`), coordinated through the intent server, seamlessly becoming scp between devices.  Inter-app streaming goes unix domain sockets or tls sockets configured by the intent server, and apps connected with a unix domain socket can upgrade that to posix shared memory.
-6. **Zero Invention Design** matchbox202x doesn't invent anything, because everything has already been invented.
-7. **Back to the 90's** ssh -X into your old solaris box and fire applescript intents just like you remember from your dreams.
-8. **Gnu Network Object Model Environment** java-based cards (with their index.toml in their .jar file) can move between devices
+1. **Zero Invention Design** everything has already been invented
+2. **Back to the 90's** `ssh -X` into the solaris server and fire applescript events like its the 90's
+3. **Single Control Multiple Data** one bus many clients, one control stream many data streams
+4. **Universal IPC Surface** paper over command invocation, stdin/stdout, rest, dlsym
+5. **Inspectable TOML Configurations** the admin has to be able to understand whats going on
 
 # 0.1 Back In My Day
 * **Endpoints ride the environment.** The app doesnt think about the session it reads $DISPLAY. Zero configuration.
@@ -47,15 +24,29 @@ This specification defines a unified, lightweight desktop platform constructed e
 * **One forwarded channel per machine-pair**, everything multiplexed. Ten windows, one connection.  Single control channel.
 * **Membership is the connection.** Client dies → socket closes → server notices → gone. No unregister protocol, no keepalives, no ghosts.
 
+# 0.2 The 90's Future
+* sound follows your ssh -X connection
+* multimedia over ssh -X automatically uses secondary data streams
+* java-based apps can freeze on one device and thaw on another device
+* the 90's future did not include `curl | bash` it included `apt install package`, perhaps, after `apt-add-repository`.  the 90's future would have been ok with `curl > ~/.packages/app.toml` followed by `app-manager sync` where app-manager would expressly ask for permission to do anything more than install deps from trusted sources and run the app with some sandboxing
+
 ---
 
 ## 1. System Architecture & Bus Routing
-### 1.1 User's Distributed Lifestyle
+### 1.1 Components
+* XAUDIO: add speakers and mics to your session the way you wanted in the 90's
+* matchbox202x: tablet window manager
+* compiz202x: laptop window manager
+* Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands, so that scripts can send and recieve intents over a socket or over stdin/stdout in NNJSON format, .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http
+* XINTENT: intent routing through the x session, because the x session has since the 70's been the highest performance desktop bus 
+* XSECURE: coping with your ex-secure system that you connected to the network. Multiplexes connection types, unix socket from user, tcp socket from network and ip, policykit jwt, with actions to authorize, intents to fire, events to receive, clipboards and window contexts, permission to open a window without decorations or fullscreen. XSecure.toml to be readable by the admin 
+
+### 1.2 User's Distributed Lifestyle
 User is running a session on user-phone and has an ssh -X to user-laptop in the coffee shop with him and an ssh -X to user-desktop at home over tailscale.  User is running cool-ebook off user-laptop where the files are but cool-ebook's html card is running on user-phone.
-* Naively, tts intents stream locally from cool-ebook's html card to cool-tts, burning user-phone's battery and lagging becaue cool-tts is slower on user-phone than on user-laptop.
+* Naively, tts intents stream locally from user-laptop:cool-ebook's html card to user-phone:cool-tts, burning user-phone's battery and lagging becaue cool-tts is slower on user-phone than on user-laptop.
 * User needs to run platform-discover-services in its .bashrc when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled user-desktop:cool-tts for the purpose of libserver intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts
 
-### 1.2 Web First
+### 1.3 Web First
 ```
 POST http://localhost:12345/intent/ui/TextToSpeech?app=user-desktop:cool-tts
 {
@@ -91,13 +82,17 @@ Content-Type: audio/wav
 Content-Disposition: attachment; filename="speech.wav"
 ```
 
-### 1.3 Session and System Buses (`DISPLAY=:0` and `DISPLAY=:99`)
+### 1.4 Session and System Buses (`DISPLAY=:0` and `DISPLAY=:99`)
 * this is an already existing universal ipc framework
 * X messages are the fastest way to communicate and libraries exist everywhere
-* X needed a plugged in web browser for html windows in the 1990's though there were attempts at ps and pdf
+* X needed a plugged in web browser for html windows in the 90's though there were attempts at ps and pdf which failed because those are less human readable than a pixmap, display pdf is the same draw commands as display xrender and display quckdraw.  in the late 90's and early 00's there were multiple attempts at XUL, XAML, gtk's xml format, and only html survived, as well as android's siloed xml format for android sharecroppers
 
-### 1.4 Write Your app.toml Card Today to Access Your App through Intents
-* put `app.toml` in `libserver/` alongside all the other apps.  `libserver sync` will do the `uv sync` thing of ensuring that every app is ready to go with a libserver intent --app localhost:app --intent appIntent --data "my data"
+
+### 1.5 Lifecycle Management
+* in the 90's, there was X Session Management Protocol and XScreenSaver, these need to be extended to allow matchbox202x to kill processes whose cards havent been on screen or havent responded to any intents in a while, while compiz202x leaves everything open forever
+
+### 1.6 Write Your app.toml Today to Access Your App through Intents
+* put `app.toml` in `/user/local/matchbox/` alongside all the other apps.  `matchbox202x sync` will do the `uv sync` thing of ensuring that every app is ready to go with a `matchbox202x intent --app localhost:app --intent appIntent --data "my data"`
 * just like in the 1990's with applescript events
 
 ---
@@ -158,6 +153,26 @@ title = "Preferences"
 [events.subscribers]
 "sys.DisplayRotated" = { exec = "bin/app_binary" }
 "net.StateChanged"   = { handler = "cards/index.html" }
+
+# lets try and merge these apps with system services
+[service]
+# Maps directly to systemd [Service] directives
+exec = "bin/emacsd"
+type = "simple"
+restart = "on-failure"
+restart_sec = "2s"
+nice = -5
+
+# Sandboxing & Security (mapped to systemd isolation flags)
+protect_system = "strict"
+protect_home = "read-only"
+private_tmp = true
+memory_max = "2G"
+
+[service.targets]
+# Systemd target bindings
+wanted_by = ["default.target"]
+after = ["network.target", "sound.target"]
 ```
 
 ---
@@ -390,6 +405,5 @@ IntentError    { channel, code }   # undeliverable, no claimant, denied
 
 
 ### 9.4 Security
-* the initial matchbox202x server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the matchbox202x client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0
-* to prevent LocalStorage and BroadcastChannel collisions, the matchbox202x server has to keep track of allocating :5xxxx for cool-app html and keys
-* when the X server is modified, it needs to include some X security extensions that do the obvious things
+* the initial http bridge server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the http bridge client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0
+* to prevent LocalStorage and BroadcastChannel collisions, the http bridge server has to keep track of allocating :5xxxx for cool-app html and keys
