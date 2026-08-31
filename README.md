@@ -44,7 +44,8 @@ This specification defines a unified, lightweight desktop platform constructed e
 ### 1.2 User's Distributed Lifestyle
 User is running a session on user-phone and has an ssh -X to user-laptop in the coffee shop with him and an ssh -X to user-desktop at home over tailscale.  User is running cool-ebook off user-laptop where the files are but cool-ebook's html card is running on user-phone.
 * Naively, tts intents stream locally from user-laptop:cool-ebook's html card to user-phone:cool-tts, burning user-phone's battery and lagging becaue cool-tts is slower on user-phone than on user-laptop.
-* User needs to run platform-discover-services in its .bashrc when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled user-desktop:cool-tts for the purpose of libserver intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts
+* User needs to run `platform-services-session` in its .profile when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled `user-desktop:cool-tts` for the purpose of `libserver intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts`
+* `platform-services-session` launches a headless x client daemon to load services in response to requests from matchbox202x-desktop-panel
 
 ### 1.3 Web First
 ```
@@ -122,7 +123,7 @@ id = "org.unix.editor"
 version = "1.0.0"
 name = "Simple Text Editor"
 description = "POSIX-compliant web-card text editor"
-exec = "bin/app_binary" # Optional executable binary path, but elf binaries can have an index_toml segment instead
+favicon_ico = ":pencil:"
 
 [dependencies]
 "nix:python3" = "3.14"
@@ -133,7 +134,16 @@ exec = "bin/app_binary" # Optional executable binary path, but elf binaries can 
 network = false
 filesystem = ["~/Documents"]
 
-# User Interface Card Declarations
+[build]
+exec = "uv sync"
+execDir = "."
+args = []
+env = {}
+
+[app]
+type = "html"
+card = "main"
+
 [[cards]]
 id = "main"
 path = "cards/index.html"
@@ -145,14 +155,18 @@ path = "cards/settings.html"
 title = "Preferences"
 
 # Intent Receivers (External Command Surface)
-[intents.receivers]
-"ui.TextProcess" = { exec = "bin/app_binary" }
-"file.Open" = { handler = "cards/index.html" }
+[intents."ui.TextProcess"]
+invocation = "pipe"
+exec = "bin/text_processor"
+args = "--intent-server"
 
-# System / Custom Event Subscriptions
-[events.subscribers]
-"sys.DisplayRotated" = { exec = "bin/app_binary" }
-"net.StateChanged"   = { handler = "cards/index.html" }
+[intents."file.Open"]
+invocation = "card"
+card = "main"
+
+[events]
+"sys.DisplayRotated" = { invocation = "command", exec = "bin/app_binary", args = ["process-event"] }
+"net.StateChanged"   = { invocation = "card", card = "settings" }
 
 # lets try and merge these apps with system services
 [service]
@@ -176,6 +190,45 @@ after = ["network.target", "sound.target"]
 ```
 
 ---
+
+# 5. Canonical Data Models
+### 5.1 JSON Intent/Event Schema
+
+However processes recieve intents/events, the canonical json and conceptual structure is
+```JSON
+{
+  "intent": "ui.TextProcess", 
+  "text": "how do i restore unix",
+  "replace": true,
+  "reply": true
+}
+```
+which gets responded to with
+```JSON
+{
+  "event": "ui.Processing",
+  "percent": 67,
+  "channel": "aX4f"
+}
+
+{
+  "intent": "ui.TextProcessReply",
+  "text": "How do I restore UNIX®?",
+  "channel": "aX4f",
+  "disposition": "final"
+}
+```
+Any RPC server has to handle the process boundary between processes and have a client library to handle routing inside the processes.  While we could use X Window's to target intents/events if we were actually doing this in X, the honest thing to do is to have the server allocate Channel's
+```JavaScript
+channels = {'aX4f': {sender, reciever, initialIntent}}
+```
+so the client would
+```Javascript
+channel = await intensive.fire({intent, reply: true})
+```
+and the server would reply with a channel because the client asked for a reply, and attach the channel to the json message for the recieving client, the sending client or recieving client can then close the channel at any time with a message with `{disposition: "cancel"}` or `{disposition: final}`.  Besides being the honest thing to do, the server replying with a channel ack is just another layer of ack on top of the tcp ack and doesnt add latency to the intent response.  If a client tries to send more than 100 intents with `{reply: true}` and get more than 100 channels allocated at a time, it can get an `EMFILE` back.  If a client disconnects, the server sends `{event: "ECONNRESET", msg: "Connection reset by peer", disposition: "error"}`, so, the dispositions are final, cancel, and error.'
+
+None of this was invented here.  The protocal name is NIH-RPC.
 
 ## 3. Intent & Event Wire Protocol (X11 Primitives)
 
@@ -223,21 +276,7 @@ Inter-Card Communication: HTML Cards within the same app session communicate sta
 
 System Styling: The shared Web Browser reads the system themes, DPI, and scaling directly from the _XSETTINGS_SETTINGS root window property.
 
-# 5. Canonical Data Models
-### 5.1 JSON Payload Schema (Stdin/Stdout / Sockets)
 
-Processes receiving intents via stdin or Unix domain sockets receive line-delimited JSON (NNJSON) matching this structure:
-
-{
-  "type": "intent",
-  "action": "ui.TextProcess",
-  "sender": 10485763,
-  "timestamp": 1772276400,
-  "payload": {
-    "text": "Selected text to process",
-    "mime": "text/plain"
-  }
-}
 
 ### 5.2 C API Struct (libplatform.h)
 
@@ -340,7 +379,7 @@ To allow asynchronous X11 ClientMessage flows to act like synchronous API calls 
 {
   "intent": "sys.SendData",
   "app": "org.unix.cool-ebook",
-  "disposition": "final-response",
+  "disposition": "final",
   "channel": "0x7F8A9B11",
   "data": {
     "file_path": "~/.cache/cool-ebook/inbound_speech.wav",
@@ -403,6 +442,7 @@ EventDelivery  { event, payload_prop, sender_client }
 RegistryChanged { kind: claimed/released/conflict, action }  # lets intent server arbitrate
 IntentError    { channel, code }   # undeliverable, no claimant, denied
 
+* the X extension that should have existed no later than 2010, XHTML, that injects a window.xhtml.event() and window.xhtml.onevent in the html card and specifies X events in the html backend process, disappears XHTML windows if the html backend closes, and so on, is still needed regardless of how long the poetteringware developers play with wayland
 
 ### 9.4 Security
 * the initial http bridge server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the http bridge client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0

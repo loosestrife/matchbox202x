@@ -1,0 +1,13 @@
+[package]
+id = "intent-test-card"
+
+[app]
+type = "html"
+card = "index"
+
+[[cards]]
+id = "index"
+path = "index.html"
+
+[favicon_ico]
+emoji = ":wrench:"

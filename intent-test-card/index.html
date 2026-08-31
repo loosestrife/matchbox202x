@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Matchbox202x Intent Test Card</title>
+  <style>
+    :root {
+      --bg: #1e1e2e;
+      --card-bg: #282a36;
+      --accent: #ff79c6;
+      --text: #f8f8f2;
+      --border: #44475a;
+    }
+    body {
+      font-family: monospace;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 2rem;
+      margin: 0;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 600px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .form-group {
+      margin-bottom: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    label {
+      font-weight: bold;
+      color: var(--accent);
+    }
+    select, textarea, button {
+      background: #191a21;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0.6rem;
+      border-radius: 4px;
+      font-family: inherit;
+    }
+    textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+    button {
+      background: var(--accent);
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.2s;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    #stream-output {
+      margin-top: 1rem;
+      background: #11111b;
+      border: 1px solid var(--border);
+      padding: 1rem;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      max-height: 250px;
+      overflow-y: auto;
+      min-height: 50px;
+    }
+  </style>
+
+  <!-- Load client library via express route -->
+  <script src="/matchbox202x.js"></script>
+</head>
+<body>
+
+<div class="card">
+  <h2>Matchbox202x Dispatcher</h2>
+  
+  <div class="form-group">
+    <label for="intent-select">Intent</label>
+    <select id="intent-select"><option value="">Loading intents...</option></select>
+  </div>
+
+  <div class="form-group">
+    <label for="app-select">App Target</label>
+    <select id="app-select"><option value="">Loading apps...</option></select>
+  </div>
+
+  <div class="form-group">
+    <label for="payload-input">Payload (JSON)</label>
+    <textarea id="payload-input"></textarea>
+  </div>
+
+  <button id="fire-btn">Fire Intent</button>
+
+  <label style="margin-top: 1.5rem; display: block;" for="stream-output">Response Stream</label>
+  <div id="stream-output">Idle...</div>
+</div>
+
+<script>
+  let intentRegistry = {};
+  let packageRegistry = {};
+
+  const intentSelect = document.getElementById('intent-select');
+  const appSelect = document.getElementById('app-select');
+  const payloadInput = document.getElementById('payload-input');
+  const fireBtn = document.getElementById('fire-btn');
+  const outputDiv = document.getElementById('stream-output');
+
+  // Update JSON prefill template whenever selections change
+  function updatePayloadPrefill() {
+    const selectedIntent = intentSelect.value || '';
+    const selectedApp = appSelect.value || '';
+    
+    payloadInput.value = JSON.stringify({
+      intent: selectedIntent,
+      app: selectedApp
+    }, null, 2);
+  }
+
+  // Populate App options based on currently selected intent
+  function updateAppOptions() {
+    const selectedIntent = intentSelect.value;
+    appSelect.innerHTML = '';
+    
+    const availableApps = intentRegistry[selectedIntent] || [];
+    if (availableApps.length === 0) {
+      appSelect.innerHTML = '<option value="localhost">localhost</option>';
+    } else {
+      availableApps.forEach(appId => {
+        const opt = document.createElement('option');
+        opt.value = appId;
+        opt.textContent = appId;
+        appSelect.appendChild(opt);
+      });
+    }
+    updatePayloadPrefill();
+  }
+
+  // Fetch /intents endpoint and initialize controls
+  async function init() {
+    try {
+      const res = await fetch('/intents');
+      const data = await res.json();
+      intentRegistry = data.intentRegistry || {};
+      packageRegistry = data.packageRegistry || {};
+
+      intentSelect.innerHTML = '';
+      const intents = Object.keys(intentRegistry);
+
+      if (intents.length === 0) {
+        intentSelect.innerHTML = '<option value="">No intents found</option>';
+        return;
+      }
+
+      intents.forEach(intent => {
+        const opt = document.createElement('option');
+        opt.value = intent;
+        opt.textContent = intent;
+        intentSelect.appendChild(opt);
+      });
+
+      updateAppOptions();
+    } catch (err) {
+      outputDiv.textContent = `Failed to load /intents: ${err.message}`;
+    }
+  }
+
+  intentSelect.addEventListener('change', updateAppOptions);
+  appSelect.addEventListener('change', updatePayloadPrefill);
+
+  // Dispatch intent and stream response body to UI
+  fireBtn.addEventListener('click', async () => {
+    const intent = intentSelect.value;
+    const app = appSelect.value || 'localhost';
+    
+    let payload = {};
+    try {
+      payload = JSON.parse(payloadInput.value);
+    } catch (e) {
+      outputDiv.textContent = `JSON Parse Error: ${e.message}`;
+      return;
+    }
+
+    outputDiv.textContent = `[Request Sent] Dispatching ${intent} to ${app}...\n`;
+
+    try {
+      const response = await window.matchbox202x.intent(intent, payload, app);
+      
+      outputDiv.textContent += `[Response ${response.status} ${response.statusText}]\n--- Stream Start ---\n`;
+
+      if (!response.body) {
+        outputDiv.textContent += await response.text();
+        return;
+      }
+
+      // Stream readable stream body chunk by chunk into div
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        outputDiv.textContent += decoder.decode(value, { stream: true });
+        outputDiv.scrollTop = outputDiv.scrollHeight;
+      }
+
+      outputDiv.textContent += '\n--- Stream Ended ---';
+    } catch (err) {
+      outputDiv.textContent += `\n[Error] ${err.message}`;
+    }
+  });
+
+  init();
+</script>
+
+</body>
+</html>

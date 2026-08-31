@@ -1,5 +1,10 @@
 {
   "dependencies": {
-    "express": "^5.2.1"
+    "@iarna/toml": "^2.2.5",
+    "chalk": "4",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "serialize-error": "^13.0.1",
+    "yargs": "^18.1.0"
   }
 }

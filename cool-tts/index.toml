@@ -1,19 +1,21 @@
 [package]
-id = "org.unix.cooltts"
+id = "cool-tts"
 version = "0.1.0"
 name = "Cool TTS Service"
-description = "Text-to-speech service engine using Qwen-TTS and Chonkie"
-exec = "main.py"
+favicon_ico = "💬"
 
 [dependencies]
-"nix:python" = "3.11"
-"python:soundfile" = ">=0.13.0"
-"python:chonkie" = ">=1.7.0"
-"python:qwen-tts" = "*"
+"nix:uv" = "*"
 
-[permissions]
-filesystem = ["/tmp"]
+[build]
+exec = "uv sync"
+execDir = "."
+env = {}
+args = []
 
-# Intent Receivers (CLI / Stdin Surface)
-[intents.receivers]
-"ui.TextToSpeech" = { exec = "main.py" }
+[intents."ui.TextToSpeech"]
+invocation = "pipe"
+execDir = "."
+exec = "uv run python -m make-wavs --intent-server"
+env = {}
+args = []
