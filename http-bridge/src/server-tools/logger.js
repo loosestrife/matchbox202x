@@ -1,5 +1,5 @@
 const chalk = require('chalk');
-const conf = require('./conf'); 
+const conf = require('../conf'); 
 const logLevels = ['error', 'warn', 'info', 'debug', 'trace'];
 const logColors = ['red', 'yellow', 'green', 'blue', 'purple'];
 const levelColors = Object.fromEntries(logLevels.map((level, i) => [level, logColors[i]]));
