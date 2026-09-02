@@ -1,10 +1,7 @@
-async function* nnjsonStream(readableStream, teeOut = false) {
+async function* nnjsonStream(readableStream) {
   readableStream.setEncoding("utf-8");
   let leftovers = "";
   for await (const chunk of readableStream){
-    if(teeOut){
-      console.log(chunk);
-    }
     leftovers += chunk;
     const frames = leftovers.split('\n\n');
     leftovers = frames.pop();
@@ -14,4 +11,18 @@ async function* nnjsonStream(readableStream, teeOut = false) {
   }
 }
 
-module.exports = {nnjsonStream};
+async function* teeOutStream(readableStream) {
+  readableStream.setEncoding("utf-8");
+  let leftovers = "";
+  for await (const chunk of readableStream) {
+    leftovers += chunk;
+    const frames = leftovers.split('\n');
+    leftovers = frames.pop();
+    for(const frame of frames){
+      console.log(frame);
+    }
+    yield chunk;
+  }
+}
+
+module.exports = {nnjsonStream, teeOutStream};

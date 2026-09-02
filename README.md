@@ -413,12 +413,13 @@ To allow asynchronous X11 ClientMessage flows to act like synchronous API calls 
 
 # 9. How This System Will Come About
 ### 9.1 Web First
-* start with libplatform.  its actual name would be matchbox202x and it would be a javascript express server serving intents on :12345
+* start with the http bridge serving intents on :12345
 * write a bunch of .toml wrappers applying intents to programs
 * publish the matchbox202x javascript package so matchbox202x.intent({}) can pop open a big yellow attempted to connect to localhost warning
 * put a bunch of app packages in /usr/local/lib/matchboxes 
 * matchbox202x launch --app cool-ebooks
 * while in one sense x11 is an optimization not an initial requirement, it is necessary to ensure that when matchbox202x launch --app cool-ebooks shoves the html into a browser launched remotely, matchbox202x gets the DISPLAY from the ssh -X and routes intents back to the same session as the DISPLAY
+* index.toml would actually be called matchbox.toml to be next to pyproject.toml 
 
 ### 9.2 Android Enclave
 * matchbox202x app on fdroid that loads html cards and provides localhost:12345, maps intents to android intents, and sideloads packages from /Matchbox

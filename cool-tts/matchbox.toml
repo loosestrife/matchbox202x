@@ -16,6 +16,6 @@ args = []
 [intents."ui.TextToSpeech"]
 invocation = "pipe"
 execDir = "."
-exec = "uv run python -m make-wavs --intent-server"
+exec = "uv run python -m make_wavs --intent-server"
 env = {}
 args = []

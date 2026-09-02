@@ -45,8 +45,8 @@ function buildRegistries() {
       let entryTomlPath;
       const fullPath = path.join(packageDir, entry.name);
       if (entry.isDirectory()) {
-        // Check for directory/index.toml
-        const indexPath = path.join(fullPath, 'index.toml');
+        // Check for directory/matchbox.toml
+        const indexPath = path.join(fullPath, 'matchbox.toml');
         if (fs.existsSync(indexPath)) {
           entryTomlPath = indexPath;
         }
