@@ -8,9 +8,9 @@ import soundfile as sf
 from chonkie import RecursiveChunker
 # Note: qwen_tts imported dynamically or instantiated per model specs
 
-def send_ipc_message(payload):
+def nih_rpc_message(payload):
     """Writes line-delimited JSON back to stdout for libplatform routing."""
-    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.write(json.dumps(payload) + "\n\n")
     sys.stdout.flush()
 
 def handle_text_to_speech(intent_data):
@@ -39,7 +39,7 @@ def handle_text_to_speech(intent_data):
     tmp_path = os.path.join("/tmp", file_id)
     sf.write(tmp_path, dummy_audio, samplerate)
     
-    # 4. Initiate Zero-Copy POSIX Transfer (sys.TransferFile Protocol)
+    # 4. Initiate NIH-RPC named file transfer protocol
     # Hand off file ownership from cool-tts space to target_app space
     transfer_intent = {
         "type": "intent",
@@ -51,7 +51,7 @@ def handle_text_to_speech(intent_data):
             "read_only": False
         }
     }
-    send_ipc_message(transfer_intent)
+    nih_rpc_message(transfer_intent)
 
     # 5. Emit synchronous/final response payload if a channel was provided
     if channel:
@@ -65,7 +65,7 @@ def handle_text_to_speech(intent_data):
                 "file_name": file_id
             }
         }
-        send_ipc_message(response)
+        nih_rpc_message(response)
 
 def main():
     """Main loop reading line-delimited JSON intents over stdin."""
