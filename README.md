@@ -412,9 +412,10 @@ Thus, the XINTENT router and the matchbox-service-lighter have to open sockets l
 * the initial http bridge server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the http bridge client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0
 * to prevent LocalStorage and BroadcastChannel collisions, the http bridge server has to keep track of allocating :5xxxx for cool-app html and keys
 * when process 9000 sends `wm.Close` to window 0x420's parent frame, xsecure asks matchbox202x/compiz202x to pop open a uac prompt `[allowAndStore] [allow] [reject] [ignore] [disconnect]` and after `allowAndStore` the user has to go into xsecure.toml or through the xsecure card to see what authentications and authorizations there are
+* by the way, what possible window id's a client can have is sent across the wire when the connection starts.  An external security daemon can record that and use the possible window id's to validate security policy
 
 ### 9.5 Future Plans
-XINTENT_INTENT frame layout
+#### XINTENT_INTENT frame layout
 Offset    Size       Field                      Description
 --------------------------------------------------------------------------------------
 Byte 0    1 byte     Major Opcode               XINTENT Dynamic Opcode (e.g., 128)
@@ -443,3 +444,6 @@ Byte Offset | Hex / Value          | Field Name
 40 - 43     | 00 00 00 00          | Trailer Padding / Reserved
 
 and it could be inspected by XSECURE and sent to the intent router in a few instructions and an ipc call.  You can have a full featured cell phone in 64MB and it can almost fit in L3 cache.
+
+#### Copy/Paste
+Once the rules are formalized for ui.Copy transferring the buffer to the clipboard manager and ui.SelectionPaste being only permited from a middle click and not synthetically, the rules can be applied to the old mechanisms.  Emacs from 2000 doesn't need to change, its requests can be validated and translated.
