@@ -258,6 +258,10 @@ wanted_by = ["default.target"]
 after = ["network.target", "sound.target"]
 ```
 
+### 4.2 Service Discovery
+* Any window that wants to advertise services can add a property XINTENT-MATCHBOX-TOML and xintent-router having a cache of these is a performance optimization.
+* While the matchbox-service-lighter has to feed xintent-router a list of every service it can light up, so xintent-router can ask for services to be lit, again, matchbox-service-lighter aggregates .toml files from specific path directories, so its message can be deterministically calculated by the user.
+
 ---
 
 # 5. UI Rendering, Web Cards, & Window Management
