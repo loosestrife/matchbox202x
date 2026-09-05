@@ -260,7 +260,8 @@ after = ["network.target", "sound.target"]
 
 ### 4.2 Service Discovery
 * Any window that wants to advertise services can add a property XINTENT-MATCHBOX-TOML and xintent-router having a cache of these is a performance optimization.
-* While the matchbox-service-lighter has to feed xintent-router a list of every service it can light up, so xintent-router can ask for services to be lit, again, matchbox-service-lighter aggregates .toml files from specific path directories, so its message can be deterministically calculated by the user.
+* When matchbox-service-lighter starts, it opens a window with XINTENT-SERVICE-MANIFEST as a toml of what services it can launch.  The user can inspect its toml with xprops just like xintent-router does.
+* X isnt just a session bus, its also a database.
 
 ---
 
