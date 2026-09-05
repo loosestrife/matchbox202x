@@ -1,8 +1,10 @@
 // cool-tts-mock.js
 const x11 = require('./x11-promises');
+const xintent = require('./xintent');
 
 async function startTTSService() {
   const { X, rawX, root } = await x11.createPromiseXClient();
+  const { routerWin, xintentV0Atom } = await xintent.connectToRouter(X, root);
   const ttsWin = X.AllocID();
 
   await X.CreateWindow(

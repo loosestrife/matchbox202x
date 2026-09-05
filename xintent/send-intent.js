@@ -1,10 +1,12 @@
 const x11 = require('./x11-promises');
+const xintent = require('./xintent');
 
 async function sendIntent() {
   const { X, root } = await x11.createClientWithPromises();
 
   const xintentAtom = await X.InternAtom(false, 'XINTENT');
   const xintentDataAtom = await X.InternAtom(false, 'XINTENT_DATA');
+  const { routerWin, xintentV0Atom } = await xintent.connectToRouter(X, root);
 
   // 1. Fetch the Router Window ID stored on the root property
   const prop = await X.GetProperty(0, root, xintentAtom, X.atoms.WINDOW, 0, 4);

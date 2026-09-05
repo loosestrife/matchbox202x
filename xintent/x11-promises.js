@@ -23,6 +23,7 @@ x11.createClientWithPromises = (options = {}) => {
       if (err) return reject(err);
       
       const X = wrapPromiseXClient(display.client);
+      display.client.on('error', console.warn);
       
       // Return both proxied X client and screen display info
       resolve({
