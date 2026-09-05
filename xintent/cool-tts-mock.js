@@ -13,7 +13,7 @@ args = []
 
 async function startTTSService() {
   const { X, rawX, root } = await x11.createClientWithPromises();
-  const { routerWin, xintentV0Atom } = await xintent.connectToRouter(X, root);
+  const routerWin = await xintent.connectToRouter(X, root);
   const ttsWin = X.AllocID();
 
   await X.CreateWindow(

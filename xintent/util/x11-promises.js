@@ -1,18 +1,40 @@
 const x11 = require('x11');
 
+// X11 client methods that dispatch asynchronous requests with callbacks
+const REPLY_METHODS = new Set([
+  'InternAtom',
+  'GetAtomName',
+  'GetProperty',
+  'GetGeometry',
+  'QueryTree',
+  'GetWindowAttributes',
+  'PointerMapping',
+  'KeyboardMapping',
+  'GetModifierMapping',
+  'GetMotionEvents',
+  'TranslateCoordinates',
+  'GetInputFocus',
+  'QueryFont',
+  'QueryTextExtents',
+  'ListProperties',
+  'GetSelectionOwner',
+  'GrabPointer',
+  'GrabKeyboard'
+]);
+
 function wrapPromiseXClient(X) {
   return new Proxy(X, {
     get(target, prop) {
-      // Exclude EventEmitter methods from being promisified
-      if (typeof target[prop] === 'function' && !['on', 'once', 'removeListener', 'emit', 'AllocID'].includes(prop)) {
+      const orig = target[prop];
+      if (typeof orig === 'function' && REPLY_METHODS.has(prop)) {
         return (...args) => new Promise((resolve, reject) => {
-          target[prop](...args, (err, ...results) => {
+          orig.call(target, ...args, (err, ...results) => {
             if (err) return reject(err);
             resolve(results.length > 1 ? results : results[0]);
           });
         });
       }
-      return target[prop];
+      return typeof orig === 'function' ? orig.bind(target) : orig;
     }
   });
 }
@@ -20,15 +42,12 @@ function wrapPromiseXClient(X) {
 x11.createClientWithPromises = (options = {}) => {
   return new Promise((resolve, reject) => {
     x11.createClient(options, (err, display) => {
-      if (err) return reject(err);
-      
+      if (err) return reject(err);      
       const X = wrapPromiseXClient(display.client);
       display.client.on('error', console.warn);
-      
-      // Return both proxied X client and screen display info
       resolve({
         X,
-        rawX: display.client, // exposed for raw EventEmitter listeners
+        rawX: display.client,
         display,
         root: display.screen[0].root
       });
