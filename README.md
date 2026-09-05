@@ -37,15 +37,15 @@ This specification defines a unified, lightweight desktop platform constructed e
 * XAUDIO: add speakers and mics to your session the way you wanted in the 90's
 * matchbox202x: tablet window manager
 * compiz202x: laptop window manager
-* Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands, so that scripts can send and recieve intents over a socket or over stdin/stdout in NNJSON format, .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http
 * XINTENT: intent routing through the x session, because the x session has since the 70's been the highest performance desktop bus 
-* XSECURE: coping with your ex-secure system that you connected to the network. Multiplexes connection types, unix socket from user, tcp socket from network and ip, policykit jwt, with actions to authorize, intents to fire, events to receive, clipboards and window contexts, permission to open a window without decorations or fullscreen. XSecure.toml to be readable by the admin 
+* Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands.  Scripts can send and recieve intents over a socket or over stdin/stdout in NNJSON format, .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http.
+* XSECURE: coping with your ex-secure system that you connected to the network. Multiplexes authentication schemes like unix socket from user and policykit jwt with actions to authorize, intents to fire, events to receive, clipboards and window contexts, permission to open a window without decorations or fullscreen.
 
 ### 1.2 User's Distributed Lifestyle
 User is running a session on user-phone and has an ssh -X to user-laptop in the coffee shop with him and an ssh -X to user-desktop at home over tailscale.  User is running cool-ebook off user-laptop where the files are but cool-ebook's html card is running on user-phone.
 * Naively, tts intents stream locally from user-laptop:cool-ebook's html card to user-phone:cool-tts, burning user-phone's battery and lagging becaue cool-tts is slower on user-phone than on user-laptop.
-* User needs to run `platform-services-session` in its .profile when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled `user-desktop:cool-tts` for the purpose of `libserver intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts`
-* `platform-services-session` launches a headless x client daemon to load services in response to requests from matchbox202x-desktop-panel
+* User needs to run `matchbox-services-lighter` in its .profile when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled `user-desktop:cool-tts` for the purpose of `libplatform intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts`
+* `matchbox-services-ligter` launches a headless x client daemon to load services in response to requests from matchbox202x-desktop-panel
 
 ### 1.3 Web First
 ```
@@ -86,11 +86,11 @@ Content-Disposition: attachment; filename="speech.wav"
 ### 1.4 Session and System Buses (`DISPLAY=:0` and `DISPLAY=:99`)
 * this is an already existing universal ipc framework
 * X messages are the fastest way to communicate and libraries exist everywhere
-* X needed a plugged in web browser for html windows in the 90's though there were attempts at ps and pdf which failed because those are less human readable than a pixmap, display pdf is the same draw commands as display xrender and display quckdraw.  in the late 90's and early 00's there were multiple attempts at XUL, XAML, gtk's xml format, and only html survived, as well as android's siloed xml format for android sharecroppers
+* X needed a plugged in web browser for html windows in the 90's though there were attempts at ps and pdf which failed because those are less human readable than a pixmap, while display pdf is the same draw commands as display xrender and display quckdraw.  in the late 90's and early 00's there were multiple attempts at XUL, XAML, gtk's xml format, and only html survived, as well as android's siloed xml format for android sharecroppers.
 
 
 ### 1.5 Lifecycle Management
-* in the 90's, there was X Session Management Protocol and XScreenSaver, these need to be extended to allow matchbox202x to kill processes whose cards havent been on screen or havent responded to any intents in a while, while compiz202x leaves everything open forever
+* In the 90's, there was X Session Management Protocol and XScreenSaver, these need to be extended to allow matchbox202x to kill processes whose cards havent been on screen or havent responded to any intents in a while, while compiz202x leaves everything open forever.
 
 ### 1.6 Write Your app.toml Today to Access Your App through Intents
 * put `app.toml` in `/user/local/matchbox/` alongside all the other apps.  `matchbox202x sync` will do the `uv sync` thing of ensuring that every app is ready to go with a `matchbox202x intent --app localhost:app --intent appIntent --data "my data"`
@@ -98,7 +98,75 @@ Content-Disposition: attachment; filename="speech.wav"
 
 ---
 
-## 2. Application Package Format (`index.toml`)
+# 2. Canonical Data Models
+### 2.1 JSON Intent/Event Schema
+
+However processes recieve intents/events, the canonical json and conceptual structure is
+```JSON
+{
+  "intent": "ui.TextProcess", 
+  "text": "how do i restore unix",
+  "replace": true,
+  "reply": true
+}
+```
+which gets responded to with
+```JSON
+{
+  "event": "ui.Processing",
+  "percent": 67,
+  "channel": "aX4f"
+}
+
+{
+  "intent": "ui.TextProcessReply",
+  "text": "How do I restore UNIX®?",
+  "channel": "aX4f",
+  "disposition": "final"
+}
+```
+Any RPC server has to handle the process boundary between processes and have a client library to handle routing inside the processes.  In X, the channel is given by the target window and the sender window and the transaction id fields of X intent message.  Outside of X, an rpc server would have to allocate opaque channels.
+```JavaScript
+channels = {'aX4f': {sender, reciever, initialIntent}}
+```
+so the client would
+```Javascript
+channel = await intensive.fire({intent, reply: true})
+```
+and the server would reply with a channel because the client asked for a reply, and attach the channel to the json message for the recieving client, the sending client or recieving client can then close the channel at any time with a message with `{disposition: "cancel"}` or `{disposition: final}`.  Besides being the honest thing to do, the server replying with a channel ack is just another layer of ack on top of the tcp ack and doesnt add latency to the intent response.  If a client tries to send more than 100 intents with `{reply: true}` and get more than 100 channels allocated at a time, it can get an `EMFILE` back.  If a client disconnects, the server sends `{event: "ECONNRESET", msg: "Connection reset by peer", disposition: "error"}`, so, the dispositions are final, cancel, and error.'
+
+None of this was invented here.  The protocal name is NIH-RPC.
+
+## 3. Intent & Event Wire Protocol (X11 Primitives)
+
+Intents and Events are transmitted across the X11 server using native `ClientMessage` structures and X Properties.
+
+### 3.1 Overview
+The intent router registers the atom `XINTENT` to assert that there is an `XINTENT` implementation on the X server and then sets the `XINTENT` property of the root window as a window with name `"INTENT_ROUTER"`.
+
+It then listens for `ClientMessage`'s with message type atom `XINTENT_INTENT_V0`, the first three data fields are senderWin, targetPropAtom, and txId.  It gets the canonical JSON payload from its property targetPropAtom, then deletes that property.
+
+If there is a blob associated with the intent, it is specified in `payload.blob` to be on the intent router window at property `payload.blob.blobPropAtom`.
+
+### 3.1 Canonical Data Models
+An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatted with `format = 32`:
+
++-----------------------------------------------------------------------+
+|                       XClientMessageEvent                             |
++-----------------------------------------------------------------------+
+| type        : ClientMessage                                           |
+| window      : Target Window XID                                       |
+| message_type: Atom("XINTENT_INTENT_V0")                               |
+| format      : 32                                                      |
+| data.l[0]   : Sender Window XID                                       |
+| data.l[1]   : Atom where the reciever can find the payload            |
+| data.l[2]   : Transaction id                                          |
+| data.l[3]   : unused                                                  |
+| data.l[4]   : unused                                                  |
++-----------------------------------------------------------------------+
+
+
+## 4. Application Package Format (`index.toml`)
 
 Applications are distributed as compressed `.zip` archives (or single ELF binaries with an embedded `.index_toml` segment).
 
@@ -112,9 +180,9 @@ my-app.zip
 └── assets/
 └── favicon.ico         # Launcher icon
 
-Applications not installed in libserver are simply `my-cool-app.toml` files.  These refer intents and events to other processes.
+Applications not installed in `/wherever/matchbox/` are simply `my-cool-app.toml` files.  These refer intents and events to other processes.
 
-### 2.1 Canonical `index.toml` Schema
+### 4.1 Canonical `index.toml` Schema
 
 ```toml
 #!/usr/bin/matchbox202x
@@ -191,121 +259,23 @@ after = ["network.target", "sound.target"]
 
 ---
 
-# 5. Canonical Data Models
-### 5.1 JSON Intent/Event Schema
-
-However processes recieve intents/events, the canonical json and conceptual structure is
-```JSON
-{
-  "intent": "ui.TextProcess", 
-  "text": "how do i restore unix",
-  "replace": true,
-  "reply": true
-}
-```
-which gets responded to with
-```JSON
-{
-  "event": "ui.Processing",
-  "percent": 67,
-  "channel": "aX4f"
-}
-
-{
-  "intent": "ui.TextProcessReply",
-  "text": "How do I restore UNIX®?",
-  "channel": "aX4f",
-  "disposition": "final"
-}
-```
-Any RPC server has to handle the process boundary between processes and have a client library to handle routing inside the processes.  In X, the channel is given first by the target window, then by the sender window and transaction id fields of the client message.  Outside of X, the server allocate Channel's
-```JavaScript
-channels = {'aX4f': {sender, reciever, initialIntent}}
-```
-so the client would
-```Javascript
-channel = await intensive.fire({intent, reply: true})
-```
-and the server would reply with a channel because the client asked for a reply, and attach the channel to the json message for the recieving client, the sending client or recieving client can then close the channel at any time with a message with `{disposition: "cancel"}` or `{disposition: final}`.  Besides being the honest thing to do, the server replying with a channel ack is just another layer of ack on top of the tcp ack and doesnt add latency to the intent response.  If a client tries to send more than 100 intents with `{reply: true}` and get more than 100 channels allocated at a time, it can get an `EMFILE` back.  If a client disconnects, the server sends `{event: "ECONNRESET", msg: "Connection reset by peer", disposition: "error"}`, so, the dispositions are final, cancel, and error.'
-
-None of this was invented here.  The protocal name is NIH-RPC.
-
-## 3. Intent & Event Wire Protocol (X11 Primitives)
-
-Intents (requesting an action) and Events (broadcasting a state change) are transmitted across the X11 server using native `ClientMessage` structures and X Properties.
-
-### 3.1 Overview
-The intent router registers the atom `XINTENT` to assert that there is an `XINTENT` implementation on the X server and then sets the `XINTENT` property of the root window as a window with name `"INTENT_ROUTER"`.
-
-It then listens for `ClientMessage`'s with message type atom `XINTENT_INTENT_V0`, the first three data fields are senderWin, targetPropAtom, and txId.  It gets the canonical JSON payload from its property targetPropAtom, then deletes that property.
-
-If there is a blob associated with the intent, it is specified in `payload.blob` to be on the intent router window at property `payload.blob.blobPropAtom`.
-
-### 3.1 Canonical Data Models
-An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatted with `format = 32`:
-
-+-----------------------------------------------------------------------+
-|                       XClientMessageEvent                             |
-+-----------------------------------------------------------------------+
-| type        : ClientMessage                                           |
-| window      : Target Window XID                                       |
-| message_type: Atom("XINTENT_INTENT_V0")                               |
-| format      : 32                                                      |
-| data.l[0]   : Sender Window XID                                       |
-| data.l[1]   : Atom where the reciever can find the payload            |
-| data.l[2]   : Transaction id                                          |
-| data.l[3]   : unused                                                  |
-| data.l[4]   : unused                                                  |
-+-----------------------------------------------------------------------+
-
----
-# 4. UI Rendering, Web Cards, & Window Management
-### 4.1 Tablet Card-Deck Window Manager
+# 5. UI Rendering, Web Cards, & Window Management
+### 5.1 Tablet Card-Deck Window Manager
 Top-level windows are "Cards".  If an app has good "Cards", it can run on a phone.
 
-### 4.2 Web Rendering & XSettings
-Programs may generate UI by providing HTML/CSS markup to a system-wide Web Browser process using XEmbed socket frames.
+### 5.2 Web Rendering & XSettings
+Programs may generate UI by providing HTML/CSS markup to a system-wide Web Browser process.  Ideally, the XHTML extension would be used to upload a big multipart/mixed data stream in the XHTML X protocol frame.  
 
 Inter-Card Communication: HTML Cards within the same app session communicate state using standard web BroadcastChannel APIs.  Otherwise, they only communicate by sending intents from their buttons back to their app, exactly as if they were ordinary X windows and the app would recieve X events exactly the same way.
 
 System Styling: The shared Web Browser reads the system themes, DPI, and scaling directly from the _XSETTINGS_SETTINGS root window property.
 
-### 5.2 C API Struct (libplatform.h)
+First Steps: Use an http bridge to render them in a normal web browser
 
-For trusted ELF objects linked directly against libplatform:
-```C
+# 6 C API Struct (libplatform.h)
 
-typedef struct {
-    uint32_t type;            /* 1 = Intent, 2 = Event */
-    const char *action;       /* Atom string, e.g., "ui.TextProcess" */
-    uint32_t sender_xid;      /* Sender Window ID */
-    uint64_t timestamp;       /* Unix Epoch timestamp */
-    const char *json_payload; /* Null-terminated JSON string */
-} platform_message_t;
+For trusted ELF objects linked directly against the intent roter, the intents have a canonical X protocol frame, and the .index_toml segment would specify that `ui.Copy` goes to `_handle_ui_copy`, then `_handle_ui_copy` would be called a pointer to the X protocol frame.  This would happen in nanoseconds after the user pushes ctrl-c.
 
-typedef void (*platform_handler_t)(const platform_message_t *msg);
-
-/* API Functions */
-int platform_register_intent(const char *action, platform_handler_t handler);
-int platform_emit_event(const char *action, const char *json_payload);
-int platform_send_intent(const char *target_app_id, const char *action, const char *json_payload);
-```
-
-# 6. Binary ELF Integration (.index_toml Segment)
-
-High-performance applications written in C/C++/Rust may avoid shipping a .zip file by embedding their index.toml directly inside the binary object file.
-
-    Section Name: .index_toml
-
-    Format: Uncompressed UTF-8 string containing valid TOML text.
-
-    Detection: The platform app launcher scans .so's linked in its apps/ directory for the .index_toml segment and registers their intents
-
-```Bash
-objcopy --add-section .index_toml=index.toml \
-        --set-section-flags .index_toml=readonly,data \
-        my_binary my_app
-```
 
 # 7. libplatform CLI & Multiplexer Specification
 
@@ -447,3 +417,61 @@ and it could be inspected by XSECURE and sent to the intent router in a few inst
 
 #### Copy/Paste
 Once the rules are formalized for ui.Copy transferring the buffer to the clipboard manager and ui.SelectionPaste being only permited from a middle click and not synthetically, the rules can be applied to the old mechanisms.  Emacs from 2000 doesn't need to change, its requests can be validated and translated.
+
+#### XAudio
+##### Category A: Server-Side Audio Buckets ("Pixmaps for Sound")
+* 0x01 - CreateSoundBucket - Allocates a server-managed ID for a short audio clip.
+  Parameters: Bucket ID, MIME Type Length, MIME Type String (e.g., audio/wav, audio/flac), Data Size.
+* 0x02 - PutBucketData - Uploads payload chunks into an allocated bucket.
+* 0x03 - FreeSoundBucket - Frees the allocated audio clip memory on the X server.
+* 0x04 - PlaySoundBucket - Triggers playback of a stored bucket to the target output/speaker.
+  Parameters: Bucket ID, Output Stream ID, Volume, Looping Flag.
+
+##### Category B: Streaming
+* 0x10 - CreateStream - Sets up an out-of-band transport channel over a secondary socket connection.
+  Parameters: Stream ID, Target Client/Speaker ID, MIME Type String.
+* 0x11 - StreamBuffer - request from XAUDIO sink to XAUDIO source
+* 0x12 - RegisterShmBuffer
+  Attaches shared memory (shm segment or file descriptor) holding large media files (e.g., gigabyte audiobooks) so FFmpeg reads zero-copy.  
+  Parameters: SHM Segment/FD, MIME Type String, Total Length.
+* 0x13 - ControlStream (Low-Latency Jump Ahead) - Lightweight control frame sent via the main X11 protocol socket so it arrives ahead of queued bulk payload data on the secondary socket.
+  Parameters: Stream ID, Action Enum (0=Pause, 1=Resume, 2=Stop, 3=Fast Forward, 4=Rewind, 5=Seek), Payload Value (e.g., skip duration).
+* 0x14 - SeekShmBuffer - Seek commands that arent on a local file need to be sent to the sending process so the stream
+  Parameters: SHM ID, Seek Offset (64-bit), Seek Flags (Absolute/Relative).
+
+##### Category C: Client-to-Client Data Streaming
+* 0x20 - AnnexClientStream - Connects Client A's audio output directly to Client B's input.
+  Parameters: Src Client ID, Dst Client ID, MIME Type Negotiation Flags.
+* 0x21 - NegotiateMimeType
+  Interrogates recipient client/FFmpeg endpoint for supported codecs and outputs matching format strings.
+* 0x22 - SetClientVolume - Controls per-client gain/attenuation.
+  Parameters: Client ID, Volume Level (0–65535).
+* 0x23 - GetAudioOutputs - Enumerates physical/virtual sinks available in FFmpeg.
+
+##### Required XSettings
+XSettings provides desktop-wide configuration and dynamic adjustments without changing the protocol stream layout. To support mixing, multi-stream permissions, and per-client volume controls, you need 6 XSetting properties:
+Mixing & Device Management
+* XAudio/MixingMode (String)
+  Controls server behavior when multiple streams play simultaneously.
+  Values: "FFMPEG_SOFTWARE_MIX" (mix everything into master output), "EXCLUSIVE" (first stream locks device), "PASS_THROUGH".
+
+* XAudio/DefaultOutput (String)
+  Identifies the primary active speaker/sink device string passed to FFmpeg (e.g., "default", "alsa/hw:0,0").
+
+* XAudio/AllowMultiStream (Integer / Boolean)
+  Global toggle (0 or 1) determining whether secondary client streams can play concurrently or get queued.
+
+Per-Client & Security Policy
+
+* XAudio/PerClientVolume/Client_<ID> (Integer)
+  Stores the volume level for individual client connection IDs (scale 0–100 or 0–65535).
+
+* XAudio/ClientInterconnectPolicy (Integer / Enum)
+  Rules governing the client-to-client stream annex.
+  Values: 0=Deny All, 1=Prompt User, 2=Allow Local Only, 3=Allow All.
+
+* XAudio/MaxShmBufferSizeMB (Integer)
+  Cap on total memory a client can allocate for zero-copy file sharing (prevents a client from exhausting system RAM with massive files).
+
+# 10 How This Should Have Happened
+You are an expert Sun Microsystems engineer in 1995 and Sun just bought Apple Computers.  Your task is get AppleScript to call services on the Sun servers and get the management scripts on the Sun servers to call in to AppleScript events.
