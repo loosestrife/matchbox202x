@@ -151,6 +151,7 @@ If there is a blob associated with the intent, it is specified in `payload.blob`
 ### 3.1 Canonical Data Models
 An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatted with `format = 32`:
 
+```
 +-----------------------------------------------------------------------+
 |                       XClientMessageEvent                             |
 +-----------------------------------------------------------------------+
@@ -164,12 +165,12 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 | data.l[3]   : unused                                                  |
 | data.l[4]   : unused                                                  |
 +-----------------------------------------------------------------------+
-
+```
 
 ## 4. Application Package Format (`index.toml`)
 
 Applications are distributed as compressed `.zip` archives (or single ELF binaries with an embedded `.index_toml` segment).
-
+```
 my-app.zip
 ├── index.toml          # Package manifest & IPC contracts
 ├── bin/
@@ -179,7 +180,7 @@ my-app.zip
 │   └── settings.html   # Secondary UI card
 └── assets/
 └── favicon.ico         # Launcher icon
-
+```
 Applications not installed in `/wherever/matchbox/` are simply `my-cool-app.toml` files.  These refer intents and events to other processes.
 
 ### 4.1 Canonical `index.toml` Schema
@@ -301,6 +302,7 @@ libplatform --app user-desktop:org.unix.editor --intent file.Open --path "/home/
 When an application generates large payloads or streams, instead of those going through X, they need to be sent through shm/sockets or files/scp.
 
 ### 8.1 File Ownership Transfer Protocol (sys.TransferFile)
+```
 [ App A: cool-ebook ]         [ System Mediator: NIHRPCXD ]     [ App B: cool-tts ]
         │                                 │                              │
         │ ── 1. Creates file in app space ──>                            │
@@ -314,19 +316,19 @@ When an application generates large payloads or streams, instead of those going 
         │                                 │                              │
         │                                 │ ── 4. link(src, target_path) │
         │                                 │       unlink(src) ─────────> │ (Now owns file)
-
+```
 Protocol Steps:
 
     Creation: cool-ebook writes the file to its isolated storage space (~/.cache/cool-ebook/out_1042.wav).
 
     Transfer Intent: cool-ebook emits an XClientMessage intent sys.TransferFile:
-    JSON
+    ```JSON
 
     {
       "intent": "sys.TransferFile",
       "source_path": "~/.cache/cool-ebook/out_1042.wav",
       "target_app": "org.unix.cool-tts",
-    }
+    }```
 
     Mediation & Link: The system supervisor (sysd), running with elevated privilege relative to app sandboxes, verifies permissions, hard-links the inode into cool-tts's storage space (~/.cache/cool-tts/inbound_8801.wav), and unlinks it from cool-ebook's directory.
 
@@ -334,6 +336,7 @@ Protocol Steps:
 
 
 ### 8.3. Media Streams
+```
 +-------------------+                               +-------------------+
 |  App A (Producer) |                               | App B (Consumer)  |
 +---------+---------+                               +---------+---------+
@@ -355,6 +358,7 @@ Protocol Steps:
 | Local Device | Unix Socket | App A sends media.ConnectStream, App B is offered a connection and a socket, App A gets the other end of the socket |
 | High Speed | POSIX Shared Memory | App A sends a shared memory file descriptor over the unix socket |
 | Cross Device | SSH Tunnel / Cleartext TCP | App A sends media.ConnectStream and gets the same socket back, but its a network socket |
+```
 
 Thus, the XINTENT router and the matchbox-service-lighter have to open sockets like `$XDG_RUNTIME_DIR/xintent-broker.sock` on their respective devices and signal the processes that want to send streams to request their side of the socket.  if it turns out the processes are on the same device, it would be a unix socket and they can use SHM.  if it turns out theyre on different devices, its probably an ssl socket.
 
@@ -386,6 +390,7 @@ Thus, the XINTENT router and the matchbox-service-lighter have to open sockets l
 
 ### 9.5 Future Plans
 #### XINTENT_INTENT frame layout
+```
 Offset    Size       Field                      Description
 --------------------------------------------------------------------------------------
 Byte 0    1 byte     Major Opcode               XINTENT Dynamic Opcode (e.g., 128)
@@ -412,7 +417,7 @@ Byte Offset | Hex / Value          | Field Name
 32 - 35     | 00 02 01 04          | Tag=2 (AudioMode), Type=0x01 (CARD32), Len=4 bytes
 36 - 39     | 00 00 00 01          | Value = 1 (Speakerphone)
 40 - 43     | 00 00 00 00          | Trailer Padding / Reserved
-
+```
 and it could be inspected by XSECURE and sent to the intent router in a few instructions and an ipc call.  You can have a full featured cell phone in 64MB and it can almost fit in L3 cache.
 
 #### Copy/Paste
