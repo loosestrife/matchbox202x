@@ -90,12 +90,14 @@ function genServicesManifesto() {
   }
 }
 genServicesManifesto();
-xintentServicesManifesto.packages["cool-tts"].intents["ui.TextToSpeech"] = {
+stubValue = {
   invocation: "X11",
   execDir: __dirname,
   exec: "bun cool-tts-mock.js",
   env: {},
   args: [],
 };
+xintentServicesManifesto.packages["cool-tts"].intents["ui.TextToSpeech"] = stubValue;
+packageRegistry["cool-tts"].intents["ui.TextToSpeech"] = stubValue;
 
 module.exports = {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto};

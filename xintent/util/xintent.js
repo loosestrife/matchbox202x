@@ -36,6 +36,7 @@ async function connectToRouter(X, root) {
   }
   atoms.XINTENT_INTENT_V0 = xintentV0Atom;
   atoms.XINTENT_DATA = await X.InternAtom(false, 'XINTENT_DATA');
+  atoms.XINTENT_BLOB = await X.InternAtom(false, 'XINTENT_BLOB');
   return routerWin;
 }
 
@@ -43,15 +44,20 @@ const atoms = {};
 
 const widString = wid => '0x' + wid.toString(16);
 
-async function sendXintentIntentV0(X, {targetWin, senderWin, txId, targetPropAtom, payload, blob}) {
-  X.ChangeProperty(0, targetWin, atoms.XINTENT_DATA, atoms.STRING, 8, JSON.stringify(payload));
+async function sendXintentIntentV0(X, {targetWin, senderWin, txId, targetPropAtom, payload, blob, blobPropAtom}) {
+  targetPropAtom = targetPropAtom ?? atoms.XINTENT_DATA;
+  blobPropAtom = blobPropAtom ?? atoms.XINTENT_BLOB;
+  X.ChangeProperty(0, targetWin, targetPropAtom, atoms.STRING, 8, JSON.stringify(payload));
+  if(blob){
+    X.ChangeProperty(0, targetWin, blobPropAtom, atoms.STRING, 8, blob);
+  }
   const ev = Buffer.alloc(32);
   ev.writeInt8(33, 0);                   // Event Code: ClientMessage
   ev.writeInt8(32, 1);                   // 32-bit format
   ev.writeUInt32LE(targetWin, 4);        // Target Window ID
   ev.writeUInt32LE(atoms.XINTENT_INTENT_V0, 8);    // Atom Message Type
   ev.writeUInt32LE(senderWin, 12);
-  ev.writeUInt32LE(targetPropAtom ?? atoms.XINTENT_DATA, 16);
+  ev.writeUInt32LE(targetPropAtom, 16);
   ev.writeUInt32LE(txId ?? 0, 20);
   X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
   console.log(`[intent-router] Dispatched ${payload.intent} to ${widString(targetWin)}`);
@@ -63,26 +69,24 @@ async function parseXintentIntentV0(X, ev){
   const targetWin = ev.wid;
   const [senderWin, targetPropAtom, txId] = ev.data;
   const evData = {senderWin, txId};
-  console.log("[router] Received XINTENT_INTENT_V0", {
-    senderWin: widString(senderWin) || '0x0',
-    targetPropAtom,
-    txId,
-  });
+
   const prop = await X.GetProperty(0, targetWin, targetPropAtom, atoms.STRING, 0, 1000000);
   let payload, blob;
   if (prop && prop.data) {
-    X.DeleteProperty(0, targetWin, targetPropAtom);
-    const payload = JSON.parse(prop.data.toString());
+    X.DeleteProperty(targetWin, targetPropAtom);
+    payload = JSON.parse(prop.data.toString());
     console.log("payload data is", payload);
     if (payload.blob) {
       const { propAtom: blobPropAtom } = payload.blob;
       const blobProp = await X.GetProperty(0, targetWin, blobPropAtom, atoms.STRING, 0, 100000);
-      X.DeleteProperty(0, targetWin, blobPropAtom);
+      X.DeleteProperty(targetWin, blobPropAtom);
       blob = blobProp.data;
       console.log(`received blob of size ${blob ? blob.length : 0}`);
     }
   }
-  return {targetWin, senderWin, txId, targetPropAtom, payload, blob};
+  const response = {targetWin, senderWin, txId, targetPropAtom, payload, blob};
+  console.log("[router] Received XINTENT_INTENT_V0", {...response, targetWin: widString(response.targetWin), senderWin: widString(response.senderWin)});
+  return response;
 }
 
 module.exports = {connectToRouter, atoms, sendXintentIntentV0, parseXintentIntentV0, widString};

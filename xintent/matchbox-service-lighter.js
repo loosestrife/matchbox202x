@@ -50,13 +50,13 @@ async function startLighter() {
         console.log("this only responds to sys.Launch");
         return;
       }
-      const service = payload.service;
-      if (service) {
-        console.log(`[service-lighter] Spawning background service process: ${service.exec}`);
-        execAsync(`${service.exec} &`).catch(err => {
-          console.error(`[service-lighter] Failed to launch service:`, err);
-        });
-      }
+      const pakName = payload.package;
+      const package = packageRegistry[pakName];
+      const intent = package.intents[payload.intendedIntent];
+      console.log(`[service-lighter] Got request to load ${pakName} for ${payload.intendedIntent}`, intent);
+      execAsync(`${intent.exec} &`).catch(err => {
+        console.error(`[service-lighter] Failed to launch service:`, err);   
+      });
       // no need to inform intent-registry.  intent-registry waits for the new service to declae its matchbox.toml
     }
   });

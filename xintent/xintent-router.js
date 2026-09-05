@@ -72,19 +72,25 @@ async function startRouter() {
   console.log(`[intent-router] Window created: ${widString(routerWin)}`);
 
   rawX.on('event', async (ev) => {
-    // Handle Window Creation -> Watch for Property Changes
     if (ev.name === 'CreateNotify') {
       await X.ChangeWindowAttributes(ev.wid, { eventMask: x11.eventMask.PropertyChange });
     }
 
-    // Handle TOML updates on windows
     if (ev.name === 'PropertyNotify' && ev.atom === atoms.XINTENT_MATCHBOX_TOML) {
-      await parseWindowToml(X, ev.wid);
+      await parseWindowToml(X, root, ev.wid);
+    }
+
+    if (ev.name === 'PropertyNotify' && ev.atom === atoms.XINTENT_SERVICES_MANIFEST) {
+      await parseWindowLighterToml(X, root, ev.wid);
+    }
+
+    if (ev.name === 'DestroyNotify') {
+      //unregisterWindow(ev.wid);
     }
 
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
       console.log("got ClientMessage on routerWin", ev);
-      const xintentIntent = parseXintentIntentV0(X, ev);
+      const xintentIntent = await parseXintentIntentV0(X, ev);
       if(xintentIntent){
         await routeIntent(X, root, xintentIntent);
       }
@@ -124,11 +130,8 @@ async function routeIntent(X, root, xintentIntent) {
   const {wid, matchboxToml} = registryEntry[0];
   console.log(`[intent-router] Found service window (${widString(wid)})`);
   await sendXintentIntentV0(X, {
+    ...xintentIntent, 
     targetWin: wid,
-    senderWin: xintentIntent.senderWin,
-    txId: xintentIntent.txId,
-    payload,
-    blob
   });
 }
 
@@ -144,12 +147,12 @@ const intentRegistry = {};
 async function getAllMatchboxToml(X, root) {
   const tree = await X.QueryTree(root);
   for (const wid of tree.children) {
-    await parseWindowToml(X, wid);
-    await parseWindowLighterToml(X, wid);
+    await parseWindowToml(X, root, wid);
+    await parseWindowLighterToml(X, root, wid);
   }
 }
 
-async function parseWindowToml(X, wid) {
+async function parseWindowToml(X, root, wid) {
   try {
     const prop = await X.GetProperty(0, wid, atoms.XINTENT_MATCHBOX_TOML, 0, 0, 1000000);
     if (prop && prop.data && prop.data.length > 0) {
@@ -173,7 +176,7 @@ async function parseWindowToml(X, wid) {
 }
 
 const lighterRegistry = {};
-async function parseWindowLighterToml(X, wid) {
+async function parseWindowLighterToml(X, root, wid) {
   const prop = await X.GetProperty(0, wid, atoms.XINTENT_SERVICES_MANIFEST, atoms.STRING, 0, 1000000);
   if (prop && prop.data && prop.data.length > 0) {
     const toml = TOML.parse(prop.data.toString('utf8'));

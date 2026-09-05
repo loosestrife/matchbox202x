@@ -14,10 +14,10 @@ async function sendIntent() {
     targetWin: routerWin,
     senderWin: 0,
     txId: 67,
-    payload: JSON.stringify({
+    payload: {
       intent: 'ui.TextToSpeech',
       text: 'Direct window IPC works!'
-    }),
+    },
   });
   console.log('[sender] Direct ClientMessage dispatched!');  
   setTimeout(() => process.exit(0), 100);
