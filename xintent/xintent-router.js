@@ -75,19 +75,18 @@ async function startRouter() {
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
       console.log("got ClientMessage on routerWin", ev);
       if (ev.message_type == atoms.XINTENT_INTENT_V0) {
-        const [senderWin, targetPropAtom, encodingAtom, lengthHint, txId] = ev.data;
+        const [senderWin, targetPropAtom, txId] = ev.data;
         console.log("[router] Received V0 intent trigger", {
           senderWin: widString(senderWin),
           targetPropAtom,
-          encodingAtom,
-          lengthHint,
-          txId
+          txId,
         });
         
         const maxBytes = lengthHint > 0 ? lengthHint : 65536;
         const prop = await X.GetProperty(0, routerWin, targetPropAtom, atoms.STRING, 0, maxBytes);
         
         if (prop && prop.data) {
+          X.DeleteProperty(routerWin, targetPropAtom);
           const payload = JSON.parse(prop.data.toString());
           console.log("payload data is", payload);
           let blob = null;

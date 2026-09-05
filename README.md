@@ -218,7 +218,7 @@ which gets responded to with
   "disposition": "final"
 }
 ```
-Any RPC server has to handle the process boundary between processes and have a client library to handle routing inside the processes.  While we could use X Window's to target intents/events if we were actually doing this in X, the honest thing to do is to have the server allocate Channel's
+Any RPC server has to handle the process boundary between processes and have a client library to handle routing inside the processes.  In X, the channel is given first by the target window, then by the sender window and transaction id fields of the client message.  Outside of X, the server allocate Channel's
 ```JavaScript
 channels = {'aX4f': {sender, reciever, initialIntent}}
 ```
@@ -234,35 +234,30 @@ None of this was invented here.  The protocal name is NIH-RPC.
 
 Intents (requesting an action) and Events (broadcasting a state change) are transmitted across the X11 server using native `ClientMessage` structures and X Properties.
 
-### 3.1 Message Atoms
-The server MUST register the following core atoms via `XInternAtom`:
-* `UNIX_INTENT`
-* `UNIX_EVENT`
-* `UNIX_PAYLOAD_ATOM`
-* `_XSETTINGS_SETTINGS`
+### 3.1 Overview
+The intent router registers the atom `XINTENT` to assert that there is an `XINTENT` implementation on the X server and then sets the `XINTENT` property of the root window as a window with name `"INTENT_ROUTER"`.
 
-### 3.2 Canonical Data Models
+It then listens for `ClientMessage`'s with message type atom `XINTENT_INTENT_V0`, the first three data fields are senderWin, targetPropAtom, and txId.  It gets the canonical JSON payload from its property targetPropAtom, then deletes that property.
+
+If there is a blob associated with the intent, it is specified in `payload.blob` to be on the intent router window at property `payload.blob.blobPropAtom`.
+
+### 3.1 Canonical Data Models
 An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatted with `format = 32`:
 
 +-----------------------------------------------------------------------+
 |                       XClientMessageEvent                             |
 +-----------------------------------------------------------------------+
 | type        : ClientMessage                                           |
-| window      : Target Window XID (or DefaultRootWindow for Broadcast)  |
-| message_type: Atom("UNIX_INTENT") or Atom("UNIX_EVENT")               |
+| window      : Target Window XID                                       |
+| message_type: Atom("XINTENT_INTENT_V0")                               |
 | format      : 32                                                      |
-| data.l[0]   : Atom representing Action/Event Name (e.g., ui.Text)     |
-| data.l[1]   : Atom representing Payload Data (UNIX_PAYLOAD_ATOM)      |
-| data.l[2]   : Sender Window XID                                       |
-| data.l[3]   : Target App ID Atom (0 if un-targeted broadcast)         |
-| data.l[4]   : Sequence / Message ID Channel                           |
+| data.l[0]   : Sender Window XID                                       |
+| data.l[1]   : Atom where the reciever can find the payload            |
+| data.l[2]   : Transaction id                                          |
+| data.l[3]   : unused                                                  |
+| data.l[4]   : unused                                                  |
 +-----------------------------------------------------------------------+
 
-### 3.3 Large Payloads (X Selection / Property Protocol)
-If the payload exceeds what fits inside the 32-bit `ClientMessage` fields:
-1. The sender sets an X Property (`UNIX_PAYLOAD_ATOM`) on its own window containing the canonical JSON string.
-2. `data.l[1]` passes the property Atom name.
-3. The receiver queries the property data via `XGetWindowProperty` and deletes it upon receipt.
 
 ---
 # 4. UI Rendering, Web Cards, & Window Management
@@ -275,8 +270,6 @@ Programs may generate UI by providing HTML/CSS markup to a system-wide Web Brows
 Inter-Card Communication: HTML Cards within the same app session communicate state using standard web BroadcastChannel APIs.  Otherwise, they only communicate by sending intents from their buttons back to their app, exactly as if they were ordinary X windows and the app would recieve X events exactly the same way.
 
 System Styling: The shared Web Browser reads the system themes, DPI, and scaling directly from the _XSETTINGS_SETTINGS root window property.
-
-
 
 ### 5.2 C API Struct (libplatform.h)
 
