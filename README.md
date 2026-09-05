@@ -258,7 +258,6 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 | data.l[4]   : unused                                                  |
 +-----------------------------------------------------------------------+
 
-
 ---
 # 4. UI Rendering, Web Cards, & Window Management
 ### 4.1 Tablet Card-Deck Window Manager
@@ -412,3 +411,4 @@ Thus, the XINTENT router and the matchbox-service-lighter have to open sockets l
 ### 9.4 Security
 * the initial http bridge server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the http bridge client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0
 * to prevent LocalStorage and BroadcastChannel collisions, the http bridge server has to keep track of allocating :5xxxx for cool-app html and keys
+* when process 9000 sends `wm.Close` to window 0x420's parent frame, xsecure asks matchbox202x/compiz202x to pop open a uac prompt `[allowAndStore] [allow] [reject] [ignore] [disconnect]` and after `allowAndStore` the user has to go into xsecure.toml or through the xsecure card to see what authentications and authorizations there are
