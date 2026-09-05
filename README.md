@@ -406,9 +406,40 @@ Thus, the XINTENT router and the matchbox-service-lighter have to open sockets l
 * once everyone is using matchbox202x, the planned fast path can be implemented, and the unix desktop can be what it should have been in the 1990's
 * the X extension that should have existed no later than 2010, XHTML, that injects a window.xhtml.event() and window.xhtml.onevent in the html card and specifies X events in the html backend process, disappears XHTML windows if the html backend closes, and so on, is still needed regardless of how long the poetteringware developers play with wayland
 * XAUDIO needs some more features but it was the most requested feature in the 90's that ssh -X would include speakers in the session
-* XSECURE: coping with your ex-secure desktop you connected to the network.  check sender ids, dont give events to unauthorized processes, check the authoriation matrix against the uid across the socket, a pam token, etc.
+* XSECURE: coping with your ex-secure desktop you connected to the network.  check sender ids, dont give events to unauthorized processes, check the authoriation matrix against the uid across the socket, a pam jwt authorizaton cookie, etc.
 
 ### 9.4 Security
 * the initial http bridge server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the http bridge client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0
 * to prevent LocalStorage and BroadcastChannel collisions, the http bridge server has to keep track of allocating :5xxxx for cool-app html and keys
 * when process 9000 sends `wm.Close` to window 0x420's parent frame, xsecure asks matchbox202x/compiz202x to pop open a uac prompt `[allowAndStore] [allow] [reject] [ignore] [disconnect]` and after `allowAndStore` the user has to go into xsecure.toml or through the xsecure card to see what authentications and authorizations there are
+
+### 9.5 Future Plans
+XINTENT_INTENT frame layout
+Offset    Size       Field                      Description
+--------------------------------------------------------------------------------------
+Byte 0    1 byte     Major Opcode               XINTENT Dynamic Opcode (e.g., 128)
+Byte 1    1 byte     Minor Opcode               1 = XINTENT_INTENT
+Byte 2    2 bytes    Request Length (N)         Total frame size in 4-byte units
+Byte 4    2 bytes    Domain Category Code       `wm`, `fs`, `sys`, `ui`, `net`, `cell`, `app`
+Byte 6    2 bytes    Operation Verb Code        `wm.Close`, `fs.SaveFileAs`, etc.
+Byte 8    4 bytes    Target Window / XID        0 for System/Global Router, or Window XID
+Byte 12   4 bytes    Intent Sequence ID         Unique ID for correlation / responses
+Byte 16   N*4 - 16   Payload Fields             Type-tagged field payload
+
+so cell.PhoneDial would look like
+Byte Offset | Hex / Value          | Field Name
+--------------------------------------------------------------------------------
+00 - 01     | 80 01                | Major Opcode (128), Minor Opcode (1 = XINTENT_INTENT)
+02 - 03     | 00 0B                | Length = 11 (44 bytes total)
+04 - 05     | 00 06                | Domain = 0x0006 (`cell`)
+06 - 07     | 00 01                | Verb   = 0x0001 (`cell.PhoneDial`)
+08 - 11     | 00 00 00 00          | Target Window = 0 (Route to default dialer)
+12 - 15     | 00 00 00 42          | Intent Sequence ID = 0x42
+16 - 19     | 00 01 02 0A          | Tag=1 (Number), Type=0x02 (STRING), Len=10 bytes
+20 - 29     | "+15550199"          | Raw ASCII String Payload
+30 - 31     | 00 00                | Alignment Padding to 32-bit boundary
+32 - 35     | 00 02 01 04          | Tag=2 (AudioMode), Type=0x01 (CARD32), Len=4 bytes
+36 - 39     | 00 00 00 01          | Value = 1 (Speakerphone)
+40 - 43     | 00 00 00 00          | Trailer Padding / Reserved
+
+and it could be inspected by XSECURE and sent to the intent router in a few instructions and an ipc call.  You can have a full featured cell phone in 64MB and it can almost fit in L3 cache.
