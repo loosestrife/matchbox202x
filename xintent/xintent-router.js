@@ -8,10 +8,11 @@ const x11 = require('./util/x11-promises');
 const widString = wid => '0x' + wid.toString(16);
 
 const atoms = {};
+let routerWin;
 
 async function startRouter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
-  const routerWin = X.AllocID();
+  routerWin = X.AllocID();
   await X.CreateWindow(
     routerWin, root,
     0, 0, 1, 1, 0, 0, 0, 0,
@@ -29,13 +30,10 @@ async function startRouter() {
   atoms.XINTENT_MATCHBOX_TOML = await X.InternAtom(false, 'XINTENT_MATCHBOX_TOML');
   atoms.XINTENT_SERVICES_MANIFEST = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
 
-  /* yeah were not doing SetSelectionOwner
-  {
+  /* could do this but it would mean a new xintent-router would take over immediately
   await X.SetSelectionOwner(routerWin, atoms.XINTENT, 0);
-  const owner = await X.GetSelectionOwner(atoms.XINTENT);
-  if (owner !== routerWin) {
-    throw new Error('XINTENT is already claimed by another process');
-  }*/
+  * meanwhile the icccm preferred race-free window manager replacement mechanism is a lot of code for a proof of concept project
+  */
   {
     let routerAlreadyExists = false;
     let rootRouterWin = null;
@@ -87,6 +85,7 @@ async function startRouter() {
       console.log("got ClientMessage on routerWin", ev);
       if (ev.message_type == atoms.XINTENT_INTENT_V0) {
         const [senderWin, targetPropAtom, txId] = ev.data;
+        const evData = {senderWin, txId};
         console.log("[router] Received V0 intent trigger", {
           senderWin: widString(senderWin),
           targetPropAtom,
@@ -107,7 +106,7 @@ async function startRouter() {
             blob = blobProp.data;
             console.log(`received blob of size ${blob ? blob.length : 0}`);
           }
-          await routeIntent(X, root, payload, blob);
+          await routeIntent(X, root, payload, evData, blob);
         }
       }
     }
@@ -115,7 +114,7 @@ async function startRouter() {
   console.log('[intent-router] Listening for direct window IPC...');
 }
 
-async function routeIntent(X, root, payload, blob) {
+async function routeIntent(X, root, payload, evData, blob) {
   const intent = payload.intent;
   const registryEntry = intentRegistry[intent];
   if (!registryEntry) {
@@ -128,31 +127,34 @@ async function routeIntent(X, root, payload, blob) {
         computer,
         package: packageName,
         intendedIntent: intent,
-      });
+      }, {senderWin: routerWin, txId: 0});
     }
     return;
   }
   const {wid, matchboxToml} = registryEntry[0];
   if (wid) {
     console.log(`[intent-router] Found active service window (${widString(wid)})`);
-    await dispatchToWindow(X, wid, payload, blob);
+    await dispatchToWindow(X, wid, payload, {senderWin: evData.senderWin, txId: evData.txId}, blob);
   } else {
     console.log(`[intent-router] Service inactive. Trying to launch...`);
     // matchbox-service-lighter call here
     newWid = await waitForWindow(X, root, service.windowClass);
     if (newW) {
-      await dispatchToWindow(X, newWid, payload, blob);
+      await dispatchToWindow(X, newWid, payload, {senderWin: evData.senderWin, txId: evData.txId}, blob);
     }
   }
 }
 
-async function dispatchToWindow(X, targetWin, payload, blob) {
+async function dispatchToWindow(X, targetWin, payload, evData, blob) {
   await X.ChangeProperty(0, targetWin, atoms.XINTENT_DATA, atoms.STRING, 8, JSON.stringify(payload));
   const ev = Buffer.alloc(32);
   ev.writeInt8(33, 0);                   // Event Code: ClientMessage
   ev.writeInt8(32, 1);                   // 32-bit format
   ev.writeUInt32LE(targetWin, 4);        // Target Window ID
   ev.writeUInt32LE(atoms.XINTENT_INTENT_V0, 8);    // Atom Message Type
+  ev.writeUInt32LE(evData.senderWin, 12);
+  ev.writeUInt32LE(evData.targetPropAtom ?? atoms.XINTENT_DATA, 16);
+  ev.writeUInt32LE(evData.txId ?? 0, 20);
   await X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
   console.log(`[intent-router] Dispatched payload to ${widString(targetWin)}`);
 }
