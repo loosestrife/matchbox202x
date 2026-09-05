@@ -2,8 +2,17 @@
 const x11 = require('./x11-promises');
 const xintent = require('./xintent');
 
+const matchbox_toml = `
+[intents."ui.TextToSpeech"]
+invocation = "X11"
+execDir = "."
+exec = "bun cool-tts-mock.js"
+env = {}
+args = []
+`;
+
 async function startTTSService() {
-  const { X, rawX, root } = await x11.createPromiseXClient();
+  const { X, rawX, root } = await x11.createClientWithPromises();
   const { routerWin, xintentV0Atom } = await xintent.connectToRouter(X, root);
   const ttsWin = X.AllocID();
 
@@ -18,11 +27,14 @@ async function startTTSService() {
   const xintentReplyAtom = await X.InternAtom(false, 'XINTENT_REPLY');
   const wmClassAtom = await X.InternAtom(false, 'WM_CLASS');
   const stringAtom = await X.InternAtom(false, 'STRING');
+  const xintentMatchboxTomlAtom = await X.InternAtom(false, 'XINTENT_MATCHBOX_TOML');
 
-  await X.ChangeProperty(0, ttsWin, wmClassAtom, stringAtom, 8, Buffer.from('cool-tts\0cool-tts\0'));
+  X.ChangeProperty(0, ttsWin, wmClassAtom, stringAtom, 8, Buffer.from('cool-tts\0cool-tts\0'));
+  X.ChangeProperty(0, ttsWin, xintentMatchboxTomlAtom, stringAtom, 8, Buffer.from(matchbox_toml));
+
 
   rawX.on('event', async (ev) => {
-    if ((ev.type === 33 || ev.name === 'ClientMessage') && ev.wid === ttsWin) {
+    if (ev.name === 'ClientMessage' && ev.wid === ttsWin) {
       const prop = await X.GetProperty(0, ttsWin, xintentDataAtom, stringAtom, 0, 1000);
       if (!prop || !prop.data) return;
 
@@ -33,10 +45,8 @@ async function startTTSService() {
       const replyBlob = Buffer.from(`TTS_AUDIO_PCM_DATA_BLOB_FOR_${payload.text}`);
 
       // 2. Write the blob to the Router's Window (using routerWin ID sent in request)
-      const routerWin = ev.data.readUInt32LE(12); // Extracted from 32-bit ClientMessage payload
+      const routerWin = ev.data[0];
       await X.ChangeProperty(0, routerWin, xintentReplyAtom, stringAtom, 8, replyBlob);
-
-      // 3. Send ClientMessage reply signal back to Router
       const replyEv = Buffer.alloc(32);
       replyEv.writeInt8(33, 0);               // ClientMessage
       replyEv.writeInt8(32, 1);               // 32-bit format

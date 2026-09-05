@@ -1,12 +1,9 @@
 // xintent-router.js
 const { exec } = require('child_process');
+const TOML = require('@iarna/toml');
 const util = require('util');
 const execAsync = util.promisify(exec);
 const x11 = require('./x11-promises');
-
-const SERVICE_MAP = {
-  'tts.speak': { appName: 'cool-tts', windowClass: 'cool-tts' },
-};
 
 const widString = wid => '0x' + wid.toString(16);
 
@@ -29,6 +26,7 @@ async function startRouter() {
   atoms.STRING            = await X.InternAtom(false, 'STRING');
   atoms.WM_NAME           = await X.InternAtom(false, 'WM_NAME');
   atoms.WINDOW            = await X.InternAtom(false, 'WINDOW');
+  atoms.XINTENT_MATCHBOX_TOML = await X.InternAtom(false, 'XINTENT_MATCHBOX_TOML');
 
   /* yeah were not doing SetSelectionOwner
   {
@@ -69,9 +67,21 @@ async function startRouter() {
   winBuffer.writeUInt32LE(routerWin, 0);
   await X.ChangeProperty(0, root, atoms.XINTENT, atoms.WINDOW, 32, winBuffer);
   console.log('atoms are', atoms);
+  await X.ChangeWindowAttributes(root, { eventMask: x11.eventMask.SubstructureNotify });
+  await getAllMatchboxToml(X, root);
   console.log(`[intent-router] Window created: ${widString(routerWin)}`);
 
   rawX.on('event', async (ev) => {
+    // Handle Window Creation -> Watch for Property Changes
+    if (ev.name === 'CreateNotify') {
+      await X.ChangeWindowAttributes(ev.wid, { eventMask: x11.eventMask.PropertyChange });
+    }
+
+    // Handle TOML updates on windows
+    if (ev.name === 'PropertyNotify' && ev.atom === atoms.XINTENT_MATCHBOX_TOML) {
+      await parseWindowToml(X, ev.wid);
+    }
+
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
       console.log("got ClientMessage on routerWin", ev);
       if (ev.message_type == atoms.XINTENT_INTENT_V0) {
@@ -82,8 +92,7 @@ async function startRouter() {
           txId,
         });
         
-        const maxBytes = lengthHint > 0 ? lengthHint : 65536;
-        const prop = await X.GetProperty(0, routerWin, targetPropAtom, atoms.STRING, 0, maxBytes);
+        const prop = await X.GetProperty(0, routerWin, targetPropAtom, atoms.STRING, 0, 1000000);
         
         if (prop && prop.data) {
           X.DeleteProperty(routerWin, targetPropAtom);
@@ -106,69 +115,66 @@ async function startRouter() {
 }
 
 async function routeIntent(X, root, payload, blob) {
-  const service = SERVICE_MAP[payload.action];
-  if (!service) {
-    console.error(`[intent-router] No service mapped for action: ${payload.action}`);
+  const registryEntry = intentRegistry[payload.intent];
+  if (!registryEntry) {
+    console.error(`[intent-router] No service mapped for action: ${payload.intent}`);
     return;
   }
-
-  let winId = await findWindowByClass(X, root, service.windowClass);
-
-  if (winId) {
-    console.log(`[intent-router] Found active service window (${widString(winId)})`);
-    await dispatchToWindow(X, winId, payload, blob);
+  const {wid, matchboxToml} = registryEntry[0];
+  if (wid) {
+    console.log(`[intent-router] Found active service window (${widString(wid)})`);
+    await dispatchToWindow(X, wid, payload, blob);
   } else {
-    console.log(`[intent-router] Service inactive. Spawning ${service.appName}...`);
-    await execAsync(`bun ${service.appName}-mock.js &`);
-    winId = await waitForWindow(X, root, service.windowClass);
-    if (winId) {
-      await dispatchToWindow(X, winId, payload, blob);
+    console.log(`[intent-router] Service inactive. Trying to launch...`);
+    // matchbox-service-lighter call here
+    newWid = await waitForWindow(X, root, service.windowClass);
+    if (newW) {
+      await dispatchToWindow(X, newWid, payload, blob);
     }
   }
 }
 
 async function dispatchToWindow(X, targetWin, payload, blob) {
-  // Store payload directly on target service window
   await X.ChangeProperty(0, targetWin, atoms.XINTENT_DATA, atoms.STRING, 8, JSON.stringify(payload));
-
-  // Send ClientMessage trigger to target service window
   const ev = Buffer.alloc(32);
   ev.writeInt8(33, 0);                   // Event Code: ClientMessage
   ev.writeInt8(32, 1);                   // 32-bit format
   ev.writeUInt32LE(targetWin, 4);        // Target Window ID
-  ev.writeUInt32LE(atoms.XINTENT, 8);    // Atom Message Type
-
+  ev.writeUInt32LE(atoms.XINTENT_INTENT_V0, 8);    // Atom Message Type
   await X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
   console.log(`[intent-router] Dispatched payload to ${widString(targetWin)}`);
 }
 
-async function findWindowByClass(X, root, className) {
-  try {
-    const tree = await X.QueryTree(root);
-    for (const childWin of tree.children) {
-      try {
-        const prop = await X.GetProperty(0, childWin, atoms.WM_CLASS, atoms.STRING, 0, 100);
-        if (prop && prop.data && prop.data.toString().includes(className)) {
-          return childWin;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-  } catch (e) {
-    console.error('[intent-router] QueryTree error:', e);
+
+const intentRegistry = {};
+async function getAllMatchboxToml(X, root) {
+  const tree = await X.QueryTree(root);
+  for (const wid of tree.children) {
+    await parseWindowToml(X, wid);
   }
-  return null;
 }
 
-async function waitForWindow(X, root, className, retries = 20) {
-  for (let i = 0; i < retries; i++) {
-    const winId = await findWindowByClass(X, root, className);
-    if (winId) return winId;
-    await new Promise((r) => setTimeout(r, 200));
+async function parseWindowToml(X, wid) {
+  try {
+    const prop = await X.GetProperty(0, wid, atoms.XINTENT_MATCHBOX_TOML, 0, 0, 1000000);
+    if (prop && prop.data) {
+      const matchboxToml = TOML.parse(prop.data.toString('utf8'));
+      if (matchboxToml.intents) {
+        for (const intentName of Object.keys(matchboxToml.intents)) {
+          if (!intentRegistry[intentName]) intentRegistry[intentName] = [];
+          
+          // Avoid duplicate bindings for the same window
+          if (!intentRegistry[intentName].some(entry => entry.wid === wid)) {
+            intentRegistry[intentName].push({ wid, matchboxToml });
+            console.log(`[router] Registered intent '${intentName}' -> Window ${widString(wid)}`);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[router] Failed parsing TOML on window ${widString(wid)}:`, err.message);
   }
-  console.error(`[intent-router] Timeout waiting for window: ${className}`);
-  return null;
 }
+
 
 startRouter();

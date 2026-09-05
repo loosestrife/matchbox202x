@@ -11,7 +11,7 @@ async function sendIntent() {
   atoms.XINTENT_INTENT_V0 = xintentV0Atom;
   console.log(`[sender] Found router window ID: 0x${routerWin.toString(16)}`);
 
-  const payload = JSON.stringify({ action: 'tts.speak', text: 'Direct window IPC works!' });
+  const payload = JSON.stringify({ intent: 'ui.TextToSpeech', text: 'Direct window IPC works!' });
   await X.ChangeProperty(0, routerWin, atoms.XINTENT_DATA, X.atoms.STRING, 8, payload);
   const ev = Buffer.alloc(32);
   ev.writeInt8(33, 0);                 // ClientMessage event code
