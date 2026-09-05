@@ -44,8 +44,13 @@ async function startRouter() {
     if (existingProp && existingProp.data && existingProp.data.length == 4) {
       rootRouterWin = existingProp.data.readUInt32LE(0);
       try {
-        await X.GetWindowAttributes(rootRouterWin);
-        routerAlreadyExists = true;
+        const nameProp = await X.GetProperty(0, rootRouterWin, atoms.WM_NAME, atoms.STRING, 0, 8);
+        if (nameProp && nameProp.data) {
+          const windowName = nameProp.data.toString('utf8');
+          if (windowName === 'XINTENT_ROUTER') {
+            routerAlreadyExists = true;
+          }
+        }
       } catch (err) {
         // If GetWindowAttributes throws BadWindow, the previous router crashed/died
         // leaving a stale lock. We can safely proceed to overwrite it.
@@ -63,12 +68,13 @@ async function startRouter() {
   const winBuffer = Buffer.alloc(4);
   winBuffer.writeUInt32LE(routerWin, 0);
   await X.ChangeProperty(0, root, atoms.XINTENT, atoms.WINDOW, 32, winBuffer);
+  console.log('atoms are', atoms);
   console.log(`[intent-router] Window created: ${widString(routerWin)}`);
 
   rawX.on('event', async (ev) => {
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
       console.log("got ClientMessage on routerWin", ev);
-      if (ev.message_type === atoms.XINTENT_INTENT_V0) {
+      if (ev.message_type == atoms.XINTENT_INTENT_V0) {
         const [senderWin, targetPropAtom, encodingAtom, lengthHint, txId] = ev.data;
         console.log("[router] Received V0 intent trigger", {
           senderWin: widString(senderWin),
