@@ -1,12 +1,14 @@
+// matchbox-service-lighter.js
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
-const x11 = require('./x11-promises');
-const xintent = require('./xintent');
+const TOML = require('@iarna/toml');
+const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./util/intent-registry');
+const x11 = require('./util/x11-promises');
+const xintent = require('./util/xintent');
 
-const REGISTERED_SERVICES = {
-  'tts.speak': { appName: 'cool-tts', windowClass: 'cool-tts', execCmd: 'bun cool-tts-mock.js' }
-};
+
+console.log(TOML.stringify(xintentServicesManifesto));
 
 async function startLighter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
@@ -19,22 +21,13 @@ async function startLighter() {
     { eventMask: x11.eventMask.PropertyChange }
   );
 
-  const xintentServicesAtom = await X.InternAtom(false, 'XINTENT_SERVICES');
+  const xintentServicesManifestAtom = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
   const xintentAtom = await X.InternAtom(false, 'XINTENT');
   const xintentDataAtom = await X.InternAtom(false, 'XINTENT_DATA');
 
   await X.ChangeProperty(0, lighterWin, X.atoms.WM_NAME, X.atoms.STRING, 8, 'MATCHBOX_SERVICE_LIGHTER');
-
-  const serviceManifest = JSON.stringify(
-    Object.keys(REGISTERED_SERVICES).map(action => ({
-      action,
-      windowClass: REGISTERED_SERVICES[action].windowClass,
-      lighterWin
-    }))
-  );
-
-  await X.ChangeProperty(0, root, xintentServicesAtom, X.atoms.STRING, 8, serviceManifest);
-  console.log(`[service-lighter] Registered services on root window (0x${lighterWin.toString(16)})`);
+  await X.ChangeProperty(0, lighterWin, xintentServicesManifestAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
+  console.log(`[service-lighter] Registered services (0x${lighterWin.toString(16)})`);
 
   // 4. Handle Direct Start Signals from xintent-router
   rawX.on('event', async (ev) => {
@@ -43,12 +36,16 @@ async function startLighter() {
       if (!prop || !prop.data) return;
 
       const payload = JSON.parse(prop.data.toString());
-      console.log(`[service-lighter] Received start request for action: "${payload.action}"`);
+      console.log('[service-lighter] got intent:', payload);
 
-      const service = REGISTERED_SERVICES[payload.action];
+      if(payload.intent != "sys.Launch"){
+        console.log("this only responds to sys.Launch");
+        return;
+      }
+      const service = payload.service;
       if (service) {
-        console.log(`[service-lighter] Spawning background service process: ${service.execCmd}`);
-        execAsync(`${service.execCmd} &`).catch(err => {
+        console.log(`[service-lighter] Spawning background service process: ${service.exec}`);
+        execAsync(`${service.exec} &`).catch(err => {
           console.error(`[service-lighter] Failed to launch service:`, err);
         });
       }

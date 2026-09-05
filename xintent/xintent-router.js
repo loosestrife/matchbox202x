@@ -3,7 +3,7 @@ const { exec } = require('child_process');
 const TOML = require('@iarna/toml');
 const util = require('util');
 const execAsync = util.promisify(exec);
-const x11 = require('./x11-promises');
+const x11 = require('./util/x11-promises');
 
 const widString = wid => '0x' + wid.toString(16);
 
@@ -27,6 +27,7 @@ async function startRouter() {
   atoms.WM_NAME           = await X.InternAtom(false, 'WM_NAME');
   atoms.WINDOW            = await X.InternAtom(false, 'WINDOW');
   atoms.XINTENT_MATCHBOX_TOML = await X.InternAtom(false, 'XINTENT_MATCHBOX_TOML');
+  atoms.XINTENT_SERVICES_MANIFEST = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
 
   /* yeah were not doing SetSelectionOwner
   {
@@ -115,9 +116,20 @@ async function startRouter() {
 }
 
 async function routeIntent(X, root, payload, blob) {
-  const registryEntry = intentRegistry[payload.intent];
+  const intent = payload.intent;
+  const registryEntry = intentRegistry[intent];
   if (!registryEntry) {
-    console.error(`[intent-router] No service mapped for action: ${payload.intent}`);
+    console.info(`[intent-router] No service mapped for action: ${intent}, falling back to lighter ${JSON.stringify(lighterRegistry, null, 2)}`);
+    const lighterRegistryEntry = lighterRegistry[intent];
+    if(lighterRegistryEntry && lighterRegistryEntry.length > 0){
+      const {computer, packageName, wid, publicKeyHash} = lighterRegistryEntry[0];
+      await dispatchToWindow(X, wid, {
+        intent: 'sys.Launch',
+        computer,
+        package: packageName,
+        intendedIntent: intent,
+      });
+    }
     return;
   }
   const {wid, matchboxToml} = registryEntry[0];
@@ -151,13 +163,14 @@ async function getAllMatchboxToml(X, root) {
   const tree = await X.QueryTree(root);
   for (const wid of tree.children) {
     await parseWindowToml(X, wid);
+    await parseWindowLighterToml(X, wid);
   }
 }
 
 async function parseWindowToml(X, wid) {
   try {
     const prop = await X.GetProperty(0, wid, atoms.XINTENT_MATCHBOX_TOML, 0, 0, 1000000);
-    if (prop && prop.data) {
+    if (prop && prop.data && prop.data.length > 0) {
       const matchboxToml = TOML.parse(prop.data.toString('utf8'));
       if (matchboxToml.intents) {
         for (const intentName of Object.keys(matchboxToml.intents)) {
@@ -175,6 +188,26 @@ async function parseWindowToml(X, wid) {
     console.error(`[router] Failed parsing TOML on window ${widString(wid)}:`, err.message);
   }
 }
+
+const lighterRegistry = {};
+async function parseWindowLighterToml(X, wid) {
+  const prop = await X.GetProperty(0, wid, atoms.XINTENT_SERVICES_MANIFEST, atoms.STRING, 0, 1000000);
+  if (prop && prop.data && prop.data.length > 0) {
+    const toml = TOML.parse(prop.data.toString('utf8'));
+    console.log('got XINTENT_SERVICES_MANIFEST from window', widString(wid), toml);
+    const computer = toml.computer;
+    for (const packageName of Object.keys(toml.packages)) {
+      const publicKeyHash = toml.packages[packageName].publicKeyHash;
+      for(const intentName of Object.keys(toml.packages[packageName].intents)){
+        if (!lighterRegistry[intentName])
+          lighterRegistry[intentName] = [];
+        lighterRegistry[intentName].push({ wid, computer, packageName, publicKeyHash });
+      }
+    }
+  }
+}
+  
+
 
 
 startRouter();

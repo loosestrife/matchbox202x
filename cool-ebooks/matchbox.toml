@@ -9,6 +9,6 @@ id = "main"
 path = "index.html"
 title = "Cool Ebooks"
 
-# Intent Receivers Surface
-[intents.receivers]
-"file.open" = { handler = "index.html" }
+[intents."fs.Open"]
+invocation = "html"
+card = "main"

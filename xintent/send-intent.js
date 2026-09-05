@@ -1,5 +1,5 @@
-const x11 = require('./x11-promises');
-const xintent = require('./xintent');
+const x11 = require('./util/x11-promises');
+const xintent = require('./util/xintent');
 
 const atoms = {}
 async function sendIntent() {
