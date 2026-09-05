@@ -328,12 +328,11 @@ libplatform --app user-desktop:org.unix.editor --intent file.Open --path "/home/
 * DISPLAY=:0 libserver query servers provides the list of possible LIBSERVER_RUN_ON whereas DISPLAY=:99 libserver query server might list that some other server provides some system service
 
 
-# 8. Zero-Copy File Ownership Transfer & Synchronous Request/Response
+# 8. Disintermediating the Intent Server for Media Streams
+When an application generates large payloads or streams, instead of those going through X, they need to be sent through shm/sockets or files/scp.
+
 ### 8.1 File Ownership Transfer Protocol (sys.TransferFile)
-
-When an application generates large payloads (e.g., TTS audio streams, rendered video, compiled binaries) that must be passed to another app without copying data across disks, ownership is transferred atomically via the platform supervisor using POSIX hard links.
-
-[ App A: cool-ebook ]         [ System Mediator: sysd ]         [ App B: cool-tts ]
+[ App A: cool-ebook ]         [ System Mediator: NIHRPCXD ]     [ App B: cool-tts ]
         │                                 │                              │
         │ ── 1. Creates file in app space ──>                            │
         │    (~/.cache/cool-ebook/tmp.wav)│                              │
@@ -364,24 +363,8 @@ Protocol Steps:
 
     Zero Copy: No data is read or written to disk. Only inode reference counts change. cool-tts now owns the file.
 
-### 8.2 Synchronous Request/Response Pattern (sendAwaitFullResponse)
 
-To allow asynchronous X11 ClientMessage flows to act like synchronous API calls (e.g., sending text to TTS and waiting for the rendered audio response), messages include an immutable message_id channel tag passed in data.l[4].
-```JSON
-
-{
-  "intent": "sys.SendData",
-  "app": "org.unix.cool-ebook",
-  "disposition": "final",
-  "channel": "0x7F8A9B11",
-  "data": {
-    "file_path": "~/.cache/cool-ebook/inbound_speech.wav",
-    "duration_ms": 1420
-  }
-}
-```
-
-### 8.3. Disintermediating the Intent Server for Media Streams
+### 8.3. Media Streams
 +-------------------+                               +-------------------+
 |  App A (Producer) |                               | App B (Consumer)  |
 +---------+---------+                               +---------+---------+
@@ -404,6 +387,8 @@ To allow asynchronous X11 ClientMessage flows to act like synchronous API calls 
 | High Speed | POSIX Shared Memory | App A sends a shared memory file descriptor over the unix socket |
 | Cross Device | SSH Tunnel / Cleartext TCP | App A sends media.ConnectStream and gets the same socket back, but its a network socket |
 
+Thus, the XINTENT router and the matchbox-service-lighter have to open sockets like `$XDG_RUNTIME_DIR/xintent-broker.sock` on their respective devices and signal the processes that want to send streams to request their side of the socket.  if it turns out the processes are on the same device, it would be a unix socket and they can use SHM.  if it turns out theyre on different devices, its probably an ssl socket.
+
 # 9. How This System Will Come About
 ### 9.1 Web First
 * start with the http bridge serving intents on :12345
@@ -420,23 +405,9 @@ To allow asynchronous X11 ClientMessage flows to act like synchronous API calls 
 
 ### 9.3 X modifications
 * once everyone is using matchbox202x, the planned fast path can be implemented, and the unix desktop can be what it should have been in the 1990's
-#### Requests (client → server)
-RegisterIntent(action: ATOM, win: WINDOW, flags) → status   # exclusive claim by default
-ReleaseIntent(action: ATOM)
-SubscribeEvent(event: ATOM, win: WINDOW) → sub_id
-Unsubscribe(sub_id)
-SendIntent(dest: APP_ATOM | BROADCAST, action: ATOM,
-           payload: ATOM(prop on sender), channel: CARD32, flags)
-SetClientPolicy(...)          # intent-server only, XACE-gated
-GetRegistry()                 # snapshot; intent-server bootstrap/discovery
-
-#### Events (server → client)
-IntentDelivery { action, payload_prop, sender_client, channel }
-EventDelivery  { event, payload_prop, sender_client }
-RegistryChanged { kind: claimed/released/conflict, action }  # lets intent server arbitrate
-IntentError    { channel, code }   # undeliverable, no claimant, denied
-
 * the X extension that should have existed no later than 2010, XHTML, that injects a window.xhtml.event() and window.xhtml.onevent in the html card and specifies X events in the html backend process, disappears XHTML windows if the html backend closes, and so on, is still needed regardless of how long the poetteringware developers play with wayland
+* XAUDIO needs some more features but it should have been deployed instead of poetteringware
+* XSECURE: coping with your ex-secure desktop you connected to the network.  check sender ids, dont give events to unauthorized processes, check the authoriation matrix against the uid across the socket, a pam token, etc.
 
 ### 9.4 Security
 * the initial http bridge server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the http bridge client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0
