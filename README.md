@@ -406,7 +406,7 @@ Thus, the XINTENT router and the matchbox-service-lighter have to open sockets l
 ### 9.3 X modifications
 * once everyone is using matchbox202x, the planned fast path can be implemented, and the unix desktop can be what it should have been in the 1990's
 * the X extension that should have existed no later than 2010, XHTML, that injects a window.xhtml.event() and window.xhtml.onevent in the html card and specifies X events in the html backend process, disappears XHTML windows if the html backend closes, and so on, is still needed regardless of how long the poetteringware developers play with wayland
-* XAUDIO needs some more features but it should have been deployed instead of poetteringware
+* XAUDIO needs some more features but it was the most requested feature in the 90's that ssh -X would include speakers in the session
 * XSECURE: coping with your ex-secure desktop you connected to the network.  check sender ids, dont give events to unauthorized processes, check the authoriation matrix against the uid across the socket, a pam token, etc.
 
 ### 9.4 Security
