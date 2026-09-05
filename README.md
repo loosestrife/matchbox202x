@@ -40,7 +40,7 @@ This specification defines a unified, lightweight desktop platform constructed e
 * XINTENT: intent routing through the x session, because the x session has since the 70's been the highest performance desktop bus 
 * Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands.  Scripts can send and recieve intents over a socket or over stdin/stdout in NNJSON format, .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http.
 * XSECURE: coping with your ex-secure system that you connected to the network. Multiplexes authentication schemes like unix socket from user and policykit jwt with actions to authorize, intents to fire, events to receive, clipboards and window contexts, permission to open a window without decorations or fullscreen.
-* X11: a high performance desktop bus and shared database with clear semantics for the past 50 years.  So if the session needs a shared database and clear semantics
+* X11: a high performance session bus and shared database with clear semantics for the past 50 years.  So if the session needs a shared database and clear semantics
 
 ### 1.2 User's Distributed Lifestyle
 User is running a session on user-phone and has an ssh -X to user-laptop in the coffee shop with him and an ssh -X to user-desktop at home over tailscale.  User is running cool-ebook off user-laptop where the files are but cool-ebook's html card is running on user-phone.
