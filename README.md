@@ -389,7 +389,7 @@ Thus, the XINTENT router and the matchbox-service-lighter have to open sockets l
 * by the way, what possible window id's a client can have is sent across the wire when the connection starts.  An external security daemon can record that and use the possible window id's to validate security policy
 
 ### 9.5 Future Plans
-#### XINTENT_INTENT frame layout
+#### XINTENT_INTENT frame layout, for the XINTENT extension, as XINTENT_INTENT_V1
 ```
 Offset    Size       Field                      Description
 --------------------------------------------------------------------------------------
