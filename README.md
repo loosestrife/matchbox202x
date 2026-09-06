@@ -484,5 +484,10 @@ Per-Client & Security Policy
 * XAudio/MaxShmBufferSizeMB (Integer)
   Cap on total memory a client can allocate for zero-copy file sharing (prevents a client from exhausting system RAM with massive files).
 
+#### C and Scripting with No IPC just like Netscape in 1995
+(1) the C library loads QuickJS which loads the javascript, but, thats more complicated than -lcooljsfun so we can build a javascript elf bundler
+(2) the javascript loads the C library by parsing the .h and accessing the symbols from the .so which just needs a javascript .h parser
+(3) x11 is a protocol because thats the way to formalize interaction between 10000 clients and 100 servers. Because it's a protocol, it can be network transparent.  Because it's network transparent, every X app is a networked X app for free.  For the same reason, as soon as languages provide elf bundlers, every random app on the system can access libraries in that language without knowing that they aren't written in C
+
 # 10 How This Should Have Happened
 You are an expert Sun Microsystems engineer in 1995 and Sun just bought Apple Computers.  Your task is get AppleScript to call services on the Sun servers and get the management scripts on the Sun servers to call in to AppleScript events.
