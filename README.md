@@ -126,17 +126,9 @@ which gets responded to with
   "disposition": "final"
 }
 ```
-Any RPC server has to handle the process boundary between processes and have a client library to handle routing inside the processes.  In X, the channel is given by the target window and the sender window and the transaction id fields of X intent message.  Outside of X, an rpc server would have to allocate opaque channels.
-```JavaScript
-channels = {'aX4f': {sender, reciever, initialIntent}}
-```
-so the client would
-```Javascript
-channel = await intensive.fire({intent, reply: true})
-```
-and the server would reply with a channel because the client asked for a reply, and attach the channel to the json message for the recieving client, the sending client or recieving client can then close the channel at any time with a message with `{disposition: "cancel"}` or `{disposition: final}`.  Besides being the honest thing to do, the server replying with a channel ack is just another layer of ack on top of the tcp ack and doesnt add latency to the intent response.  If a client tries to send more than 100 intents with `{reply: true}` and get more than 100 channels allocated at a time, it can get an `EMFILE` back.  If a client disconnects, the server sends `{event: "ECONNRESET", msg: "Connection reset by peer", disposition: "error"}`, so, the dispositions are final, cancel, and error.'
+The concept of a channel hadn't been named when X was released.  XINTENT would obviously use the sending window, the recieving window, and a transaction id like AppleScript used, to designate a channel.
 
-None of this was invented here.  The protocal name is NIH-RPC.
+None of this was invented here.  The protocol name is NIH-RPC.
 
 ## 3. Intent & Event Wire Protocol (X11 Primitives)
 
