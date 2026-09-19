@@ -172,7 +172,7 @@ ui.TextToSpeech({text, voice, [mimeType]})
 ui.TextToSpeechResponse({BlobId})
 ```
 
-So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-services-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-services-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  
+So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-services-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` or whatever user set the intent rerouting hotkey to and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-services-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  
 
 ## 4. Application Package Format (`index.toml`)
 
