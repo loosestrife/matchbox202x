@@ -307,12 +307,12 @@ Then over on user-laptop, running `xaudio-tee --streams=0xcafebabe,0xdeadbeef --
 
 Now if you'll excuse me, I have a 3:00 PM meeting with three former Apple system architects to explain why `/dev/audio` doesn't need a Control Strip module or a Finder extension.
 
-### SUN MICROSYSTEMS ARCHITECTURAL SPECIFICATION
-### Document ID: SPEC-1995-XBLOB-002-REV4
-### Title: XBlob Transport Abstraction & Memory-Mapped Stream Infrastructure
-### Author: Distributed Systems & Display Architecture Group (Solaris / NeXT-Sun Integration Team)
-### Target Platform: Solaris 2.5 / UltraSPARC-I SBus / OpenWindows v3.51.
-### Overview & Data Primitives
+#### SUN MICROSYSTEMS ARCHITECTURAL SPECIFICATION
+#### Document ID: SPEC-1995-XBLOB-002-REV4
+#### Title: XBlob Transport Abstraction & Memory-Mapped Stream Infrastructure
+#### Author: Distributed Systems & Display Architecture Group (Solaris / NeXT-Sun Integration Team)
+#### Target Platform: Solaris 2.5 / UltraSPARC-I SBus / OpenWindows v3.51.
+#### Overview & Data Primitives
 The XBlob extension establishes location-transparent Direct Virtual Memory Access (DVMA) semantics across heterogeneous UNIX execution nodes. Rather than treating disk files, in-memory buffers, and real-time audio/video streams as disparate OS constructs requiring application-level buffer pumps, XBlob unifies them as zero-copy Non-Uniform Memory Access (NUMA) descriptors managed through the X11 wire protocol.       
 
 ```
