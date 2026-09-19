@@ -340,7 +340,7 @@ The XBlob extension establishes location-transparent Direct Virtual Memory Acces
 * `XBLOB_TYPE_FILE`: Page-aligned, mmap()-backed memory region mapped directly from a UNIX vnode.
 * `XBLOB_TYPE_BLOB`: Static, contiguous DVMA buffer allocated in kernel/SBus physical memory  space.
 * `XBLOB_TYPE_READABLE_STREAM`: Asynchronous ring buffer backed by a kernel STREAMS queue, supporting variable-rate block reads.
-* `XBLOB_TYPE_MEDIA_STREAM`: Isochronous, time-bounded stream transport tied to an XAudioNode or XVideoNode clock source, tuned for continuous low-latency transfer `($T_{\text{latency}} \le 50\text{ms}$)`.
+* `XBLOB_TYPE_MEDIA_STREAM`: Isochronous, time-bounded stream transport tied to an XAudioNode or XVideoNode clock source, tuned for continuous low-latency transfer $($T_{\text{latency}} \le 50\text{ms}$)$.
 
 ## 8.2. Core Protocol Operations & C API
 All structural control signals (creation, permissions, and chunk advisories) pass over the standard X11 protocol socket or an authenticated TCP control channel, while bulk byte transfers bypass host CPU cache lines via SBus DVMA or direct kernel socket-to-socket STREAMS splices.
