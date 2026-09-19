@@ -160,6 +160,18 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 +-----------------------------------------------------------------------+
 ```
 
+### 3.2 Example Intents 
+```
+fs.PickFile({[mimeType]})
+fs.PickFiles({[mimeType], maxFiles})
+fs.PickFileResponse({BlobId})
+fs.SaveAs({BlobId, pathHint})
+ui.TextProcess({text, replace: true})
+ui.TextProcessResponse({replacementText})
+ui.TextToSpeech({text, voice, [mimeType]})
+ui.TextToSpeechResponse({BlobId})
+```
+
 ## 4. Application Package Format (`index.toml`)
 
 Applications are distributed as compressed `.zip` archives (or single ELF binaries with an embedded `.index_toml` segment).
