@@ -296,69 +296,184 @@ libplatform --app user-desktop:org.unix.editor --intent file.Open --path "/home/
 * DISPLAY=:0 libserver query servers provides the list of possible LIBSERVER_RUN_ON whereas DISPLAY=:99 libserver query server might list that some other server provides some system service
 
 
-# 8. Disintermediating the Intent Server for Media Streams
-When an application generates large payloads or streams, instead of those going through X, they need to be sent through shm/sockets or files/scp.
+# 8. Disintermediating the Intent Server for Blobs and Streams
+Scott McNealy was right: the network IS the computer, and I am thoroughly sick of explaining to the former Copland team why physical memory location shouldn't matter to a system call.
 
-### 8.1 File Ownership Transfer Protocol (sys.TransferFile)
+We already solved location transparency with NFS back in '84, yet here we are in 1995 arguing about where a byte lives. Across a multi-gigabit link, fetching a packet from the UltraSPARC workstation in the lab across the hall gives you the exact same bandwidth as pulling from a SIMM board on an old 80s VMEbus—you're just dealing with a slightly wider latency wall. Treating a File, Blob, ReadableStream, or MediaStream as anything other than standard non-uniform memory access (NUMA) with remote DMA semantics is an insult to mmap().
+
+When you kick off `xoss --stream-policy MediaStream --block-size 50ms --transcode audio/mp3;64k ./xquake`, you're simply plumbing raw `/dev/audio` buffer chunks straight through a kernel-level STREAMS module. The kernel doesn't waste clock cycles parsing frames; it just passes page-aligned memory descriptors down the pipe.
+
+Then over on user-laptop, running `xaudio-tee --streams=0xcafebabe,0xdeadbeef --https https://user.com/cgi-bin/podcast-recorder` hooks right into the same XBlob transport subsystem. If `cool-ebook` and `cool-tts` happen to be running on the exact same `XAudioNode` NUMA domain, the XBlob layer delegates the DMAs locally. Bytes transfer right across the local SBus interconnect without ever touching network buffers or hitting host CPU cache lines.
+
+Now if you'll excuse me, I have a 3:00 PM meeting with three former Apple system architects to explain why `/dev/audio` doesn't need a Control Strip module or a Finder extension.
+
+### SUN MICROSYSTEMS ARCHITECTURAL SPECIFICATION
+### Document ID: SPEC-1995-XBLOB-002-REV4
+### Title: XBlob Transport Abstraction & Memory-Mapped Stream Infrastructure
+### Author: Distributed Systems & Display Architecture Group (Solaris / NeXT-Sun Integration Team)
+### Target Platform: Solaris 2.5 / UltraSPARC-I SBus / OpenWindows v3.51.
+### Overview & Data Primitives
+The XBlob extension establishes location-transparent Direct Virtual Memory Access (DVMA) semantics across heterogeneous UNIX execution nodes. Rather than treating disk files, in-memory buffers, and real-time audio/video streams as disparate OS constructs requiring application-level buffer pumps, XBlob unifies them as zero-copy Non-Uniform Memory Access (NUMA) descriptors managed through the X11 wire protocol.       
+
 ```
-[ App A: cool-ebook ]         [ System Mediator: NIHRPCXD ]     [ App B: cool-tts ]
-        │                                 │                              │
-        │ ── 1. Creates file in app space ──>                            │
-        │    (~/.cache/cool-ebook/tmp.wav)│                              │
-        │                                 │                              │
-        │ ── 2. X11 Intent: sys.TransferFile ──────────────────────────> │
-        │    { src: "/path/tmp.wav",      │                              │
-        │      target: "cool-tts" }       │                              │
-        │                                 │                              │
-        │                                 │ <── 3. Requests Link Auth ── │
-        │                                 │                              │
-        │                                 │ ── 4. link(src, target_path) │
-        │                                 │       unlink(src) ─────────> │ (Now owns file)
-```
-Protocol Steps:
-
-    Creation: cool-ebook writes the file to its isolated storage space (~/.cache/cool-ebook/out_1042.wav).
-
-    Transfer Intent: cool-ebook emits an XClientMessage intent sys.TransferFile:
-    ```JSON
-
-    {
-      "intent": "sys.TransferFile",
-      "source_path": "~/.cache/cool-ebook/out_1042.wav",
-      "target_app": "org.unix.cool-tts",
-    }```
-
-    Mediation & Link: The system supervisor (sysd), running with elevated privilege relative to app sandboxes, verifies permissions, hard-links the inode into cool-tts's storage space (~/.cache/cool-tts/inbound_8801.wav), and unlinks it from cool-ebook's directory.
-
-    Zero Copy: No data is read or written to disk. Only inode reference counts change. cool-tts now owns the file.
-
-
-### 8.3. Media Streams
-```
-+-------------------+                               +-------------------+
-|  App A (Producer) |                               | App B (Consumer)  |
-+---------+---------+                               +---------+---------+
-          |                                                   |
-          | 1. Control Intent: media.ConnectStream             |
-          +---------------------> [ Central Bus ] ------------>|
-          |                       (DISPLAY=:0)                |
-          |                                                   |
-          | 2. Handshake Response: Socket FD / Endpoint       |
-          |<--------------------- [ Central Bus ] <-----------+
-          |                                                   |
-          |                                                   |
-          +===================================================+
-             3. Direct Peer-to-Peer Stream (Unix Socket / TCP / SSH)
-                Zero central server overhead / Zero X11 saturation
-
-| Transport Scenario | Channel Mechanism | Disintermediation Strategy |
-| :-- | :-- | :-- |
-| Local Device | Unix Socket | App A sends media.ConnectStream, App B is offered a connection and a socket, App A gets the other end of the socket |
-| High Speed | POSIX Shared Memory | App A sends a shared memory file descriptor over the unix socket |
-| Cross Device | SSH Tunnel / Cleartext TCP | App A sends media.ConnectStream and gets the same socket back, but its a network socket |
+       +-------------------------------------------------------------+
+       |               X11 Control Stream (TCP/UNIX)                 |
+       | (XBlobCreate, XBlobGrant, XBlobStreamedChunkAdvisory, etc.) |
+       +-------------------------------+-----------------------------+
+                                       |
+                                       v
+                     +-----------------------------------+
+                     |      Local XAudioNode Router      |
+                     |   (NUMA / DVMA Locality Resolver) |
+                     +-----------------+-----------------+
+                                       |
+           +---------------------------+---------------------------+
+           | Local SBus DVMA Interconnect                          | Remote FastEthernet/ATM
+           v                                                       v
++------------------------+                               +-----------------------+
+| Local Consumer Buffer  |                               | Remote XAudioNode     |
+| (Zero-Copy Kernel Ring)|                               | Data Engine (STREAMS) |
++------------------------+                               +-----------------------+
 ```
 
-Thus, the XINTENT router and the matchbox-service-lighter have to open sockets like `$XDG_RUNTIME_DIR/xintent-broker.sock` on their respective devices and signal the processes that want to send streams to request their side of the socket.  if it turns out the processes are on the same device, it would be a unix socket and they can use SHM.  if it turns out theyre on different devices, its probably an ssl socket.
+### Supported Primitives
+* `XBLOB_TYPE_FILE`: Page-aligned, mmap()-backed memory region mapped directly from a UNIX vnode.
+* `XBLOB_TYPE_BLOB`: Static, contiguous DVMA buffer allocated in kernel/SBus physical memory  space.
+* `XBLOB_TYPE_READABLE_STREAM`: Asynchronous ring buffer backed by a kernel STREAMS queue, supporting variable-rate block reads.
+* `XBLOB_TYPE_MEDIA_STREAM`: Isochronous, time-bounded stream transport tied to an XAudioNode or XVideoNode clock source, tuned for continuous low-latency transfer `($T_{\text{latency}} \le 50\text{ms}$)`.
+
+## 8.2. Core Protocol Operations & C API
+All structural control signals (creation, permissions, and chunk advisories) pass over the standard X11 protocol socket or an authenticated TCP control channel, while bulk byte transfers bypass host CPU cache lines via SBus DVMA or direct kernel socket-to-socket STREAMS splices.
+
+### C Type Definitions (`<X11/extensions/XBlob.h>`)
+```C
+typedef uint32_t XBlobID;
+
+typedef enum {
+    XBlobTypeFile           = 0x01,
+    XBlobTypeBlob           = 0x02,
+    XBlobTypeReadableStream = 0x03,
+    XBlobTypeMediaStream    = 0x04
+} XBlobType;
+
+typedef struct {
+    XBlobType       type;
+    uint64_t        size;           /* 0xFFFFFFFFFFFFFFFF for unbounded streams */
+    char            mime_type[64];
+    char            file_name[64];
+    uint32_t        block_size_ms;  /* Real-time constraint (MediaStream) */
+    uint32_t        flags;
+} XBlobAttributes;
+
+/* Out-of-band advisory packet passed over the control channel */
+typedef struct {
+    uint8_t         req_type;       /* Always XBlobStreamedChunkAdvisory */
+    uint8_t         pad;
+    uint16_t        sequence_num;
+    XBlobID         blob_id;
+    uint64_t        chunk_offset;   /* Ring-buffer offset or byte stream position */
+    uint32_t        chunk_length;   /* Size of payload in current DMA frame */
+    uint32_t        timestamp_us;   /* Isochronous clock marker */
+    uint32_t        dvma_handle;    /* Physical SBus page address descriptor */
+} XBlobStreamedChunkAdvisoryReq;
+```
+
+## 8.3 Wire Protocol Operations
+
+* XBlobCreate - Allocates an XBlob descriptor within the server's tracking table.
+```C
+Status XBlobCreate(
+    Display*         dpy,
+    XBlobType        type,
+    XBlobAttributes* attr,
+    const char*      source_path, /* Used if XBlobTypeFile, else NULL */
+    XBlobID*         id_return
+);
+```
+* XBlobGrant - Delegates read/write access of an XBlobID to a remote display client, process ID, or external XAudioNode.
+```C
+Status XBlobGrant(
+    Display*         dpy,
+    XBlobID          id,
+    XID              target_client,
+    uint32_t         permissions_mask /* XBLOB_READ | XBLOB_WRITE | XBLOB_DUP */
+);
+```
+* XBlobUnlink - Decrements the reference counter (refCount) for the XBlob. When `refCount == 0`, the backing memory or vnode lock is released.
+```C
+Status XBlobUnlink(
+    Display*         dpy,
+    XBlobID          id
+);
+```
+* XBlobStreamedChunkAdvisory - Sent asynchronously over the X11 control channel prior to a payload burst. It informs consumer nodes of incoming payload geometry so the local XAudioNode can prepare memory descriptors before the data stream frame lands.
+
+## 8.4. Command Line Interface
+`xblob-ls` The xblob-ls tool queries the local display server and active XAudioNode daemons to inspect the active NUMA memory graph. Example Console Output
+```shell
+% xblob-ls --format=json --node=localhost:0.0
+JSON[
+  {
+    "blobId": "0xcafebabe",
+    "type": "MediaStream",
+    "size": -1,
+    "fileName": null,
+    "refCount": 3,
+    "linkedBy": [
+      "xquake (pid 14209)",
+      "xaudio-tee (pid 14220)",
+      "matchbox-services-lighter (pid 1204)"
+    ],
+    "producer": {
+      "node": "user-desktop:0.0",
+      "process": "xquake",
+      "endpoint": "/dev/audio0"
+    },
+    "consumers": [
+      {
+        "node": "user-laptop:0.0",
+        "process": "xaudio-tee",
+        "transport": "STREAMS_TCP_DIRECT"
+      },
+      {
+        "node": "user-desktop:0.0",
+        "process": "cool-tts",
+        "transport": "SBUS_DVMA_LOCAL"
+      }
+    ]
+  },
+  {
+    "blobId": "0xdeadbeef",
+    "type": "File",
+    "size": 6543110,
+    "fileName": "/usr/local/share/books/cool-ebook.pdf",
+    "refCount": 2,
+    "linkedBy": [
+      "cool-ebook (pid 15102)",
+      "cool-tts (pid 15109)"
+    ],
+    "producer": {
+      "node": "user-desktop:0.0",
+      "process": "cool-ebook",
+      "endpoint": "vnode:0xf028a100"
+    },
+    "consumers": [
+      {
+        "node": "user-desktop:0.0",
+        "process": "cool-tts",
+        "transport": "SBUS_DVMA_LOCAL"
+      }
+    ]
+  }
+]
+```
+
+## 8.5. XAudioNode Topology Routing & Transport Resolution
+When a consumer process issues a request to attach to an XBlobID, the nearest XAudioNode evaluates physical topology before establishing the data plane:
+* Intra-Host (Same SPARC Board / Shared SBus):
+If `Producer.Node == Consumer.Node`, the data plane bypasses socket buffers entirely. The XAudioNode executes XBlobGrant by remapping the underlying page descriptors directly into the consumer's address space using SBus DVMA remapping (mmap() with MAP_SHARED).
+* Inter-Host (Networked over Multi-Gigabit/ATM):
+If `Producer.Node != Consumer.Node`, the control plane emits an `XBlobStreamedChunkAdvisory` to pre-allocate ring buffers on the destination XAudioNode. The payload is then pumped directly out of the producer's kernel STREAMS module to the destination IP over TCP/IP without copying into user-space daemon memory.
 
 # 9. How This System Will Come About
 ### 9.1 Web First
@@ -421,35 +536,20 @@ and it could be inspected by XSECURE and sent to the intent router in a few inst
 #### Copy/Paste
 Once the rules are formalized for ui.Copy transferring the buffer to the clipboard manager and ui.SelectionPaste being only permited from a middle click and not synthetically, the rules can be applied to the old mechanisms.  Emacs from 2000 doesn't need to change, its requests can be validated and translated.
 
-#### XAudio
+#### XAudio - Add Your Speakers to Your Session
 ##### Category A: Server-Side Audio Buckets ("Pixmaps for Sound")
-* 0x01 - CreateSoundBucket - Allocates a server-managed ID for a short audio clip.
-  Parameters: Bucket ID, MIME Type Length, MIME Type String (e.g., audio/wav, audio/flac), Data Size.
-* 0x02 - PutBucketData - Uploads payload chunks into an allocated bucket.
-* 0x03 - FreeSoundBucket - Frees the allocated audio clip memory on the X server.
-* 0x04 - PlaySoundBucket - Triggers playback of a stored bucket to the target output/speaker.
-  Parameters: Bucket ID, Output Stream ID, Volume, Looping Flag.
+* 0x01 - PlaySoundBlob - Triggers playback of a blob.
+  Parameters: Blob ID, Output Stream ID, Volume, Looping Flag.
+* 0x02 - PrefetchSoundBlob - Ensures that a sound blob is actually local to the speaker
+* 0x03 - GetAudioOutputs - Enumerates audio outputs available to play or stream to
+* 0x04 - SetVlientVolume
 
 ##### Category B: Streaming
-* 0x10 - CreateStream - Sets up an out-of-band transport channel over a secondary socket connection.
-  Parameters: Stream ID, Target Client/Speaker ID, MIME Type String.
-* 0x11 - StreamBuffer - request from XAUDIO sink to XAUDIO source
-* 0x12 - RegisterShmBuffer
-  Attaches shared memory (shm segment or file descriptor) holding large media files (e.g., gigabyte audiobooks) so FFmpeg reads zero-copy.  
-  Parameters: SHM Segment/FD, MIME Type String, Total Length.
-* 0x13 - ControlStream (Low-Latency Jump Ahead) - Lightweight control frame sent via the main X11 protocol socket so it arrives ahead of queued bulk payload data on the secondary socket.
+* 0x10 - PlayStream - Plays a stream to an output
+* 0x11 - ControlStream (Low-Latency Jump Ahead) - Lightweight control frame sent via the main X11 protocol socket so it arrives ahead of queued bulk payload data on the secondary socket.
   Parameters: Stream ID, Action Enum (0=Pause, 1=Resume, 2=Stop, 3=Fast Forward, 4=Rewind, 5=Seek), Payload Value (e.g., skip duration).
-* 0x14 - SeekShmBuffer - Seek commands that arent on a local file need to be sent to the sending process so the stream
+* 0x12 - SeekStream - Seek commands that arent on a local file need to be sent to the sending process so the stream
   Parameters: SHM ID, Seek Offset (64-bit), Seek Flags (Absolute/Relative).
-
-##### Category C: Client-to-Client Data Streaming
-* 0x20 - AnnexClientStream - Connects Client A's audio output directly to Client B's input.
-  Parameters: Src Client ID, Dst Client ID, MIME Type Negotiation Flags.
-* 0x21 - NegotiateMimeType
-  Interrogates recipient client/FFmpeg endpoint for supported codecs and outputs matching format strings.
-* 0x22 - SetClientVolume - Controls per-client gain/attenuation.
-  Parameters: Client ID, Volume Level (0–65535).
-* 0x23 - GetAudioOutputs - Enumerates physical/virtual sinks available in FFmpeg.
 
 ##### Required XSettings
 XSettings provides desktop-wide configuration and dynamic adjustments without changing the protocol stream layout. To support mixing, multi-stream permissions, and per-client volume controls, you need 6 XSetting properties:
