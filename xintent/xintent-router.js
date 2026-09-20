@@ -7,6 +7,11 @@ const x11 = require('./util/x11-promises');
 const { connectToRouter, parseXintentIntentV0, sendXintentIntentV0, widString, atoms } = require('./util/xintent');
 
 let routerWin;
+const intentRegistry = {};
+const intentsAwaitingServicesQueue = {};
+const activeChannels = {};
+const xblobRegistry = {};
+const xaudioNodes = {};
 
 async function startRouter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
@@ -99,7 +104,6 @@ async function startRouter() {
   console.log('[intent-router] Listening for direct window IPC...');
 }
 
-const intentsAwaitingServicesQueue = {};
 async function routeIntent(X, root, xintentIntent) {
   const intent = xintentIntent.payload.intent;
   const registryEntry = intentRegistry[intent];
@@ -143,7 +147,6 @@ async function checkToDrainIntentsQueue(X, root, intent){
 }
 
 
-const intentRegistry = {};
 async function getAllMatchboxToml(X, root) {
   const tree = await X.QueryTree(root);
   for (const wid of tree.children) {

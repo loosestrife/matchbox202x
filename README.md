@@ -126,7 +126,7 @@ which gets responded to with
   "disposition": "final"
 }
 ```
-The concept of a channel hadn't been named when X was released.  XINTENT would obviously use the sending window, the recieving window, and a transaction id like AppleScript used, to designate a channel.
+The concept of a channel hadn't been named when X was released.  XINTENT would sending window, the recieving window, and a transaction id like AppleScript used, to designate a channel.
 
 None of this was invented here.  The protocol name is NIH-RPC.
 
