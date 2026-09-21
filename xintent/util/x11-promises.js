@@ -1,3 +1,4 @@
+// x11-promises.js
 const x11 = require('x11');
 
 // X11 client methods that dispatch asynchronous requests with callbacks
@@ -22,16 +23,60 @@ const REPLY_METHODS = new Set([
   'GrabKeyboard'
 ]);
 
-function wrapPromiseXClient(X) {
-  return new Proxy(X, {
+function wrapPromiseXClient(client) {
+  const pendingRequests = new Map(); // seq -> { resolve, reject }
+
+  // Route X11 protocol error frames to sequence-matched Promises
+  client.on('error', (err) => {
+    const seq = err.seq;
+
+    // Check exact sequence or 16-bit sequence roll-over match
+    const pendingKey = [seq, seq % 65536].find(s => pendingRequests.has(s));
+
+    if (pendingKey !== undefined) {
+      const { reject } = pendingRequests.get(pendingKey);
+      pendingRequests.delete(pendingKey);
+
+      // Remove stranded callback from node-x11 internal replies map if present
+      if (client.replies) {
+        delete client.replies[seq];
+        delete client.replies[seq % 65536];
+      }
+
+      reject(err);
+    } else {
+      // Fire-and-forget request error or unhandled window event
+      console.warn('[X11 Protocol Warning]:', err.message, {
+        error: err.error,
+        seq: err.seq,
+        majorOpcode: err.majorOpcode,
+        minorOpcode: err.minorOpcode,
+        badParam: err.badParam
+      });
+    }
+  });
+
+  return new Proxy(client, {
     get(target, prop) {
       const orig = target[prop];
       if (typeof orig === 'function' && REPLY_METHODS.has(prop)) {
         return (...args) => new Promise((resolve, reject) => {
+          let reqSeq;
+
+          // Execute request synchronous dispatch
           orig.call(target, ...args, (err, ...results) => {
+            if (reqSeq !== undefined) {
+              pendingRequests.delete(reqSeq);
+            }
             if (err) return reject(err);
             resolve(results.length > 1 ? results : results[0]);
           });
+
+          // Capture the sequence number assigned by node-x11 during dispatch
+          reqSeq = target.seq_num;
+          if (reqSeq !== undefined) {
+            pendingRequests.set(reqSeq, { resolve, reject });
+          }
         });
       }
       return typeof orig === 'function' ? orig.bind(target) : orig;
@@ -44,7 +89,6 @@ x11.createClientWithPromises = (options = {}) => {
     x11.createClient(options, (err, display) => {
       if (err) return reject(err);      
       const X = wrapPromiseXClient(display.client);
-      display.client.on('error', console.warn);
       resolve({
         X,
         rawX: display.client,
@@ -53,6 +97,18 @@ x11.createClientWithPromises = (options = {}) => {
       });
     });
   });
+};
+
+x11.internAtomExclusive = async (X, atomName) => {
+  const req1 = X.InternAtom(true,  atomName); // returns 0 (None) if missing
+  const req2 = X.InternAtom(false, atomName); // creates atom if missing
+
+  const [existingAtom, finalAtom] = await Promise.all([req1, req2]);
+
+  return {
+    created: existingAtom === 0,
+    atom: finalAtom
+  };
 };
 
 module.exports = x11;

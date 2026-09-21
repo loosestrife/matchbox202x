@@ -44,7 +44,7 @@ const atoms = {};
 
 const widString = wid => '0x' + wid.toString(16);
 
-async function sendXintentIntentV0(X, {targetWin, senderWin, txId, targetPropAtom, payload, blob, blobPropAtom}) {
+async function sendXIntentIntentV0(X, {targetWin, senderWin, txId, targetPropAtom, payload, blob, blobPropAtom}) {
   targetPropAtom = targetPropAtom ?? atoms.XINTENT_DATA;
   blobPropAtom = blobPropAtom ?? atoms.XINTENT_BLOB;
   X.ChangeProperty(0, targetWin, targetPropAtom, atoms.STRING, 8, JSON.stringify(payload));
@@ -63,30 +63,24 @@ async function sendXintentIntentV0(X, {targetWin, senderWin, txId, targetPropAto
   console.log(`[intent-router] Dispatched ${payload.intent} to ${widString(targetWin)}`);
 }
 
-async function parseXintentIntentV0(X, ev){
-  if (ev.message_type != atoms.XINTENT_INTENT_V0)
-    return null;
+async function parseJsonFrame(X, ev){
   const targetWin = ev.wid;
-  const [senderWin, targetPropAtom, txId] = ev.data;
-  const evData = {senderWin, txId};
-
-  const prop = await X.GetProperty(0, targetWin, targetPropAtom, atoms.STRING, 0, 1000000);
-  let payload, blob;
-  if (prop && prop.data) {
-    X.DeleteProperty(targetWin, targetPropAtom);
+  const [senderWin, payloadPropAtom] = ev.data;
+  const prop = await X.GetProperty(0, targetWin, payloadPropAtom, atoms.STRING, 0, 100000000);
+  let payload;
+  if(prop && prop.data){
+    X.DeleteProperty(targetWin, payloadPropAtom);
     payload = JSON.parse(prop.data.toString());
-    console.log("payload data is", payload);
-    if (payload.blob) {
-      const { propAtom: blobPropAtom } = payload.blob;
-      const blobProp = await X.GetProperty(0, targetWin, blobPropAtom, atoms.STRING, 0, 100000);
-      X.DeleteProperty(targetWin, blobPropAtom);
-      blob = blobProp.data;
-      console.log(`received blob of size ${blob ? blob.length : 0}`);
-    }
   }
-  const response = {targetWin, senderWin, txId, targetPropAtom, payload, blob};
-  console.log("[router] Received XINTENT_INTENT_V0", {...response, targetWin: widString(response.targetWin), senderWin: widString(response.senderWin)});
+  return {senderWin, payload};
+}
+
+async function parseXIntentIntentV0(X, ev){
+  const {senderWin, payload} = await parseJsonFrame(X, ev);
+  const txId = ev.data[2];
+  const evData = {senderWin, txId};
+  const response = {targetWin: ev.wid, senderWin, txId, payload};
   return response;
 }
 
-module.exports = {connectToRouter, atoms, sendXintentIntentV0, parseXintentIntentV0, widString};
+module.exports = {connectToRouter, atoms, parseJsonFrame, parseXIntentIntentV0, sendXIntentIntentV0, widString};

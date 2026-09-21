@@ -1,4 +1,4 @@
-# XBLOB V0 and XAUDIO V0
+# V0
 It takes 0 intelligence to "invent" stuff that everyone already knows exactly how it works and should have existed already.  The hard part is the V0 polyfills, full of insecurity and questionable decisions.
 
 ## XIntentJsonFrame
@@ -75,3 +75,15 @@ an XIntentJsonFrame with message type `XAudioPlayStreamV0` and payload `{BlobId,
 an XIntentJsonFrame with message type `XAudioControlStreamV0` and payload `{command, ...}`
 ## SeekStream
 an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{seekTo}`
+
+# X Atomics
+When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.
+
+* XInternAtom(false)
+* XInternAtom(true)
+* XGetProperty
+* XSetProperty
+* XGetSelectionOwner
+* XSetSelectionOwner
+* XSelectionClear 
+

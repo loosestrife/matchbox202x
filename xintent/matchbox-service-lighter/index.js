@@ -1,11 +1,11 @@
-// matchbox-service-lighter.js
+// matchbox-service-lighter/index.js
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 const TOML = require('@iarna/toml');
-const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./util/intent-registry');
-const x11 = require('./util/x11-promises');
-const xintent = require('./util/xintent');
+const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
+const x11 = require('../util/x11-promises');
+const xintent = require('../util/xintent');
 
 
 console.log(TOML.stringify(xintentServicesManifesto));

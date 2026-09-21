@@ -1,6 +1,6 @@
 // send-intent.js
 const x11 = require('./util/x11-promises');
-const {connectToRouter, sendXintentIntentV0, atoms} = require('./util/xintent');
+const {connectToRouter, sendXIntentIntentV0, atoms} = require('./util/xintent');
 
 async function sendIntent() {
   const { X, root } = await x11.createClientWithPromises();
@@ -10,7 +10,7 @@ async function sendIntent() {
     return;
   }
   console.log(`[sender] Found router window ID: 0x${routerWin.toString(16)}`);
-  await sendXintentIntentV0(X, {
+  await sendXIntentIntentV0(X, {
     targetWin: routerWin,
     senderWin: 0,
     txId: 67,

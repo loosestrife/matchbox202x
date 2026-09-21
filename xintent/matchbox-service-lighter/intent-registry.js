@@ -1,3 +1,5 @@
+// intent-registry.js
+
 const fs = require('node:fs');
 const os = require('os');
 const path = require('node:path');
@@ -8,8 +10,8 @@ const MATCHBOX_PATH = [
   __dirname.split('/').slice(0,-2).join('/'),
 ];
 
-intentRegistry = {};
-packageRegistry = {};
+const intentRegistry = {};
+const packageRegistry = {};
 
 function registerPackage(tomlPath) {
   try {
@@ -18,7 +20,7 @@ function registerPackage(tomlPath) {
     const packageId = parsed.package?.id;
     if (!packageId) return;
     if (packageRegistry[packageId]) {
-      console.log(`dup package ${packageId}`, packageRegistry.packageId._path, tomlPath);
+      console.log(`dup package ${packageId}`, packageRegistry[packageId]._path, tomlPath);
       return;
     };
     parsed._path = path.dirname(tomlPath);
