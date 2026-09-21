@@ -27,6 +27,9 @@ const handleXBlobGrantV0 = {
     xblobRegistry[parsed.blobId].links.push(parsed.grantee);
   },
 };
+const implicitXBlobGrant = (blobId, grantee) => {
+  xblobRegistry[blobId].links.push(grantee);
+}
 const handleXBlobUnlinkV0 = {};
 const handleXAudioNodeRegisterV0 = {
   parse: async ev => {
@@ -46,4 +49,5 @@ module.exports = {
   handleXBlobGrantV0,
   handleXBlobUnlinkV0,
   handleXAudioNodeRegisterV0,
+  implicitXBlobGrant,
 };

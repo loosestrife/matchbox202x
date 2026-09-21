@@ -1,7 +1,6 @@
 // matchbox-service-lighter/index.js
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const util = require('util');
-const execAsync = util.promisify(exec);
 const TOML = require('@iarna/toml');
 const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
 const x11 = require('../util/x11-promises');
@@ -54,7 +53,8 @@ async function startLighter() {
       const package = packageRegistry[pakName];
       const intent = package.intents[payload.intendedIntent];
       console.log(`[service-lighter] Got request to load ${pakName} for ${payload.intendedIntent}`, intent);
-      execAsync(`${intent.exec} &`).catch(err => {
+
+      spawn(intent.exec, {shell: true, stdio: 'inherit'}).on('error', err => {
         console.error(`[service-lighter] Failed to launch service:`, err);   
       });
       // no need to inform intent-registry.  intent-registry waits for the new service to declae its matchbox.toml

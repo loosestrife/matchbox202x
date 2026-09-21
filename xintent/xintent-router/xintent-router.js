@@ -5,7 +5,8 @@ const TOML = require('@iarna/toml');
 const util = require('util');
 const execAsync = util.promisify(exec);
 const {atoms, widString, parseXIntentIntentV0, sendXIntentIntentV0} = require('../util/xintent');
-const {X, root, routerWin} = require('./index.js');
+const {X, root, routerWin} = require('./index');
+const {implicitXBlobGrant} = require('./xblob')
 
 const activeChannels = {};
 const intentRegistry = {};
@@ -23,6 +24,36 @@ const handleXIntentIntentV0 = {
   },
   accept: async xintentIntent => {
     const intent = xintentIntent.payload.intent;
+    // open a channel?
+    if(xintentIntent.payload.reply){
+      const channel = `${xintentIntent.senderWin}:${xintentIntent.payload.txId}`;
+      if(!activeChannels[channel]){
+        activeChannels[channel] = {
+          senderWin,
+          senderCookie: xintentIntent.payload.txId,
+          intent: xintentIntent.payload.intent,
+          intentObj: xintentIntnet,
+        };
+        xintentIntent.payload.channel = channel;
+      }
+    }
+    // in a channel?
+    if(xintentIntent.payload.channel){
+      const channelObj = activeChannels[xintentIntent.payload.channel];
+      // handle implicit blob grants
+      if(xintentIntent.payload.intent == 'ui.TextToSpeechResponse'){
+        implicitXBlobGrant(
+          xintentIntent.payload.blob,
+          channelObj.senderWin, 
+        );
+      }
+      await sendXIntentIntentV0(X, {
+        ...xintentIntent,
+        targetWin: channelObj.senderWin,
+        senderWin: routerWin,
+        txId: channelObj.senderCookie,
+      });
+    }
     const registryEntry = intentRegistry[intent];
     if (registryEntry) {
       const {wid, matchboxToml} = registryEntry[0];
@@ -37,7 +68,7 @@ const handleXIntentIntentV0 = {
       const lighterRegistryEntry = lighterRegistry[intent];
       if(lighterRegistryEntry && lighterRegistryEntry.length > 0){
         const {computer, packageName, wid, publicKeyHash} = lighterRegistryEntry[0];
-        await sendXintentIntentV0(X, {
+        await sendXIntentIntentV0(X, {
           targetWin: wid,
           senderWin: routerWin,
           txId: 0,
