@@ -8,6 +8,10 @@ const {atoms, widString, parseXIntentIntentV0, sendXIntentIntentV0} = require('.
 const {X, root, routerWin} = require('./index');
 const {implicitXBlobGrant} = require('./xblob')
 
+// ipc isn't just client <- messages -> client its client:port <- channels -> client:port
+// WebWorkers lacked ports or channels
+// X11 has windows as ports
+// XINTENT adds channels for intents
 const activeChannels = {};
 const intentRegistry = {};
 const lighterRegistry = {};
@@ -23,54 +27,79 @@ const handleXIntentIntentV0 = {
     }
   },
   accept: async xintentIntent => {
+    const msgSender = xintentIntent.senderWin;
     const intent = xintentIntent.payload.intent;
     // in a channel?
     let forwardTo;
+    let channelObj;
     if(xintentIntent.payload.channel){
-      const channelObj = activeChannels[xintentIntent.payload.channel];
-      const msgSender = xintentIntent.senderWin;
-      if(msgSender == channelObj.handlerWin){
-        // usual case
-        forwardTo = channelObj.senderWin;
-      } else if(msgSender == channelObj.senderWin){
-        // not sure why this would happen
-        forwardTo = channelObj.handlerWin;
-      } else {
-        console.log(`Message ${xintentIntent.payload.intent} in channel ${xintentIntent.payload.channel} was sent by ${msgSender} not on channel (was the intent redirected?)`, xintentIntent, channelObj);
+      channelObj = activeChannels[xintentIntent.payload.channel];
+      if(!channelObj){
+        // throw new Error(404, 'channel not found')
+        console.log(`Message ${xintentIntent.payload.intent} from sender ${msgSender} on unknown channel ${xintentIntent.payload.channel}`, xintentIntent, activeChannels);
         return;
       }
-      // handle implicit blob grants sort of like with a list of messages that do implicit blob grants i guess
-      if(xintentIntent.payload.intent == 'ui.TextToSpeechResponse'){
-        implicitXBlobGrant(
-          xintentIntent.payload.blob,
-          channelObj.senderWin, 
-        );
+      if(!([channelObj.senderWin, channelObj.handlerWin].includes(msgSender))){
+        // throw new Error(401, 'not on channel')
+        console.log(`Message ${xintentIntent.payload.intent} from sender ${msgSender} not on channel ${xintentIntent.payload.channel}`, xintentIntent, activeChannels);
+        return;
       }
-      return await sendXIntentIntentV0(X, {
-        ...xintentIntent,
-        targetWin: forwardTo,
-        senderWin: routerWin,
-        txId: senderCookie,
-      });
+      if(channelObj.handlerWin){
+        if(msgSender == channelObj.handlerWin){
+          // usual case
+          forwardTo = channelObj.senderWin;
+        } else if(msgSender == channelObj.senderWin){
+          // not sure why this would happen
+          forwardTo = channelObj.handlerWin;
+        } else {
+          console.log(`Message ${xintentIntent.payload.intent} in channel ${xintentIntent.payload.channel} was sent by ${msgSender} not on channel (was the intent redirected?)`, xintentIntent, channelObj);
+          return;
+        }
+        // handle implicit blob grants sort of like with a list of messages that do implicit blob grants i guess
+        if(xintentIntent.payload.intent == 'ui.TextToSpeechResponse'){
+          implicitXBlobGrant(
+            xintentIntent.payload.blob,
+            channelObj.senderWin, 
+          );
+        }
+        return await sendXIntentIntentV0(X, {
+          ...xintentIntent,
+          targetWin: forwardTo,
+          senderWin: routerWin,
+          txId: channelObj.senderCookie,
+        });
+      } else {
+        // the channel object was created, but there is not a handler yet
+        // creating the channel object without a handler enables the user to redirect intents
+        // thats the only reason this else block should be reachable
+      }
     }
     // open a channel?
-    if(xintentIntent.payload.reply){
-      const channel = `${xintentIntent.senderWin}:${xintentIntent.payload.txId}`;
+    else if(xintentIntent.payload.reply){
+      const channel = `${msgSender}:${xintentIntent.payload.txId}`;
       if(!activeChannels[channel]){
         activeChannels[channel] = {
-          senderWin,
+          senderWin: msgSender,
           senderCookie: xintentIntent.payload.txId,
           intent: xintentIntent.payload.intent,
           intentObj: xintentIntent,
         };
         xintentIntent.payload.channel = channel;
+      } else {
+        // throw new Error(400, 'txId cookie already in use');
+        console.log(`duplicate cookie ${xintentIntent.payload.txId}`);
+        return;
       }
+      channelObj = activeChannels[channel];
     }
 
     const registryEntry = intentRegistry[intent];
     if (registryEntry) {
       const {wid, matchboxToml} = registryEntry[0];
       console.log(`[intent-router] Found service window (${widString(wid)})`);
+      if(channelObj){
+        channelObj.handlerWin = wid;
+      }
       await sendXIntentIntentV0(X, {
         ...xintentIntent, 
         targetWin: wid,

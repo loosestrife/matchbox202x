@@ -1,6 +1,6 @@
 // xblob.js
 const {atoms, widString, parseJsonFrame} = require('../util/xintent');
-const {X, root, routerWin} = require('./index.js');
+const {X, rawX, root, routerWin} = require('./index.js');
 
 const xblobRegistry = {};
 const xblobHosts = {};
@@ -19,7 +19,7 @@ const handleXBlobGrantV0 = {
       resources: [{
         XBlob: parsed.blobId,
         exists: parsed.blobId in xblobRegistry,
-        authorized: xblobRegistry[parsed.blobId]?.links.filter(win => sameClient(senderWin, win)).length,
+        authorized: !!(xblobRegistry[parsed.blobId]?.links.filter(win => sameClient(parsed.senderWin, win)).length),
       }],
     }
   },
@@ -43,6 +43,26 @@ const handleXAudioNodeRegisterV0 = {
     xblobHosts[parsed.hostName] = parsed.senderWin;
   }
 };
+
+
+// Modern Xorg hands out 21-bit masks (IDs like 0x3a00003 with base 0x3a00000).
+// Fallback only if the wrapper doesn't expose the setup reply.
+const DEFAULT_MASK = 0x1fffff;
+let mask;
+const resourceMask = () => {
+  if (mask === undefined) {
+    mask = rawX?.display?.resource_mask || DEFAULT_MASK;
+  }
+  return mask;
+};
+const isXid = w => Number.isInteger(w) && w > 0 && w <= 0x1fffffff;
+const xClientFor = wid => isXid(wid) ? (wid & ~resourceMask()) >>> 0 : null;
+
+const sameClient = (a, b) => {
+  const ca = xClientFor(a), cb = xClientFor(b);
+  return ca != null && ca == cb;
+};
+
 
 module.exports = {
   handleXBlobCreateV0,

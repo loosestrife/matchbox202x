@@ -49,6 +49,9 @@ User is running a session on user-phone and has an ssh -X to user-laptop in the 
 * User needs to run `matchbox-services-lighter` in its .profile when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled `user-desktop:cool-tts` for the purpose of `libplatform intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts`
 * `matchbox-services-ligter` launches a headless x client daemon to load services in response to requests from matchbox202x-desktop-panel
 * User realizes the wrong file picker opened and does a super-I.  The intent rerouter window pops open, shows the list of current intents, the user picks the new file picker, the intent is sent to the new file picker instead.
+* ```bash $ cat --xintent ui.SaveFile video-lecture.mp4```
+* ```bash other-computer:~$ cat --redirect-intent --xintent ui.SaveFile | ffmpeg -o audio-lecture.m4a```
+(cf kernighan and pike's medium article about how the cat came home with flags)
 
 ### 1.3 Web First
 ```

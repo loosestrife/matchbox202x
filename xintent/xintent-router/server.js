@@ -70,6 +70,7 @@ async function startRouter() {
   await getAllMatchboxToml();
   console.log(`[intent-router] Window created: ${widString(routerWin)}`);
 
+  // all data transfer intents carry an implicit blob grant to the router until they can be delivered, same as the implicit blob grant to the post office when sending a physical blob.  Event ordering over a pipe never doesnt exist and the whole what if events were unordered thing was a 2000's era moral panic that created the rust language around strong memory ordering on early 2000's multicore amd64 cpu's that were comfortable wasting most of their performance on imposing strong memory ordering in order to be able to run stupid programs.  So yeah rawX.on() needs a simple mutex to protect the message ordering that exists and a high performance V0 that would process enough of the XIntent to do the implicit XBlobGrant before the XBlobUnlink so the implicit XBlobGrant isn't waiting for an await when XBlobUnlink comes in is a future plan.  Until then this needs to be covered with a mutex
   rawX.on('event', async (ev) => {
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
       console.log("got ClientMessage on routerWin", ev);
@@ -116,7 +117,9 @@ async function startRouter() {
     }
 
     if (ev.name === 'DestroyNotify') {
-      //unregisterWindow(ev.wid);
+      //XIntentUnregisterWindow(ev.wid);
+      //XBlobUnlinkWindow(ev.wid);
+      //XAudioUnregisterWindow(ev.wid);
     }
 
     if (ev.name === 'SelectionClear' && ev.selection === atoms.XINTENT) {
