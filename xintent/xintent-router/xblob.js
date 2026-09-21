@@ -37,7 +37,7 @@ const handleXAudioNodeRegisterV0 = {
     return {senderWin, hostName: payload.hostName};
   },
   securityContext: parsed => {
-    return {source: senderWin, action: 'XAudioNodeRegister'}
+    return {source: {window: parsed.senderWin}, action: 'XAudioNodeRegister'}
   },
   accept: parsed => {
     xblobHosts[parsed.hostName] = parsed.senderWin;

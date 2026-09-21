@@ -1,4 +1,6 @@
-// xaudio.js
+// xsecure.js
+// like iptables or aws waf.  deep packet inspecting firewall
+
 const fs = require('fs');
 const {atoms, widString} = require('../util/xintent');
 const {X, root, routerWin} = require('./index.js');

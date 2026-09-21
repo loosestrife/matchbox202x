@@ -38,15 +38,17 @@ This specification defines a unified, lightweight desktop platform constructed e
 * matchbox202x: tablet window manager
 * compiz202x: laptop window manager
 * XINTENT: intent routing through the x session, because the x session has since the 70's been the highest performance desktop bus 
-* Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands.  Scripts can send and recieve intents over a socket or over stdin/stdout in NNJSON format, .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http.
-* XSECURE: coping with your ex-secure system that you connected to the network. Multiplexes authentication schemes like unix socket from user and policykit jwt with actions to authorize, intents to fire, events to receive, clipboards and window contexts, permission to open a window without decorations or fullscreen.
 * X11: a high performance session bus and shared database with clear semantics for the past 50 years.  So if the session needs a shared database and clear semantics
+* XBLOB: adds web File/Blob/ReadableStream/MediaStream so you can ctrl-C the video lecture on user-laptop and ctrl-V it into the terminal window on user-desktop
+* Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands.  Scripts can send and recieve intents over a socket or over stdin/stdout in NNJSON format, .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http.
+* XSECURE: coping with your ex-secure system that you connected to the network. With authentication schemes like socket credentials to policykit jwt's, we can have iptables or aws waf or whatever deep packet inspecting firewall we want.  So the keylogger that connected from `ssh -X other-guys-computer` gets its XGrabKeyboard dropped and KeyPress dropped when it doesn't have a focused window.  Paranoid users can put a separate deep packet inspecting firewall in front of their X servers.
 
 ### 1.2 User's Distributed Lifestyle
 User is running a session on user-phone and has an ssh -X to user-laptop in the coffee shop with him and an ssh -X to user-desktop at home over tailscale.  User is running cool-ebook off user-laptop where the files are but cool-ebook's html card is running on user-phone.
 * Naively, tts intents stream locally from user-laptop:cool-ebook's html card to user-phone:cool-tts, burning user-phone's battery and lagging becaue cool-tts is slower on user-phone than on user-laptop.
 * User needs to run `matchbox-services-lighter` in its .profile when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled `user-desktop:cool-tts` for the purpose of `libplatform intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts`
 * `matchbox-services-ligter` launches a headless x client daemon to load services in response to requests from matchbox202x-desktop-panel
+* User realizes the wrong file picker opened and does a super-I.  The intent rerouter window pops open, shows the list of current intents, the user picks the new file picker, the intent is sent to the new file picker instead.
 
 ### 1.3 Web First
 ```
@@ -517,7 +519,7 @@ If `Producer.Node != Consumer.Node`, the control plane emits an `XBlobStreamedCh
 * once everyone is using matchbox202x, the planned fast path can be implemented, and the unix desktop can be what it should have been in the 1990's
 * the X extension that should have existed no later than 2010, XHTML, that injects a window.xhtml.event() and window.xhtml.onevent in the html card and specifies X events in the html backend process, disappears XHTML windows if the html backend closes, and so on, is still needed regardless of how long the poetteringware developers play with wayland
 * XAUDIO needs some more features but it was the most requested feature in the 90's that ssh -X would include speakers in the session
-* XSECURE: coping with your ex-secure desktop you connected to the network.  check sender ids, dont give events to unauthorized processes, check the authoriation matrix against the uid across the socket, a pam jwt authorizaton cookie, etc.
+
 
 ### 9.4 Security
 * the initial http bridge server has to hold a list of launched keys and serve localhost:12345/_sys/launch_key exactly once, the http bridge client library has to grab the key, put it in LocalStorage, then if it isnt available, complain that Error: Can't open display: localhost:10.0

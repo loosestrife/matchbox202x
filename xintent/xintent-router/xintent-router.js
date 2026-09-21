@@ -32,7 +32,7 @@ const handleXIntentIntentV0 = {
           senderWin,
           senderCookie: xintentIntent.payload.txId,
           intent: xintentIntent.payload.intent,
-          intentObj: xintentIntnet,
+          intentObj: xintentIntent,
         };
         xintentIntent.payload.channel = channel;
       }
