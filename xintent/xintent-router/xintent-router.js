@@ -24,6 +24,35 @@ const handleXIntentIntentV0 = {
   },
   accept: async xintentIntent => {
     const intent = xintentIntent.payload.intent;
+    // in a channel?
+    let forwardTo;
+    if(xintentIntent.payload.channel){
+      const channelObj = activeChannels[xintentIntent.payload.channel];
+      const msgSender = xintentIntent.senderWin;
+      if(msgSender == channelObj.handlerWin){
+        // usual case
+        forwardTo = channelObj.senderWin;
+      } else if(msgSender == channelObj.senderWin){
+        // not sure why this would happen
+        forwardTo = channelObj.handlerWin;
+      } else {
+        console.log(`Message ${xintentIntent.payload.intent} in channel ${xintentIntent.payload.channel} was sent by ${msgSender} not on channel (was the intent redirected?)`, xintentIntent, channelObj);
+        return;
+      }
+      // handle implicit blob grants sort of like with a list of messages that do implicit blob grants i guess
+      if(xintentIntent.payload.intent == 'ui.TextToSpeechResponse'){
+        implicitXBlobGrant(
+          xintentIntent.payload.blob,
+          channelObj.senderWin, 
+        );
+      }
+      return await sendXIntentIntentV0(X, {
+        ...xintentIntent,
+        targetWin: forwardTo,
+        senderWin: routerWin,
+        txId: senderCookie,
+      });
+    }
     // open a channel?
     if(xintentIntent.payload.reply){
       const channel = `${xintentIntent.senderWin}:${xintentIntent.payload.txId}`;
@@ -37,23 +66,7 @@ const handleXIntentIntentV0 = {
         xintentIntent.payload.channel = channel;
       }
     }
-    // in a channel?
-    if(xintentIntent.payload.channel){
-      const channelObj = activeChannels[xintentIntent.payload.channel];
-      // handle implicit blob grants
-      if(xintentIntent.payload.intent == 'ui.TextToSpeechResponse'){
-        implicitXBlobGrant(
-          xintentIntent.payload.blob,
-          channelObj.senderWin, 
-        );
-      }
-      await sendXIntentIntentV0(X, {
-        ...xintentIntent,
-        targetWin: channelObj.senderWin,
-        senderWin: routerWin,
-        txId: channelObj.senderCookie,
-      });
-    }
+
     const registryEntry = intentRegistry[intent];
     if (registryEntry) {
       const {wid, matchboxToml} = registryEntry[0];
