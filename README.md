@@ -52,6 +52,8 @@ User is running a session on user-phone and has an ssh -X to user-laptop in the 
 * `$ cat --xintent ui.SaveFile video-lecture.mp4`
 * `other-computer:~$ cat --redirect-intent --xintent ui.SaveFile | ffmpeg -o audio-lecture.m4a`
 (cf kernighan and pike's medium article about how the cat came home with flags)
+* `cat cats.webp --xintent ui.Copy --mime-type image/webp`
+* paste into a file picker dialog that only accepts image/jpeg,0 since its 2026 the XINTENT router can call out to `convert`
 
 ### 1.3 Web First
 ```
