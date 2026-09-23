@@ -52,7 +52,7 @@ async function startRouter() {
       process.exit(0);
       return;
     }
-    await X.CreateWindow(
+    X.CreateWindow(
       routerWin, root,
       0, 0, 1, 1, 0, 0, 0, 0,
       { eventMask: x11.eventMask.PropertyChange }
@@ -63,10 +63,10 @@ async function startRouter() {
     X.SetSelectionOwner(routerWin, atoms.XINTENT, 0);
   }
 
-  await X.ChangeProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 8, 'XINTENT_ROUTER');
+  X.ChangeProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 8, 'XINTENT_ROUTER');
 
   console.log('atoms are', atoms);
-  await X.ChangeWindowAttributes(root, { eventMask: x11.eventMask.SubstructureNotify });
+  X.ChangeWindowAttributes(root, { eventMask: x11.eventMask.SubstructureNotify });
   await getAllMatchboxToml();
   console.log(`[intent-router] Window created: ${widString(routerWin)}`);
 
@@ -125,7 +125,7 @@ async function startRouter() {
     }
 
     if (ev.name === 'CreateNotify') {
-      await X.ChangeWindowAttributes(ev.wid, { eventMask: x11.eventMask.PropertyChange });
+      X.ChangeWindowAttributes(ev.wid, { eventMask: x11.eventMask.PropertyChange });
       await parseWindowToml(ev.wid);
       await parseWindowLighterToml(ev.wid);
     }

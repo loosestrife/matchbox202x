@@ -27,7 +27,7 @@ an XIntentNonJsonFrame is a special XClientMessage
 ```
 
 # XBLOB V0
-an XBlob V0 is an X property on the blob server window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
+an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
 ```js
 {xblobType, mimeType, size, name, data, _dataType}
 ```
@@ -39,10 +39,10 @@ if xblobType is a *Stream, _dataType is json and data is a pseudo-rtmp packet
 ```
 since it is a pseudo-rtmp packet, there is no reason for the data field to not be base64 encoded binary data.
 
-When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`.
+When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`, but should be reused as soon as possible.
 
 ## XBlobCreate
-an XIntentNonJsonFrame with message type `XBlobCreateV0` and `data.l[1]` as the client's cookie.
+an XIntentNonJsonFrame with message type `XBlobCreateV0` and `data.l[1]` as the client's cookie.  The client cookie won't be needed by the real XBLOB V1 because that would use the seqence number.
 
 ## XBlobCreateResponse
 an XIntentNonJsonFrame with message type `XBlobCreateResponseV0`, `data.l[1]` as the blob atom, `data.l[2]` as the client's cookie.
@@ -53,14 +53,17 @@ an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob
 ## XBlobUnlink
 an XIntentNonJsonFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob atom.
 
-## XAudioNodeRegister
-an XIntentJsonFrame with message type `XAudioNodeRegister` and payload `{host}`.  This doesn't actually do anything yet, of course.
-
 ## XBlobStreamChunkAdvise
 an XIntentNonJsonFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to every consumer.
 
 ## XBlobStreamChunkRecieved
 an XIntentNonJsonFrame with message type `XBlobStreamChunkRecievedV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to the producer.
+
+## XAudioNode registation
+an XAudioNode claims an atom for what numa node its on, as `XAUDIO_NODE_${host}`, and progams use XGetSelection() to find their local XAudioNode.  Then `XBlobCreate` returns a globally unique atom, but the XBLOB is actually on the window that owns the atom according to XGetSelection().
+
+## XAudioNodeMoveBlob
+an XIntentNonJsonFrame with message type `XAudioNodeMoveBlobV0`, `data.l[1]` as the blob atom, `data.l[2]` as the XAudioNode window to move the blob to.
 
 # XAUDIO V0
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.
@@ -86,6 +89,10 @@ an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{seekTo}
 ## Why the xintent-router doesnt just hand the intent off to the clients
 * We want Super-I intent redirection.  That means the channels need to be controlled by the xintent router.
 * Maybe in XINTENT V1 a client that only replies to the intent's senderWin of an xintent-router that sets the senderWin to the original requester could do point to point traffic after being routed.  However, the XBLOB V0 blob containing the intent payload needs to be monitored by the xblob server anyway, and if XINTENT V0 wants to do an implicit blob transfer when it sends that XINTENT ClientMessage it needs the xintent router to be the xblob server.
+
+## Why not let the client atomically claim an atom then give that atom to the XBLOB host
+* using XInterAtom, it leaks atoms
+* using XGetSelectionOwner/XSetSelectionOwner, its an X protocol round trip instead of an XBLOB protocol round trip
 
 # Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.

@@ -3,52 +3,45 @@ const crypto = require('crypto');
 const x11 = require('./x11-promises');
 
 const atoms = {};
-
 const widString = wid => '0x' + wid.toString(16);
 
 async function connectToRouter(X, root) {
-  // 1. Check if router is active
   const xintentAtom = await X.InternAtom(true, 'XINTENT');
-  if (!xintentAtom)
-    return 0;
+  if (!xintentAtom) return 0;
+
   atoms.STRING = await X.InternAtom(false, 'STRING');
   atoms.WINDOW = await X.InternAtom(false, 'WINDOW');
   atoms.WM_NAME = await X.InternAtom(false, 'WM_NAME');
   atoms.XINTENT = xintentAtom;
+
   const prop = await X.GetProperty(0, root, atoms.XINTENT, atoms.WINDOW, 0, 4);
-  if (!prop || !prop.data || prop.data.length < 4) {
-    return 0;
-  }
+  if (!prop || !prop.data || prop.data.length < 4) return 0;
+  
   const routerWin = prop.data.readUInt32LE(0);
 
   try {
-    // Attempting to query geometry or attributes on a destroyed window throws a BadWindow error
     await X.GetWindowAttributes(routerWin);
-
-    // Check if the WM_NAME is still intact
     const nameProp = await X.GetProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 0, 8);
     if (!nameProp || !nameProp.data || !(nameProp.data.toString('utf8') === 'XINTENT_ROUTER')) {
       return 0;
-    };
+    }
   } catch (err) {
     return 0;
   }
 
-  // 2. Negotiate protocol version
   const xintentV0Atom = await X.InternAtom(true, 'XINTENT_INTENT_V0');
-  if (!xintentV0Atom) {
-    return 0;
-  }
-  atoms.XINTENT_INTENT_V0 = xintentV0Atom;
+  if (!xintentV0Atom) return 0;
 
+  atoms.XINTENT_INTENT_V0 = xintentV0Atom;
   atoms.XBLOB_CREATE_V0 = await X.InternAtom(false, 'XBLOB_CREATE_V0');
+  atoms.XBLOB_CREATE_RESPONSE_V0 = await X.InternAtom(false, 'XBLOB_CREATE_RESPONSE_V0');
   atoms.XBLOB_GRANT_V0 = await X.InternAtom(false, 'XBLOB_GRANT_V0');
   atoms.XBLOB_UNLINK_V0 = await X.InternAtom(false, 'XBLOB_UNLINK_V0');
 
   return routerWin;
 }
 
-async function XClientMessage(X, targetWin, message_type, data) {
+function buildClientMessageBuffer(targetWin, message_type, data) {
   const ev = Buffer.alloc(32);
   ev.writeInt8(33, 0); // ClientMessage
   ev.writeInt8(32, 1); // 32 bit format
@@ -57,35 +50,48 @@ async function XClientMessage(X, targetWin, message_type, data) {
   for (let i = 0; (i < data.length) && (i < 5); i++) {
     ev.writeUInt32LE(data[i], 12 + 4 * i);
   }
-  await X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
+  return ev;
 }
 
-async function XBlobCreate(X, routerWin, senderWin, blobData, blobName) {
-  const { atom: blobAtom } = await x11.internAtomExclusiveRetry(X, `XBLOB_BLOB_${blobName}`);
-  await X.ChangeProperty(0, routerWin, blobAtom, atoms.STRING, 8, Buffer.from(JSON.stringify(blobData, null, 2)));
-  await XClientMessage(X, routerWin, atoms.XBLOB_CREATE_V0, [senderWin, blobAtom]);
+function XClientMessage(X, targetWin, message_type, data) {
+  const ev = buildClientMessageBuffer(targetWin, message_type, data);
+  return X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
+}
+
+async function XBlobCreate(X, routerWin, senderWin, blobData, timeoutMs = 5000) {
+  const cookie = crypto.randomBytes(4).readUInt32LE(0);
+  const evBuf = buildClientMessageBuffer(routerWin, atoms.XBLOB_CREATE_V0, [senderWin, cookie]);
+  const responseEv = await X.seekResponsePacket(
+    ev => ev.type == 33 && 
+      ev.message_type == atoms.XBLOB_CREATE_RESPONSE_V0 && 
+      ev.data[2] == cookie,
+    timeoutMs
+  ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
+
+  const blobAtom = responseEv.data[1];
+  const payloadBuf = Buffer.from(JSON.stringify(blobData, null, 2));
+  X.ChangeProperty(0, routerWin, blobAtom, atoms.STRING, 8, payloadBuf);
   return blobAtom;
 }
 
 async function XBlobGrant(X, routerWin, senderWin, blobAtom, granteeWin) {
-  await XClientMessage(X, routerWin, atoms.XBLOB_GRANT_V0, [senderWin, blobAtom, granteeWin]);
+  XClientMessage(X, routerWin, atoms.XBLOB_GRANT_V0, [senderWin, blobAtom, granteeWin]);
 }
 
 async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
-  await XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [senderWin, blobAtom]);
+  XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [senderWin, blobAtom]);
 }
 
-async function sendXIntentIntentV0(X, routerWin, { targetWin, senderWin, txId, payload, unlinkPayloadBlob=true }) {
-  if(!targetWin){
+async function sendXIntentIntentV0(X, routerWin, { targetWin, senderWin, txId, payload, unlinkPayloadBlob = true }) {
+  if (!targetWin) {
     targetWin = routerWin;
   }
-  const blobName = `XINTENT_${crypto.randomBytes(4).toString('base64')}`;
-  const payloadAtom = await XBlobCreate(X, routerWin, senderWin, payload, blobName);
-  await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [senderWin, payloadAtom, txId ?? 0]);
-  if(unlinkPayloadBlob){
-    await XBlobUnlink(X, routerWin, senderWin, payloadAtom);
+  const payloadAtom = await XBlobCreate(X, routerWin, senderWin, payload);
+  XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [senderWin, payloadAtom, txId ?? 0]);
+  if (unlinkPayloadBlob) {
+    XBlobUnlink(X, routerWin, senderWin, payloadAtom);
   }
-  console.log(`[intent-router] Dispatched ${payload.intent} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`);
+  console.log(`[intent-router] Dispatched ${payload.intent || 'intent'} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`);
   return payloadAtom;
 }
 
@@ -94,7 +100,7 @@ async function XBlobRead(X, routerWin, blobAtom) {
   if (prop && prop.data) {
     return JSON.parse(prop.data.toString());
   } else {
-    console.error(`XBlobRead: no data at ${widString(blobAtom)} on ${widString(routerWin)}`);
+    throw new Error(`XBlobRead: no data found at ${widString(blobAtom)} on window ${widString(routerWin)}`);
   }
 }
 
@@ -109,8 +115,6 @@ async function parseXIntentIntentV0(X, routerWin, ev) {
   const txId = ev.data[2];
   return { targetWin: ev.wid, senderWin, txId, payload, payloadAtom };
 }
-
-
 
 module.exports = {
   connectToRouter,
