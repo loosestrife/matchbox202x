@@ -27,7 +27,7 @@ an XIntentNonJsonFrame is a special XClientMessage
 ```
 
 # XBLOB V0
-an XBlob V0 is an X property on the blob server window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.
+an XBlob V0 is an X property on the blob server window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
 ```js
 {xblobType, mimeType, size, name, data, _dataType}
 ```
@@ -42,7 +42,10 @@ since it is a pseudo-rtmp packet, there is no reason for the data field to not b
 When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`.
 
 ## XBlobCreate
-an XIntentNonJsonFrame with message type `XBlobCreateV0`
+an XIntentNonJsonFrame with message type `XBlobCreateV0`.
+
+## XBlobCreateResponse
+an XIntentNonJsonFrame with message type `XBlobCreateResponseV0` and `data.l[1]` as he blob atom.
 
 ## XBlobGrant
 an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
@@ -51,7 +54,7 @@ an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob
 an XIntentNonJsonFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob atom.
 
 ## XAudioNodeRegister
-an XIntentJsonFrame with message type `XAudioNodeRegister` and payload `{host}`.  This doesn't actually do anything, of course.
+an XIntentJsonFrame with message type `XAudioNodeRegister` and payload `{host}`.  This doesn't actually do anything yet, of course.
 
 ## XBlobStreamChunkAdvise
 an XIntentNonJsonFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to every consumer.
