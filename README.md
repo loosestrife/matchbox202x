@@ -153,9 +153,7 @@ Intents and Events are transmitted across the X11 server using native `ClientMes
 ### 3.1 Overview
 The intent router registers the atom `XINTENT` to assert that there is an `XINTENT` implementation on the X server and then sets the `XINTENT` property of the root window as a window with name `"INTENT_ROUTER"`.
 
-It then listens for `ClientMessage`'s with message type atom `XINTENT_INTENT_V0`, the first three data fields are senderWin, targetPropAtom, and txId.  It gets the canonical JSON payload from its property targetPropAtom, then deletes that property.
-
-If there is a blob associated with the intent, it is specified in `payload.blob` to be on the intent router window at property `payload.blob.blobPropAtom`.
+It then listens for `ClientMessage`'s with message type atom `XINTENT_INTENT_V0`, the first three data fields are senderWin, blobId, and txId.  It gets the canonical JSON payload from the blob, then unlinks the blob.
 
 ### 3.1 Canonical Data Models
 An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatted with `format = 32`:
@@ -169,9 +167,9 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 | message_type: Atom("XINTENT_INTENT_V0")                               |
 | format      : 32                                                      |
 | data.l[0]   : Sender Window XID                                       |
-| data.l[1]   : Atom where the reciever can find the payload            |
+| data.l[1]   : Blob atom holding the json payload                      |
 | data.l[2]   : Transaction id                                          |
-| data.l[3]   : unused                                                  |
+| data.l[3]   : Blob atom for an attached blob (fs.SaveAs)              |
 | data.l[4]   : unused                                                  |
 +-----------------------------------------------------------------------+
 ```

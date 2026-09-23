@@ -27,7 +27,7 @@ an XIntentNonJsonFrame is a special XClientMessage
 ```
 
 # XBLOB V0
-an XBlob V0 is an X property on the intent router window, to be deleted when its out of links.  The client that creates a XBLOB V0 gets to choose an atom for it instead of the X server choosing a 32 bit number for the blob id, then, writing out ``XBLOB_BLOB_0X${BlobId.toString(16).toUpperCase()}``, then claiming that as an atom name to verify uniqueness.  This atom is then used to set the property on the intent router window, inside the property goes the canonical json
+an XBlob V0 is an X property on the blob server window, to be deleted when its out of links.  While XBLOB V1 will get blob id's from the server directly, the client that creates a XBLOB V0 gets to choose an atom for it, and should choose a string starting with `XBLOB_BLOB_` then atomically claiming it with an XInternAtom(true) followed by an XInternAtom(false).  This atom is then used to set the property on the blob server window, inside the property goes the canonical json
 ```js
 {xblobType, mimeType, size, name, data, _dataType}
 ```
@@ -39,30 +39,30 @@ if xblobType is a *Stream, _dataType is json and data is a pseudo-rtmp packet
 ```
 since it is a pseudo-rtmp packet, there is no reason for the data field to not be base64 encoded binary data.
 
-The xintent router becomes aware of an XBlob V0 when it recieves an XBlobCreate.  It will thereafter be able to delete the XBlob when everything with a reference to it has unlinked it or exited.
+The xblob server becomes aware of an XBlob V0 when it recieves an XBlobCreate.  It will thereafter be able to delete the XBlob when everything with a reference to it has unlinked it or exited.
 
-When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom gets extended to ``XBLOB_BLOB_0x${BlobId}_${ChunkNum}`` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`.
+When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`.
 
 ## XBlobCreate
-an XIntentNonJsonFrame with message type `XBlobCreateV0` and `data.l[1]` as the blob id number.  The blob id atom is derived from the blob id number.
+an XIntentNonJsonFrame with message type `XBlobCreateV0` and `data.l[1]` as the blob atom.
 
 ## XBlobGrant
-an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob id number, and `data.l[2]` as the grantee id number
+an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
 
 ## XBlobUnlink
-an XIntentNonJsonFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob id number.
+an XIntentNonJsonFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob atom.
 
 ## XAudioNodeRegister
 an XIntentJsonFrame with message type `XAudioNodeRegister` and payload `{host}`.  This doesn't actually do anything, of course.
 
 ## XBlobStreamChunkAdvise
-an XIntentNonJsonFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the blob id number and `data.l[2]` as stream chunk number.  This is forwarded to every consumer.
+an XIntentNonJsonFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to every consumer.
 
 ## XBlobStreamChunkRecieved
-an XIntentNonJsonFrame with message type `XBlobStreamChunkRecievedV0` and `data.l[1]` as the blob id number and `data.l[2]` as the stream chunk number.  This is forwarded to the producer.
+an XIntentNonJsonFrame with message type `XBlobStreamChunkRecievedV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to the producer.
 
 # XAUDIO V0
-The XINTENT router will of course take responsibility for dumping audio into ffmpeg on demand.
+The XAUDIO server probably does something like dump audio into ffmpeg on demand.
 ## XAudioPlaySoundBlob
 an XIntentJsonFrame with message type `XAudioPlaySoundBlobV0` and payload `{BlobId, OutputId, volume, loop}`
 ## XAudioPrefetchSoundBlob
@@ -76,7 +76,7 @@ an XIntentJsonFrame with message type `XAudioControlStreamV0` and payload `{comm
 ## SeekStream
 an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{seekTo}`
 
-# X Atomics
+# Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.
 
 * XInternAtom(false)

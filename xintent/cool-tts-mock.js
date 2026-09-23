@@ -28,25 +28,28 @@ async function startTTSService() {
   const wmClassAtom = await X.InternAtom(false, 'WM_CLASS');
   const wmPidAtom = await X.InternAtom(false, '_NET_WM_PID');
   const stringAtom = await X.InternAtom(false, 'STRING');
+  const cardinalAtom = await X.InternAtom(false, 'CARDINAL');
   const xintentMatchboxTomlAtom = await X.InternAtom(false, 'XINTENT_MATCHBOX_TOML');
 
   X.ChangeProperty(0, ttsWin, wmClassAtom, stringAtom, 8, Buffer.from('cool-tts\0cool-tts\0'));
   X.ChangeProperty(0, ttsWin, xintentMatchboxTomlAtom, stringAtom, 8, Buffer.from(matchbox_toml));
-  X.ChangeProperty(0, ttsWin, )
-
+  const pidBuf = Buffer.alloc(4);
+  pidBuf.writeUInt32LE(process.pid, 0);
+  X.ChangeProperty(0, ttsWin, wmPidAtom, cardinalAtom, 32, pidBuf);
 
   rawX.on('event', async (ev) => {
     if (ev.name === 'ClientMessage' && ev.wid === ttsWin && ev.message_type == xintentV0Atom) {
-      const intentObject = await xintent.parseXIntentIntentV0(X, ev);
+      const intentObject = await xintent.parseXIntentIntentV0(X, routerWin, ev);
       console.log(`[cool-tts] Processing TTS for: "${intentObject.payload.text}"`);
 
       // 1. Generate Mock Binary Blob (e.g., PCM audio or response metadata)
-      const replyBlob = Buffer.from(`TTS_AUDIO_PCM_DATA_BLOB_FOR_${payload.text}`);
-      const replyXBlob = await xintent.XBlobCreate(X, {
-        blob: replyBlob
+      const replyBlob = Buffer.from(`TTS_AUDIO_PCM_DATA_BLOB_FOR_${intentObject.payload.text}`);
+      const replyXBlob = await xintent.XBlobCreate(X, routerWin, ttsWin, {
+        type: 'audio/wav',
+        data: replyBlob.toString('base64'),
+        _dataType: 'base64',
       });
-      xintent.sendXIntentIntentV0(X, {
-        targetWin: routerWin,
+      await xintent.sendXIntentIntentV0(X, routerWin, {
         senderWin: ttsWin,
         channel: intentObject.channel,
         payload: {
@@ -54,9 +57,7 @@ async function startTTSService() {
           blob: replyXBlob,
         }
       });
-      xintent.XBlobUnlink(X, {
-        blob: replyXBlob
-      });
+      xintent.XBlobUnlink(X, routerWin, ttsWin, replyXBlob);
     }
   });
 

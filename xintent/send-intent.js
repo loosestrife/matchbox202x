@@ -10,8 +10,7 @@ async function sendIntent() {
     return;
   }
   console.log(`[sender] Found router window ID: 0x${routerWin.toString(16)}`);
-  await sendXIntentIntentV0(X, {
-    targetWin: routerWin,
+  await sendXIntentIntentV0(X, routerWin, {
     senderWin: 0,
     txId: 67,
     payload: {

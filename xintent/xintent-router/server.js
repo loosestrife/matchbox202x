@@ -70,33 +70,55 @@ async function startRouter() {
   await getAllMatchboxToml();
   console.log(`[intent-router] Window created: ${widString(routerWin)}`);
 
-  // all data transfer intents carry an implicit blob grant to the router until they can be delivered, same as the implicit blob grant to the post office when sending a physical blob.  Event ordering over a pipe never doesnt exist and the whole what if events were unordered thing was a 2000's era moral panic that created the rust language around strong memory ordering on early 2000's multicore amd64 cpu's that were comfortable wasting most of their performance on imposing strong memory ordering in order to be able to run stupid programs.  So yeah rawX.on() needs a simple mutex to protect the message ordering that exists and a high performance V0 that would process enough of the XIntent to do the implicit XBlobGrant before the XBlobUnlink so the implicit XBlobGrant isn't waiting for an await when XBlobUnlink comes in is a future plan.  Until then this needs to be covered with a mutex
+
+  // Per-client queue to enforce sequential message processing per sender window
+  const clientQueues = new Map();
+
+  function enqueueClientTask(clientId, taskFn) {
+    const previous = clientQueues.get(clientId) || Promise.resolve();
+    const current = previous
+      .then(taskFn)
+      .catch(err => {
+        console.error(`[router] Error processing message for client ${clientId}:`, err);
+      })
+      .then(() => {
+        if (clientQueues.get(clientId) === current) {
+          clientQueues.delete(clientId);
+        }
+      });
+    clientQueues.set(clientId, current);
+    return current;
+  }
+
   rawX.on('event', async (ev) => {
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
       console.log("got ClientMessage on routerWin", ev);
       if (ev.message_type in dispatchTable){
-        const handler = dispatchTable[ev.message_type];
-        const parsed = await handler.parse(ev);
-        console.log(`parsed ${handler.name}`, parsed);
-        const securityContext = await handler.securityContext(parsed);
-        const securityPolicy = await checkXSecurePolicy(securityContext, parsed, ev);
-        if(securityPolicy == 'accept'){
-          handler.accept(parsed);
-        }
-        if(securityPolicy == '401'){
-          // explicit deny response
-          handler['401'](parsed);
-        }
-        if(securityPolicy == '404'){
-          // pretend not to know what the sender was talking about
-          handler['404'](parsed);
-        }
-        if(securityPolicy == 'drop'){
-          // do nothing
-        }
-        if(securityPolicy == 'disconnect'){
-          console.log('disconnecting misbehaving client', widString(parsed.sender));
-        }
+        const clientId = ev.data[0];
+        enqueueClientTask(clientId, async () => {
+          const handler = dispatchTable[ev.message_type];
+          const parsed = await handler.parse(ev);
+          console.log(`parsed ${handler.name}`, parsed);
+          const securityContext = await handler.securityContext(parsed);
+          const securityPolicy = await checkXSecurePolicy(securityContext, parsed, ev);
+          if(securityPolicy == 'accept'){
+            handler.accept(parsed);
+          }
+          if(securityPolicy == '401'){
+            // explicit deny response
+            handler['401'](parsed);
+          }
+          if(securityPolicy == '404'){
+            // pretend not to know what the sender was talking about
+            handler['404'](parsed);
+          }
+          if(securityPolicy == 'drop'){
+            // do nothing
+          }
+          if(securityPolicy == 'disconnect'){
+            console.log('disconnecting misbehaving client', widString(parsed.sender));
+          }
+        });
       } else {
         console.log("unknown message type", ev);
       }

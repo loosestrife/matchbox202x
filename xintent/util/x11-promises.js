@@ -111,4 +111,16 @@ x11.internAtomExclusive = async (X, atomName) => {
   };
 };
 
+x11.internAtomExclusiveRetry = async (X, atomName, maxAttempts = 100) => {
+  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+    const candidateName = attempt == 0 ? atomName : `${atomName}_${attempt}`;
+    const { created, atom } = await x11.internAtomExclusive(X, candidateName);
+    if (created) {
+      return { created, atom, name: candidateName };
+    }
+  }
+  throw new Error(`internAtomExclusiveRetry: couldn't claim a unique atom for "${atomName}" after ${maxAttempts} attempts`);
+};
+
+
 module.exports = x11;
