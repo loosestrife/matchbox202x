@@ -20,7 +20,7 @@ const handleXBlobCreateV0 = {
   },
   accept: parsed => {
     console.log(`XBlobCreate creating ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
-    xblobRegistry[parsed.blobId] = {links: [parsed.senderWin]};
+    xblobCreate(parsed.blobId, parsed.senderWin);
   },
 };
 const handleXBlobGrantV0 = {
@@ -77,10 +77,12 @@ const handleXAudioNodeRegisterV0 = {
 };
 
 
-
+const xblobCreate = (blobId, senderWin) => {
+  xblobRegistry[blobId] = {links: [senderWin]};
+};
 const implicitXBlobGrant = (blobId, grantee) => {
   xblobRegistry[blobId].links.push(grantee);
-}
+};
 const xblobUnlink = async (blobId, unlinkWin) => {
   const regEntry = xblobRegistry[blobId];
   if (!regEntry) {
@@ -130,6 +132,7 @@ module.exports = {
   handleXBlobGrantV0,
   handleXBlobUnlinkV0,
   handleXAudioNodeRegisterV0,
+  xblobCreate,
   implicitXBlobGrant,
   implicitXBlobTransfer,
   xblobUnlink,

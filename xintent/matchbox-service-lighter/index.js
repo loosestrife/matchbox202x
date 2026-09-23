@@ -35,10 +35,10 @@ async function startLighter() {
         console.error(`got unknown message type atom ${ev.message_type}`);
         return;
       }
-      const [senderWin, targetPropAtom, txId] = ev.data;
-      const prop = await X.GetProperty(0, lighterWin, targetPropAtom, X.atoms.STRING, 0, 1000);
+      const [senderWin, payloadAtom, txId] = ev.data;
+      const prop = await X.GetProperty(0, routerWin, payloadAtom, X.atoms.STRING, 0, 10000);
       if (!prop || !prop.data || prop.data.length == 0){
-        console.error(`nothing found on targetPropAtom ${targetPropAtom}`)
+        console.error(`nothing found on payloadAtom ${xintent.widString(targetPropAtom)}`)
         return;
       };
 

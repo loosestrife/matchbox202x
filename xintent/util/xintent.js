@@ -75,15 +75,18 @@ async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
   await XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [senderWin, blobAtom]);
 }
 
-async function sendXIntentIntentV0(X, routerWin, { targetWin, senderWin, txId, payload }) {
+async function sendXIntentIntentV0(X, routerWin, { targetWin, senderWin, txId, payload, unlinkPayloadBlob=true }) {
   if(!targetWin){
     targetWin = routerWin;
   }
   const blobName = `XINTENT_${crypto.randomBytes(4).toString('base64')}`;
   const payloadAtom = await XBlobCreate(X, routerWin, senderWin, payload, blobName);
-  await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [senderWin, payloadAtom, txId]);
-  await XBlobUnlink(X, routerWin, senderWin, payloadAtom);
+  await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [senderWin, payloadAtom, txId ?? 0]);
+  if(unlinkPayloadBlob){
+    await XBlobUnlink(X, routerWin, senderWin, payloadAtom);
+  }
   console.log(`[intent-router] Dispatched ${payload.intent} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`);
+  return payloadAtom;
 }
 
 async function XBlobRead(X, routerWin, blobAtom) {
@@ -115,6 +118,7 @@ module.exports = {
   widString,
   parseJsonFrame,
   parseXIntentIntentV0,
+  XClientMessage,
   sendXIntentIntentV0,
   XBlobCreate,
   XBlobGrant,

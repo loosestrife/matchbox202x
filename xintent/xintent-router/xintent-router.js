@@ -1,12 +1,13 @@
 // xintent-router.js
 
 const { exec } = require('child_process');
+const crypto = require('crypto');
 const TOML = require('@iarna/toml');
 const util = require('util');
 const execAsync = util.promisify(exec);
-const {atoms, widString, parseXIntentIntentV0, sendXIntentIntentV0} = require('../util/xintent');
-const {X, root, routerWin} = require('./index');
-const {implicitXBlobGrant, implicitXBlobTransfer, xblobUnlink} = require('./xblob')
+const {atoms, widString, parseXIntentIntentV0, XClientMessage,} = require('../util/xintent');
+const {x11, X, root, routerWin} = require('./index');
+const {implicitXBlobGrant, implicitXBlobTransfer, xblobCreate, xblobUnlink} = require('./xblob')
 
 // ipc isn't just client <- messages -> client its client:port <- channels -> client:port
 // WebWorkers lacked ports or channels
@@ -114,7 +115,7 @@ const handleXIntentIntentV0 = {
       const lighterRegistryEntry = lighterRegistry[intent];
       if(lighterRegistryEntry && lighterRegistryEntry.length > 0){
         const {computer, packageName, wid, publicKeyHash} = lighterRegistryEntry[0];
-        await sendXIntentIntentV0(X, routerWin, {
+        const payloadBlob = await sendXIntentIntentV0(X, routerWin, {
           targetWin: wid,
           senderWin: routerWin,
           txId: 0,
@@ -123,8 +124,10 @@ const handleXIntentIntentV0 = {
             computer,
             package: packageName,
             intendedIntent: intent,
-          }
+          },
+          unlinkPayloadBlob: false,
         });
+        implicitXBlobTransfer(payloadBlob, routerWin, wid);
         if(!intentsAwaitingServicesQueue[intent]){
           intentsAwaitingServicesQueue[intent] = [];
         }
@@ -194,6 +197,21 @@ async function parseWindowLighterToml(wid) {
       }
     }
   }
+}
+
+// we need a customized version of this here that doesnt send an XBlobCreate
+async function sendXIntentIntentV0(X, routerWin, { targetWin, senderWin, txId, payload, unlinkPayloadBlob=true }) {
+  const blobName = `XINTENT_${crypto.randomBytes(4).toString('base64')}`;
+  const { atom: payloadAtom } = await x11.internAtomExclusiveRetry(X, `XBLOB_BLOB_${blobName}`);
+  await X.ChangeProperty(0, routerWin, payloadAtom, atoms.STRING, 8, Buffer.from(JSON.stringify(payload, null, 2)));
+  xblobCreate(payloadAtom, routerWin);
+  implicitXBlobTransfer(payloadAtom, routerWin, targetWin);
+  await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [senderWin, payloadAtom, txId ?? 0]);
+  if(unlinkPayloadBlob){
+    xblobUnlink(X, routerWin, senderWin, payloadAtom);
+  }
+  console.log(`[intent-router] Dispatched ${payload.intent} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`);
+  return payloadAtom;
 }
 
 

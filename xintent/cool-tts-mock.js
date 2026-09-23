@@ -49,13 +49,15 @@ async function startTTSService() {
         data: replyBlob.toString('base64'),
         _dataType: 'base64',
       });
+      const xintentJson = {
+        channel: intentObject.payload.channel,
+        intent: 'ui.TextToSpeechResponse',
+        blob: replyXBlob,
+      };
+      console.log('sending', xintentJson);
       await xintent.sendXIntentIntentV0(X, routerWin, {
         senderWin: ttsWin,
-        channel: intentObject.channel,
-        payload: {
-          intent: 'ui.TextToSpeechResponse',
-          blob: replyXBlob,
-        }
+        payload: xintentJson,
       });
       xintent.XBlobUnlink(X, routerWin, ttsWin, replyXBlob);
     }
