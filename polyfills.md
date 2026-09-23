@@ -42,10 +42,10 @@ since it is a pseudo-rtmp packet, there is no reason for the data field to not b
 When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`.
 
 ## XBlobCreate
-an XIntentNonJsonFrame with message type `XBlobCreateV0`.
+an XIntentNonJsonFrame with message type `XBlobCreateV0` and `data.l[1]` as the client's cookie.
 
 ## XBlobCreateResponse
-an XIntentNonJsonFrame with message type `XBlobCreateResponseV0` and `data.l[1]` as he blob atom.
+an XIntentNonJsonFrame with message type `XBlobCreateResponseV0`, `data.l[1]` as the blob atom, `data.l[2]` as the client's cookie.
 
 ## XBlobGrant
 an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
