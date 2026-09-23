@@ -27,7 +27,7 @@ an XIntentNonJsonFrame is a special XClientMessage
 ```
 
 # XBLOB V0
-an XBlob V0 is an X property on the blob server window, to be deleted when its out of links.  While XBLOB V1 will get blob id's from the server directly, the client that creates a XBLOB V0 gets to choose an atom for it, and should choose a string starting with `XBLOB_BLOB_` then atomically claiming it with an XInternAtom(true) followed by an XInternAtom(false).  This atom is then used to set the property on the blob server window, inside the property goes the canonical json
+an XBlob V0 is an X property on the blob server window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.
 ```js
 {xblobType, mimeType, size, name, data, _dataType}
 ```
@@ -39,12 +39,10 @@ if xblobType is a *Stream, _dataType is json and data is a pseudo-rtmp packet
 ```
 since it is a pseudo-rtmp packet, there is no reason for the data field to not be base64 encoded binary data.
 
-The xblob server becomes aware of an XBlob V0 when it recieves an XBlobCreate.  It will thereafter be able to delete the XBlob when everything with a reference to it has unlinked it or exited.
-
 When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`.
 
 ## XBlobCreate
-an XIntentNonJsonFrame with message type `XBlobCreateV0` and `data.l[1]` as the blob atom.
+an XIntentNonJsonFrame with message type `XBlobCreateV0`
 
 ## XBlobGrant
 an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
@@ -75,6 +73,16 @@ an XIntentJsonFrame with message type `XAudioPlayStreamV0` and payload `{BlobId,
 an XIntentJsonFrame with message type `XAudioControlStreamV0` and payload `{command, ...}`
 ## SeekStream
 an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{seekTo}`
+
+# Rationale
+## Why XINTENT V0 is based on XBLOB V0
+* The immediate thing to use is properties: the client sets a property on its window, then sends an XClientMessage with that property atom.  Now the client has to not exit until the intent router replies to its XClientMessage.
+* The other logical thing to use is a property on the intent router.  Now we need to atomically claim that property.
+* Properties exist as standard file names for windows to exchange named files.  There is a need for an anonymous blob protocol.
+
+## Why the xintent-router doesnt just hand the intent off to the clients
+* We want Super-I intent redirection.  That means the channels need to be controlled by the xintent router.
+* Maybe in XINTENT V1 a client that only replies to the intent's senderWin of an xintent-router that sets the senderWin to the original requester could do point to point traffic after being routed.  However, the XBLOB V0 blob containing the intent payload needs to be monitored by the xblob server anyway, and if XINTENT V0 wants to do an implicit blob transfer when it sends that XINTENT ClientMessage it needs the xintent router to be the xblob server.
 
 # Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.
