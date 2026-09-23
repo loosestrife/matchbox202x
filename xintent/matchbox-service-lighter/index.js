@@ -11,6 +11,7 @@ console.log(TOML.stringify(xintentServicesManifesto));
 
 async function startLighter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
+  const routerWin = await xintent.connectToRouter(X, root);
 
   const lighterWin = X.AllocID();
   await X.CreateWindow(
