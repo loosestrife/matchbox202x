@@ -109,6 +109,22 @@ an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{seekTo}
 * We want Super-I intent redirection.  That means the channels need to be controlled by the xintent router.
 * Maybe in XINTENT V1 a client that only replies to the intent's senderWin of an xintent-router that sets the senderWin to the original requester could do point to point traffic after being routed.  However, the XBLOB V0 blob containing the intent payload needs to be monitored by the xblob server anyway, and if XINTENT V0 wants to do an implicit blob transfer when it sends that XINTENT ClientMessage it needs the xintent router to be the xblob server.
 
+## Why the txId <-> channel id mapping
+there are two choices
+* natty txId <-> channel id mapping table held by the channel server
+* chatty XIntentChannelOpened with txId and channelId as a channel server ack to the txId request
+so with the chatty version
+* sender can NOT sent sys.Cancel after sec.NuclearLaunch until AFTER recieving XIntentChannelOpened
+* client library and client software is becomplicated
+* maybe 3 lines of code are saved on the server
+* the client now knows the servers channelId for log correlation, but the server MAY send {event: sys.ChannelOpened, channel} anyway
+anyway
+* the server must recieve a `{reply: true}` in order to know to open a channel either way, a `{intent: ui.Copy, reply: true}` can be replied to with `{event: ui.Paste}` only if the server knows what channels exist.  To route the `{event: ui.Paste}` without active channel objects, either
+* * server will still have to issue channels, then keep in memory who is on what channel forever, until the windows on the channel are destroyed
+* * the client will have to know the window and txId from the other client and have to track DestroyNotification from the other client.  The client will only know the other client still existed from the beginning, from, the fact that it recieved a message with `{reply: true}` and then didnt recieve a message with `{disposition: final/error/cancel}` or see the router go down.  However, if the client is told the other client exists and presented this txId, it could watch that window for DestroyNotify and stream `{event: ui.Paste}` to it without any server channels being leaked
+* the existence of an active channels table is essential to the intent redirection feature, because the active channels table tells the intent redirector app what channels are active to have their initial intent redirected
+* so there is a small window for a complex system by which `{event: ui.Paste}` can be streamed back without an active channels table.  It depends on clients watching each other for DestroyNotify and knowing each others window id and txId.  Instead of becomplicating the clients, we use an active channel to designate that the client is listening on the channel.
+
 ## Why not let the client atomically claim an atom then give that atom to the XBLOB host
 * using XInterAtom, it leaks atoms
 * using XGetSelectionOwner/XSetSelectionOwner, its an X protocol round trip instead of an XBLOB protocol round trip
