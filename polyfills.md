@@ -125,6 +125,7 @@ anyway
 * the existence of an active channels table is essential to the intent redirection feature, because the active channels table tells the intent redirector app what channels are active to have their initial intent redirected
 * so there is a small window for a complex system by which `{event: ui.Paste}` can be streamed back without an active channels table, but depending on clients watching each other for DestroyNotify and knowing each others window id and txId.  Instead of becomplicating the clients, we use an active channel to designate that the client is listening on the channel.
 * however, both sides can be sure of who theyre talking to once they both have the signed senderWin:txId:timestamp:senderPublicKey:recieverPublicKey
+* the sender must allocate a cookie or gate requests which is more complicated.  Thereafter, the simplest client library reuses that cookie instead of replacing it with a server cookie
 
 ## Why not let the client atomically claim an atom then give that atom to the XBLOB host
 * using XInterAtom, it leaks atoms
