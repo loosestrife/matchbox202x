@@ -9,6 +9,7 @@ const {
   atoms,
   widString,
   parseXIntentIntentV0,
+  parseXIntentEventV0,
   XClientMessage,
 } = require("../x11-promises/xintent");
 const { x11, X, root, routerWin } = require("./index");
@@ -23,13 +24,96 @@ const {
 // WebWorkers lacked ports or channels
 // X11 has windows as ports
 // XINTENT adds channels for intents
-const activeChannels = {};
-const intentRegistry = {};
-const lighterRegistry = {};
-const intentsAwaitingServicesQueue = {};
+// Channel & Service Registry State
+const activeChannels = {};      // channelNum -> channelObj
+const txidToChannel = {};       // senderWin -> { [txId]: channelObj }
+const intentRegistry = {};      // intent -> [{ wid, matchboxToml }]
+const lighterRegistry = {};     // intent -> [{ wid, computer, packageName, publicKeyHash }]
+const intentsAwaitingServicesQueue = {}; // intent -> [xintentIntent]
 
+const CHANNEL_BASE = 16777216;  // 0x01000000 (24-bit boundary)
+const MAX_UINT32   = 4294967295; // 0xFFFFFFFF
+
+// ---------------------------------------------------------------------------
+// Channel Allocation & Lifecycle
+// ---------------------------------------------------------------------------
+
+let channelSerialNumberStamp = CHANNEL_BASE;
+
+/**
+ * Allocates a new server channel >= 16,777,216 for a client request.
+ */
+const newChannel = (senderWin, txId, intent) => {
+  let channelNum;
+  do {
+    channelNum = channelSerialNumberStamp++;
+    if (channelSerialNumberStamp > MAX_UINT32) {
+      channelSerialNumberStamp = CHANNEL_BASE; // Rollover safely
+    }
+  } while (activeChannels[channelNum]);
+
+  const channelObj = {
+    channelNum,
+    senderWin,
+    senderCookie: txId, // Original 24-bit client txId
+    handlerWin: null,   // Bound once mapped to a service window
+    intent,
+  };
+
+  activeChannels[channelNum] = channelObj;
+
+  if (!txidToChannel[senderWin]) {
+    txidToChannel[senderWin] = {};
+  }
+  txidToChannel[senderWin][txId] = channelObj;
+
+  console.log(`[router] Allocated channel ${channelNum} for client ${widString(senderWin)} (cookie txId: ${txId})`);
+  return channelObj;
+};
+
+/**
+ * Deallocates and purges an active channel from router memory.
+ */
+const closeChannel = (channelObj) => {
+  if (!channelObj) return;
+
+  delete activeChannels[channelObj.channelNum];
+
+  const clientMap = txidToChannel[channelObj.senderWin];
+  if (clientMap) {
+    delete clientMap[channelObj.senderCookie];
+    if (Object.keys(clientMap).length === 0) {
+      delete txidToChannel[channelObj.senderWin];
+    }
+  }
+
+  console.log(`[router] Closed and deallocated channel ${channelObj.channelNum}`);
+};
+
+const getChannel = (senderWin, channel) => {
+  if(channel < CHANNEL_BASE) {
+    return txidToChannel[senderWin]?.[channel];
+  } else {
+    return activeChannels[channel];
+  }
+};
+
+const getChannelToSend = (targetWin, channelObj) => {
+  if(!channelObj){
+    return {channel: 0};
+  }
+  if(targetWin == channelObj.senderWin){
+    return {txId: channelObj.senderCookie};
+  } else {
+    return {channel: channelObj.channelNum};
+  }
+};
+
+// ------------------------------------------------------------------------
+// Actual intent routing
+// ------------------------------------------------------------------------
 const handleXIntentIntentV0 = {
-  parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev),
+  parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob: false}),
   securityContext: (xintentIntent) => {
     return {
       source: { window: xintentIntent.senderWin },
@@ -38,96 +122,110 @@ const handleXIntentIntentV0 = {
     };
   },
   accept: async (xintentIntent) => {
-    implicitXBlobTransfer(
-      xintentIntent.payloadAtom,
-      xintentIntent.senderWin,
-      routerWin,
-    );
-    xblobUnlink(xintentIntent.payloadAtom, routerWin);
-
     await tryToForwardTheIntent(xintentIntent);
   },
 };
 
-const handleXIntentEventV0 = {};
+const handleXIntentEventV0 = {
+  parse: async (ev) => parseXIntentEventV0(X, routerWin, ev, {unlinkPayloadBlob: false}),
+  securityContext: (xintentEvent) => {
+    return {
+      source: {window: xintentEvent.senderWin },
+      action: `XIntentEvent.${xintentEvent.payload.event}`
+    };
+  },
+  accept: async (xintentEvent) => {
+    await tryToForwardTheEvent(xintentEvent);
+  }
+};
 
 const tryToForwardTheIntent = async (xintentIntent) => {
-  const msgSender = xintentIntent.senderWin;
-  const intent = xintentIntent.payload.intent;
-  // in a channel?
-  let forwardTo;
-  let channelObj;
-  if (xintentIntent.payload.channel) {
-    channelObj = activeChannels[xintentIntent.payload.channel];
-    if (!channelObj) {
+  const {senderWin, channel, payload} = xintentIntent;
+  const intent = payload.intent;
+
+  // (1) try to determine if were on a channel
+  let channelObj = getChannel(senderWin, channel);
+  if(!channelObj && channel != 0){
+    if(channel < CHANNEL_BASE){
       // throw new Error(404, 'channel not found')
       console.log(
-        `Message ${xintentIntent.payload.intent} from sender ${msgSender} on unknown channel ${xintentIntent.payload.channel}`,
+        `Message ${intent} from sender ${senderWin} on with unknown txId ${channel}`,
         xintentIntent,
         activeChannels,
       );
       return;
+    } else {
+      // throw new Error(404, 'channel not found')
+      console.log(
+        `Message ${intent} from sender ${senderWin} on unknown channel ${channel}`,
+        xintentIntent,
+        activeChannels,
+      );
     }
-    if (![channelObj.senderWin, channelObj.handlerWin].includes(msgSender)) {
+  }
+  if(channelObj && channel >= CHANNEL_BASE){
+    if(senderWin != channelObj.handlerWin){
       // throw new Error(401, 'not on channel')
       console.log(
-        `Message ${xintentIntent.payload.intent} from sender ${msgSender} not on channel ${xintentIntent.payload.channel}`,
+        `Message ${xintentIntent.payload.intent} from sender ${senderWin} not on channel ${xintentIntent.channel}`,
         xintentIntent,
         activeChannels,
       );
-      return;
     }
+  }
+
+  // (2) if were on a channel, forward the message 
+  if(channelObj){
     if (channelObj.handlerWin) {
-      if (msgSender == channelObj.handlerWin) {
+      let forwardTo;
+      if (senderWin == channelObj.handlerWin) {
         // usual case
         forwardTo = channelObj.senderWin;
-      } else if (msgSender == channelObj.senderWin) {
-        // not sure why this would happen
+      } else if (senderWin == channelObj.senderWin) {
+        // for example sys.Cancel 
         forwardTo = channelObj.handlerWin;
       } else {
         console.log(
-          `Message ${xintentIntent.payload.intent} in channel ${xintentIntent.payload.channel} was sent by ${msgSender} not on channel (was the intent redirected?)`,
+          `Message ${xintentIntent.payload.intent} in channel ${xintentIntent.payload.channel} was sent by ${widString(senderWin)} not on channel (was the intent redirected?)`,
           xintentIntent,
           channelObj,
         );
         return;
       }
-      // handle implicit blob grants sort of like with a list of messages that do implicit blob grants i guess?
-      // or maybe just "if there is a property in the payload called 'blob', it is to be transferred"
-      if (xintentIntent.payload.blob) {
-        implicitXBlobTransfer(xintentIntent.payload.blob, routerWin, forwardTo);
+      implicitXBlobTransfer(xintentIntent.payloadBlob, routerWin, forwardTo);
+      if (xintentIntent.dataBlob) {
+        implicitXBlobTransfer(xintentIntent.dataBlob, routerWin, forwardTo);
       }
-      return await sendXIntentIntentV0(X, routerWin, {
-        ...xintentIntent,
+      await sendXIntentIntentV0(X, routerWin, {
         targetWin: forwardTo,
         senderWin: routerWin,
-        txId: channelObj.senderCookie,
+        ...getChannelToSend(forwardTo, channelObj),
+        payload: xintentIntent.payload,
+        payloadBlob: xintentIntent.payloadBlob,
+        dataBlob: xintentIntent.dataBlob,
       });
+      if(['final', 'cancel', 'error'].includes(payload.disposition)){
+        closeChannel(channelObj);
+      }
+      return;
     } else {
       // the channel object was created, but there is not a handler yet
       // creating the channel object without a handler enables the user to redirect intents
       // thats the only reason this else block should be reachable
     }
   }
-  // open a channel?
-  else if (xintentIntent.payload.reply) {
-    const channel = `${msgSender}:${xintentIntent.payload.txId}`;
-    if (!activeChannels[channel]) {
-      activeChannels[channel] = {
-        senderWin: msgSender,
-        senderCookie: xintentIntent.payload.txId,
-        intent: xintentIntent.payload.intent,
-        intentObj: xintentIntent,
-      };
-      xintentIntent.payload.channel = channel;
-    } else {
+  
+  // (3) determine if we should open a channel 
+  if (xintentIntent.payload.reply) {
+    if(getChannel(senderWin, channel)){
       // throw new Error(400, 'txId cookie already in use');
       console.log(`duplicate cookie ${xintentIntent.payload.txId}`);
       return;
     }
-    channelObj = activeChannels[channel];
+    channelObj = newChannel(senderWin, channel, intent);
   }
 
+  // (4) find a handler and send the intent
   const registryEntry = intentRegistry[intent];
   if (registryEntry) {
     const { wid, matchboxToml } = registryEntry[0];
@@ -136,8 +234,12 @@ const tryToForwardTheIntent = async (xintentIntent) => {
       channelObj.handlerWin = wid;
     }
     await sendXIntentIntentV0(X, routerWin, {
-      ...xintentIntent,
       targetWin: wid,
+      senderWin: routerWin,
+      ...getChannelToSend(wid, channelObj),
+      payload: xintentIntent.payload,
+      payloadBlob: xintentIntent.payloadBlob,
+      dataBlob: xintentIntent.dataBlob,
     });
     return;
   } else {
@@ -148,7 +250,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
     if (lighterRegistryEntry && lighterRegistryEntry.length > 0) {
       const { computer, packageName, wid, publicKeyHash } =
         lighterRegistryEntry[0];
-      const payloadBlob = await sendXIntentIntentV0(X, routerWin, {
+      await sendXIntentIntentV0(X, routerWin, {
         targetWin: wid,
         senderWin: routerWin,
         txId: 0,
@@ -158,9 +260,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
           package: packageName,
           intendedIntent: intent,
         },
-        unlinkPayloadBlob: false,
       });
-      implicitXBlobTransfer(payloadBlob, routerWin, wid);
       if (!intentsAwaitingServicesQueue[intent]) {
         intentsAwaitingServicesQueue[intent] = [];
       }
@@ -259,31 +359,33 @@ async function parseWindowLighterToml(wid) {
 async function sendXIntentIntentV0(
   X,
   routerWin,
-  { targetWin, senderWin, txId, payload },
+  { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob },
 ) {
-  const blobName = `XINTENT_${crypto.randomBytes(4).toString("base64")}`;
-  const { atom: payloadAtom } = await x11.internAtomExclusiveRetry(
-    X,
-    `XBLOB_BLOB_${blobName}`,
-  );
-  await X.ChangeProperty(
-    0,
-    routerWin,
-    payloadAtom,
-    atoms.STRING,
-    8,
-    Buffer.from(JSON.stringify(payload, null, 2)),
-  );
-  xblobCreate(payloadAtom, routerWin);
+  if(!payloadBlob){
+    payloadBlob = await xblobCreate(routerWin);
+    await X.ChangeProperty(
+      0,
+      routerWin,
+      payloadBlob,
+      atoms.STRING,
+      8,
+      Buffer.from(JSON.stringify(payload, null, 2)),
+    );
+  }
+  implicitXBlobTransfer(payloadBlob, routerWin, targetWin);
+  if(dataBlob){
+    implicitXBlobTransfer(dataBlob, routerWin, targetWin);
+  }
   await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [
-    senderWin,
-    payloadAtom,
-    txId ?? 0,
+    routerWin,
+    payloadBlob,
+    txId ?? channel ?? 0,
+    dataBlob ?? 0,
   ]);
   console.log(
-    `[intent-router] Dispatched ${payload.intent} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`,
+    `[intent-router] Dispatched ${payload?.intent} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)})`,
   );
-  return payloadAtom;
+  return payloadBlob;
 }
 
 module.exports = {

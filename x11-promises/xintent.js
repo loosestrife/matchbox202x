@@ -162,6 +162,7 @@ async function XBlobGrant(X, routerWin, senderWin, blobAtom, granteeWin) {
 }
 
 async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
+  console.log(`x11-promises/xintent:XBlobUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [
     senderWin,
     blobAtom,
@@ -176,38 +177,61 @@ async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
   ]);
 }
 
-async function sendXIntentIntentV0(
+const sendXIntentIntentV0 = (
   X,
   routerWin,
-  { targetWin, senderWin, txId, payload, unlinkPayloadBlob = true }
-) {
+  { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true }
+) => sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, {targetWin, senderWin, txId, channel, payload, unlinkPayloadBlob }); 
+const sendXIntentEventV0 = (
+  X,
+  routerWin,
+  { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true }
+) => sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, {targetWin, senderWin, txId, channel, payload, unlinkPayloadBlob });
+
+const sendXIV0 = async (
+  messageTypeAtom,
+  X,
+  routerWin,
+  { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true}
+) => {
   if (!targetWin) {
     targetWin = routerWin;
   }
 
   // 1. Create payload blob owned by senderWin
-  const payloadAtom = await XBlobCreate(X, routerWin, senderWin, payload);
+  const payloadBlob = await XBlobCreate(X, routerWin, senderWin, payload);
 
   // 2. Transfer or Grant blob rights BEFORE dispatching intent message
   if (targetWin !== senderWin) {
     if (unlinkPayloadBlob) {
-      XBlobTransfer(X, routerWin, senderWin, payloadAtom, targetWin);
+      XBlobTransfer(X, routerWin, senderWin, payloadBlob, targetWin);
     } else {
-      XBlobGrant(X, routerWin, senderWin, payloadAtom, targetWin);
+      XBlobGrant(X, routerWin, senderWin, payloadBlob, targetWin);
     }
   }
 
+  if(txId !== undefined && txId > 16777215){
+    console.error("error: txId above 16777216", {txId, channel});
+  }
+  if(channel !== undefined && (channel != 0 && channel < 16777216)){
+    console.error("error: channel under 16777216", {txId, channel});
+  }
+  if(txId !== undefined && channel !== undefined){
+    console.error("error: only allowed to specify one of txId, channel", {txId, channel});
+  }
+
   // 3. Dispatch the intent frame
-  XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [
+  XClientMessage(X, targetWin, messageTypeAtom, [
     senderWin,
-    payloadAtom,
-    txId ?? 0,
+    payloadBlob,
+    txId ?? channel ?? 0,
+    dataBlob ?? 0,
   ]);
 
   console.log(
-    `[intent-client] Dispatched ${payload.intent || "intent"} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`
+    `[intent-client] Dispatched ${payload.intent} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)})`
   );
-  return payloadAtom;
+  return payloadBlob;
 }
 
 async function XBlobRead(X, routerWin, blobAtom) {
@@ -233,21 +257,27 @@ async function XBlobRead(X, routerWin, blobAtom) {
   }
 }
 
-async function parseJsonFrame(X, routerWin, ev) {
-  const [senderWin, payloadAtom] = ev.data;
-  const payload = await XBlobRead(X, routerWin, payloadAtom);
-  return { targetWin: ev.wid, senderWin, payload, payloadAtom };
+async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {
+  const [senderWin, payloadBlob] = ev.data;
+  const payload = await XBlobRead(X, routerWin, payloadBlob);
+  if(unlinkPayloadBlob){
+    XBlobUnlink(X, routerWin, ev.wid, payloadBlob);
+  }
+  return { targetWin: ev.wid, senderWin, payload, payloadBlob };
 }
 
-async function parseXIntentIntentV0(X, routerWin, ev) {
-  const { senderWin, payload, payloadAtom } = await parseJsonFrame(
+async function parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob = true} = {}) {
+  const { senderWin, payload, payloadBlob } = await parseJsonFrame(
     X,
     routerWin,
-    ev
+    ev,
+    {unlinkPayloadBlob}
   );
-  const txId = ev.data[2];
-  return { targetWin: ev.wid, senderWin, txId, payload, payloadAtom };
+  const channel = ev.data[2];
+  const dataBlob = ev.data[3];
+  return { targetWin: ev.wid, senderWin, channel, payload, payloadBlob, dataBlob };
 }
+
 
 module.exports = {
   connectToRouter,
@@ -256,8 +286,10 @@ module.exports = {
   widString,
   parseJsonFrame,
   parseXIntentIntentV0,
+  parseXIntentEventV0: parseXIntentIntentV0,
   XClientMessage,
   sendXIntentIntentV0,
+  sendXIntentEventV0,
   XBlobCreate,
   XBlobGrant,
   XBlobUnlink,

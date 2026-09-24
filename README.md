@@ -168,8 +168,8 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 | format      : 32                                                      |
 | data.l[0]   : Sender Window XID                                       |
 | data.l[1]   : Blob atom holding the json payload                      |
-| data.l[2]   : Transaction id                                          |
-| data.l[3]   : Blob atom for an attached blob (fs.SaveAs)              |
+| data.l[2]   : Transaction id / channel id                             |
+| data.l[3]   : Blob atom holding intent data (fs.SaveAs)               |
 | data.l[4]   : unused                                                  |
 +-----------------------------------------------------------------------+
 ```

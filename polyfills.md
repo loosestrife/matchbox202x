@@ -42,6 +42,9 @@ note that
 * XCreateWindow is not a round trip, so theres no point in not creating a window to have an ipc port
 * the cooperative security model in XSECURE V0 is going to look at the `_NET_WM_PID` on the window to decide security policy
 
+# `XINTENT_INTENT_V0` and `XINTENT_EVENT_V0`
+XIntentJsonFrame with `data[2]=txId` to the sender and `data[2]=channelId` to everyone else.  The sender's txId has to be under 16777216 and the server promises to only use numbers 16777216 and up to designate channels.  That way the client's txId will never collide with a server channel number.  Data blob atom on `data[3]`.
+
 # XBLOB V0
 an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
 ```js
