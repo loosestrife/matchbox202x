@@ -1,5 +1,6 @@
+const { on } = require('node:events');
 const { Logger, HttpError } = require('../server-tools');
-const { connectToRouter, createClientWindow, sendXIntentIntentV0, XBlobCreate, XBlobTransfer } = require('../x11-promises/xintent');
+const { connectToRouter, createClientWindow, sendXIntentIntentV0, parseXIntentIntentV0, XBlobCreate, XBlobTransfer, atoms } = require('../x11-promises/xintent');
 
 const logger = new Logger({module: 'route-intent'});
 let routerWin, clientWin;
@@ -30,8 +31,9 @@ const routeIntent = async (req, res) => {
       ) {
         const { payload: eventData, payloadAtom } = await parseXIntentIntentV0(X, routerWin, ev);
         console.log('[EVENT RECEIVED]', eventData);
-        if (eventData.disposition === 'final') {
-          return eventData;
+        if(eventData.disposition == 'final'){
+          res.status(200).json(eventData);
+          return;
         }
       }
     }
@@ -39,7 +41,7 @@ const routeIntent = async (req, res) => {
   res.status(200).json({ status: 'ok', intent, targetApp });
 };
 
-module.exports = ({ routerWin: theRouterWin, X: xClient, root: xRoot, cleintWin: theClientWin}) => {
+module.exports = ({ routerWin: theRouterWin, X: xClient, root: xRoot, clientWin: theClientWin}) => {
   routerWin = theRouterWin;
   X = xClient;
   root = xRoot;

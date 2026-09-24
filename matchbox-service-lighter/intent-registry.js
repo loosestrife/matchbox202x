@@ -7,7 +7,7 @@ const TOML = require('@iarna/toml');
 
 const MATCHBOX_PATH = [
   '~/.local/share/matchbox/packages',
-  __dirname.split('/').slice(0,-2).join('/'),
+  __dirname.split('/').slice(0,-1).join('/'),
 ];
 
 const intentRegistry = {};

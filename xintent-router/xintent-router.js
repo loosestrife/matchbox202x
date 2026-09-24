@@ -145,23 +145,13 @@ const tryToForwardTheIntent = async (xintentIntent) => {
 
   // (1) try to determine if were on a channel
   let channelObj = getChannel(senderWin, channel);
-  if(!channelObj && channel != 0){
-    if(channel < CHANNEL_BASE){
-      // throw new Error(404, 'channel not found')
-      console.log(
-        `Message ${intent} from sender ${senderWin} on with unknown txId ${channel}`,
-        xintentIntent,
-        activeChannels,
-      );
-      return;
-    } else {
-      // throw new Error(404, 'channel not found')
-      console.log(
-        `Message ${intent} from sender ${senderWin} on unknown channel ${channel}`,
-        xintentIntent,
-        activeChannels,
-      );
-    }
+  if(!channelObj && channel >= CHANNEL_BASE){
+    // throw new Error(404, 'channel not found')
+    console.log(
+      `Message ${intent} from sender ${widString(senderWin)} on unknown channel ${channel}`,
+      xintentIntent,
+      activeChannels,
+    );
   }
   if(channelObj && channel >= CHANNEL_BASE){
     if(senderWin != channelObj.handlerWin){

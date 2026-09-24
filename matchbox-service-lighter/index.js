@@ -14,7 +14,7 @@ async function startLighter() {
   const routerWin = await xintent.connectToRouter(X, root);
 
   const lighterWin = X.AllocID();
-  await X.CreateWindow(
+  X.CreateWindow(
     lighterWin, root,
     0, 0, 1, 1, 0, 0, 0, 0,
     { eventMask: x11.eventMask.PropertyChange }
@@ -25,8 +25,11 @@ async function startLighter() {
   const xintentIntentV0Atom = await X.InternAtom(false, 'XINTENT_INTENT_V0');
   const xintentDataAtom = await X.InternAtom(false, 'XINTENT_DATA');
 
-  await X.ChangeProperty(0, lighterWin, X.atoms.WM_NAME, X.atoms.STRING, 8, 'MATCHBOX_SERVICE_LIGHTER');
-  await X.ChangeProperty(0, lighterWin, xintentServicesManifestAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
+  X.ChangeProperty(0, lighterWin, X.atoms.WM_NAME, X.atoms.STRING, 8, 'MATCHBOX_SERVICE_LIGHTER');
+  X.ChangeProperty(0, lighterWin, xintentServicesManifestAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
+  const pidBuf = Buffer.alloc(4);
+  pidBuf.writeUInt32LE(process.pid, 0);
+  X.ChangeProperty(0, lighterWin, xintent.atoms._NET_WM_PID, xintent.atoms.CARDINAL, 32, pidBuf);
   console.log(`[service-lighter] Registered services (0x${lighterWin.toString(16)})`);
 
   // 4. Handle Direct Start Signals from xintent-router
@@ -36,16 +39,8 @@ async function startLighter() {
         console.error(`got unknown message type atom ${ev.message_type}`);
         return;
       }
-      const [senderWin, payloadAtom, txId] = ev.data;
-      const prop = await X.GetProperty(0, routerWin, payloadAtom, X.atoms.STRING, 0, 10000);
-      if (!prop || !prop.data || prop.data.length == 0){
-        console.error(`nothing found on payloadAtom ${xintent.widString(payloadAtom)}`)
-        return;
-      };
-
-      const payload = JSON.parse(prop.data.toString());
-      console.log('[service-lighter] got intent:', payload);
-
+      const xintentIntent = await xintent.parseXIntentIntentV0(X, routerWin, ev);
+      const payload = xintentIntent.payload;
       if(payload.intent != "sys.Launch"){
         console.log("this only responds to sys.Launch");
         return;
