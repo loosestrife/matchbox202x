@@ -39,7 +39,7 @@ async function startLighter() {
       const [senderWin, payloadAtom, txId] = ev.data;
       const prop = await X.GetProperty(0, routerWin, payloadAtom, X.atoms.STRING, 0, 10000);
       if (!prop || !prop.data || prop.data.length == 0){
-        console.error(`nothing found on payloadAtom ${xintent.widString(targetPropAtom)}`)
+        console.error(`nothing found on payloadAtom ${xintent.widString(payloadAtom)}`)
         return;
       };
 

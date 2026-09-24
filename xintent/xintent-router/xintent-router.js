@@ -92,8 +92,9 @@ const tryToForwardTheIntent = async (xintentIntent) => {
         );
         return;
       }
-      // handle implicit blob grants sort of like with a list of messages that do implicit blob grants i guess
-      if (xintentIntent.payload.intent == "ui.TextToSpeechResponse") {
+      // handle implicit blob grants sort of like with a list of messages that do implicit blob grants i guess?
+      // or maybe just "if there is a property in the payload called 'blob', it is to be transferred"
+      if (xintentIntent.payload.blob) {
         implicitXBlobTransfer(xintentIntent.payload.blob, routerWin, forwardTo);
       }
       return await sendXIntentIntentV0(X, routerWin, {

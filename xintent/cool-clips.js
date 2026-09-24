@@ -10,7 +10,7 @@ const {
 } = require('./util/xintent');
 const x11 = require('./util/x11-promises');
 
-let currentClipboard = null; // Holds { mimeType, _dataType, data, name }
+let currentClipboard = null; // Holds { type, _dataType, data, name }
 
 /**
  * Converts an image buffer to a requested target format on-the-fly using `convert`
@@ -142,7 +142,7 @@ async function startDaemon() {
           console.log('--------------------------------------------------');
           console.log(`📋 CLIPBOARD CLAIMED (atoms.CLIPBOARD)`);
           console.log(` - Source Window : ${widString(senderWin)}`);
-          console.log(` - MIME Type     : ${content.mimeType || 'unknown'}`);
+          console.log(` - MIME Type     : ${content.type || 'unknown'}`);
           console.log(` - Blob Type     : ${content.xblobType || 'Blob'}`);
           if (content.name) console.log(` - File Name     : ${content.name}`);
           console.log(` - Size          : ${content.size ?? content.data?.length ?? 0} bytes`);
@@ -173,8 +173,8 @@ async function startDaemon() {
         return;
       }
 
-      const isImage = currentClipboard.mimeType?.startsWith('image/');
-      const isText = currentClipboard.mimeType?.startsWith('text/') || currentClipboard._dataType === 'text';
+      const isImage = currentClipboard.type?.startsWith('image/');
+      const isText = currentClipboard.type?.startsWith('text/') || currentClipboard._dataType === 'text';
 
       try {
         // ---------------------------------------------------------------------
@@ -199,7 +199,7 @@ async function startDaemon() {
               atoms['text/plain'],
               atoms['text/plain;charset=utf-8']
             );
-            if (currentClipboard.mimeType === 'text/html') {
+            if (currentClipboard.type === 'text/html') {
               supportedTargets.push(atoms['text/html']);
             }
           }
@@ -239,8 +239,8 @@ async function startDaemon() {
           let outputBuf = rawInputBuf;
 
           // Check if format conversion is required (e.g. stored PNG -> requested JPEG)
-          if (currentClipboard.mimeType !== targetName) {
-            console.log(` -> Converting image on-the-fly from ${currentClipboard.mimeType} to ${targetName}...`);
+          if (currentClipboard.type !== targetName) {
+            console.log(` -> Converting image on-the-fly from ${currentClipboard.type} to ${targetName}...`);
             outputBuf = await convertImageBuffer(rawInputBuf, targetName);
           }
 
@@ -255,7 +255,7 @@ async function startDaemon() {
         // ---------------------------------------------------------------------
         // 4. Unsupported target requested -> Refuse
         // ---------------------------------------------------------------------
-        console.warn(` -> Target '${targetName}' not supported for current clipboard type (${currentClipboard.mimeType})`);
+        console.warn(` -> Target '${targetName}' not supported for current clipboard type (${currentClipboard.type})`);
         const failNotifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, 0);
         X.SendEvent(requestor, false, 0, failNotifyBuf);
 

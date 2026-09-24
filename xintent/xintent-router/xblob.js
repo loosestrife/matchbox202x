@@ -117,7 +117,7 @@ const handleXAudioNodeRegisterV0 = {
 const xblobCreate = async (senderWin) => {
   const blobTrackingData = { links: [senderWin] };
 
-  let blobIdx = xblobAtomAssignments.findIndex(slot => slot);
+  let blobIdx = xblobAtomAssignments.findIndex(slot => !slot);
   if (blobIdx === -1) {
     blobIdx = xblobAtomAssignments.length;
   }

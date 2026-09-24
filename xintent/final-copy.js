@@ -67,7 +67,7 @@ async function main() {
     const mimeType = typeArg || 'text/plain';
     xblobPayload = {
       xblobType: 'Blob',
-      mimeType: mimeType,
+      type: mimeType,
       size: textBuf.length,
       _dataType: 'text',
       data: echoArg,
@@ -79,7 +79,7 @@ async function main() {
     
     xblobPayload = {
       xblobType: 'Blob',
-      mimeType: mimeType,
+      type: mimeType,
       size: stdinData.length,
       _dataType: isText ? 'text' : 'base64',
       data: isText ? stdinData.toString('utf8') : stdinData.toString('base64'),
@@ -95,7 +95,7 @@ async function main() {
     xblobPayload = {
       xblobType: 'File',
       name: fileName,
-      mimeType: mimeType,
+      type: mimeType,
       size: fileBuf.length,
       _dataType: isText ? 'text' : 'base64',
       data: isText ? fileBuf.toString('utf8') : fileBuf.toString('base64'),
@@ -105,7 +105,7 @@ async function main() {
     const textBuf = Buffer.from(positionalArg, 'utf8');
     xblobPayload = {
       xblobType: 'Blob',
-      mimeType: typeArg || 'text/plain',
+      type: typeArg || 'text/plain',
       size: textBuf.length,
       _dataType: 'text',
       data: positionalArg,
@@ -142,7 +142,7 @@ async function main() {
     },
   });
 
-  console.log(`[ui.Copy] Successfully copied ${xblobPayload.xblobType} (${xblobPayload.mimeType}) to clipboard.`);
+  console.log(`[ui.Copy] Successfully copied ${xblobPayload.xblobType} (${xblobPayload.type}) to clipboard.`);
   process.exit(0);
 }
 
