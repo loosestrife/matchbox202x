@@ -105,7 +105,7 @@ class Logger {
 
 const loggerMiddleware = (req, res, next) => {
   req.reqId = crypto.randomUUID();
-  loggerModule.alStorage.run(
+  alStorage.run(
     {
       values: {
         ip: req.ip,

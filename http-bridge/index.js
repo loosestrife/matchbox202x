@@ -1,12 +1,10 @@
-const path = require('path');
 const express = require('express');
 const {serializeError} = require('serialize-error')
-const {HttpError, Logger, nnjsonStream, teeOutStream} = require('../server-tools');
+const {HttpError, Logger, loggerMiddleware, nnjsonStream, teeOutStream} = require('../server-tools');
 const { createClientWithPromises } = require('../x11-promises/x11-promises');
-const { connectToRouter } = require('../x11-promises/xintent');
+const { connectToRouter, createClientWindow } = require('../x11-promises/xintent');
 
-const conf = require('./conf');
-const logger = Logger({module: 'index.js'});
+const logger = new Logger({module: 'index.js'});
 const { X, root } = await createClientWithPromises();
 const routerWin = await connectToRouter(X, root);
 const clientWin = await createClientWindow(X, root, 'http-intent-bridge');
@@ -14,6 +12,7 @@ const { routeIntent } = require('./route-intent')({ routerWin, X, root, clientWi
 
 const app = express();
 app.use(express.json());
+app.use(loggerMiddleware);
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -26,7 +25,7 @@ app.get('/matchbox202x.js', (req, res) => {
 app.get('/intents', (req, res) => {
   res.json({todo: 'aggregate available intents onto a property of routerWin'});
 });
-app.get('/apps/:app{/:card}', routeApp);
+//app.get('/apps/:app{/:card}', routeApp);
 
 app.use((err, req, res, next) => {
   const status = err.httpCode || 500;

@@ -1,11 +1,11 @@
 const { Logger, HttpError } = require('../server-tools');
 const { connectToRouter, createClientWindow, sendXIntentIntentV0, XBlobCreate, XBlobTransfer } = require('../x11-promises/xintent');
 
-const logger = Logger({module: 'route-intent'});
+const logger = new Logger({module: 'route-intent'});
 let routerWin, clientWin;
 let globalTransactionIdCounter = 1;
 
-const routeIntent = (req, res) => {
+const routeIntent = async (req, res) => {
   const { namespace, action } = req.params;
   const intent = `${namespace}.${action}`;
   const targetApp = req.query.app || req.body.app;
