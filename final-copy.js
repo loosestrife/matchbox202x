@@ -6,7 +6,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { connectToRouter, createClientWindow, sendXIntentIntentV0, XBlobCreate, XBlobTransfer } = require('./x11-promises/xintent');
+const xintent = require('./x11-promises/xintent');
+const {connectToRouter, createClientWindow, sendXIntentIntentV0, XBlobCreate, XBlobTransfer} = xintent;
 const x11 = require('./x11-promises/x11-promises');
 
 const MIME_TYPES = {
@@ -117,8 +118,8 @@ async function main() {
 
   // X11 Connection & Window Initialization
   const { X, root } = await x11.createClientWithPromises();
-  const routerWin = await connectToRouter(X, root);
-  if (!routerWin) {
+  await connectToRouter(X, root);
+  if (!xintent.routerWin) {
     console.error('Error: Could not connect to XINTENT router.');
     process.exit(1);
   }
@@ -127,14 +128,14 @@ async function main() {
   const clientWin = await createClientWindow(X, root, 'cli-clipboard');
 
   // Step A: Create XBLOB V0 holding content payload
-  const dataBlobAtom = await XBlobCreate(X, routerWin, clientWin, xblobPayload);
+  const dataBlobAtom = await XBlobCreate(X, xintent.routerWin, clientWin, xblobPayload);
 
   // Step B: Transfer ownership of content blob to routerWin
-  XBlobTransfer(X, routerWin, clientWin, dataBlobAtom, routerWin);
+  XBlobTransfer(X, xintent.routerWin, clientWin, dataBlobAtom, xintent.routerWin);
 
   // Step C: Dispatch ui.Copy intent referencing dataBlobAtom
   console.log("blob transferred.  sending intent");
-  await sendXIntentIntentV0(X, routerWin, {
+  await sendXIntentIntentV0(X, xintent.routerWin, {
     senderWin: clientWin,
     payload: {
       intent: 'ui.Copy',

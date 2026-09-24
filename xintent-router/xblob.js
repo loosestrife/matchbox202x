@@ -187,6 +187,29 @@ const sameClient = (a, b) => {
   return ca != null && ca == cb;
 };
 
+const xblobUnlinkWindow = async (destroyedWin) => {
+  // 1. Unlink the destroyed window from all blobs it is linked to
+  const blobIds = Object.keys(xblobRegistry);
+  for (const blobIdStr of blobIds) {
+    const blobId = Number(blobIdStr);
+    const regEntry = xblobRegistry[blobId];
+
+    if (regEntry?.links) {
+      // Remove all instances of destroyedWin linked to this blob
+      while (regEntry.links.includes(destroyedWin)) {
+        await xblobUnlink(blobId, destroyedWin);
+      }
+    }
+  }
+
+  // 2. Remove any host registrations owned by the destroyed window
+  for (const [hostName, hostWin] of Object.entries(xblobHosts)) {
+    if (hostWin === destroyedWin) {
+      delete xblobHosts[hostName];
+    }
+  }
+};
+
 module.exports = {
   handleXBlobCreateV0,
   handleXBlobGrantV0,
@@ -197,4 +220,5 @@ module.exports = {
   implicitXBlobGrant,
   implicitXBlobTransfer,
   xblobUnlink,
+  xblobUnlinkWindow,
 };

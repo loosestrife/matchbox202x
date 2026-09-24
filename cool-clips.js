@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { spawn } = require('child_process');
+const xintent = require('./x11-promises/xintent');
 const {
   connectToRouter,
   createClientWindow,
@@ -7,7 +8,7 @@ const {
   XBlobRead,
   atoms,
   widString,
-} = require('./x11-promises/xintent');
+} = xintent;
 const x11 = require('./x11-promises/x11-promises');
 
 let currentClipboard = null; // Holds { type, _dataType, data, name }
@@ -89,9 +90,9 @@ function buildSelectionNotifyBuffer(time, requestor, selection, target, property
 
 async function startDaemon() {
   const { X, root } = await x11.createClientWithPromises();
-  const routerWin = await connectToRouter(X, root);
+  await connectToRouter(X, root);
 
-  if (!routerWin) {
+  if (!xintent.routerWin) {
     console.error('[copy-daemon] Error: Could not connect to XINTENT router.');
     process.exit(1);
   }
@@ -144,7 +145,7 @@ async function startDaemon() {
     Buffer.from(matchboxToml)
   );
 
-  console.log(`[copy-daemon] Online on window ${widString(daemonWin)} (Router: ${widString(routerWin)})`);
+  console.log(`[copy-daemon] Online on window ${widString(daemonWin)} (Router: ${widString(xintent.routerWin)})`);
 
   // ---------------------------------------------------------------------------
   // X11 Event Listener: Handles both Intents & Selection Requests
@@ -155,12 +156,12 @@ async function startDaemon() {
     // -------------------------------------------------------------------------
     if (ev.type === 33 && ev.message_type === atoms.XINTENT_INTENT_V0) {
       try {
-        const { senderWin, payload, txId } = await parseXIntentIntentV0(X, routerWin, ev);
+        const { senderWin, payload, txId } = await parseXIntentIntentV0(X, xintent.routerWin, ev);
 
         if (payload.intent === 'ui.Copy') {
           console.log(`\n[copy-daemon] Received ui.Copy intent from ${widString(senderWin)} (txId: ${txId})`);
           const contentAtom = payload.blob;
-          const content = await XBlobRead(X, routerWin, contentAtom);
+          const content = await XBlobRead(X, xintent.routerWin, contentAtom);
 
           currentClipboard = content;
 

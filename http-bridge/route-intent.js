@@ -1,9 +1,9 @@
 const { on } = require('node:events');
 const { Logger, HttpError } = require('../server-tools');
-const { connectToRouter, createClientWindow, sendXIntentIntentV0, parseXIntentIntentV0, XBlobCreate, XBlobTransfer, atoms } = require('../x11-promises/xintent');
+const xintent = require('../x11-promises/xintent');
 
 const logger = new Logger({module: 'route-intent'});
-let routerWin, clientWin;
+let routerWin, clientWin, X, root;
 let globalTransactionIdCounter = 1;
 
 const routeIntent = async (req, res) => {
@@ -18,7 +18,7 @@ const routeIntent = async (req, res) => {
   logger.info(`[INTENT] ${intent} -> Target: ${targetApp}`);
   res.setHeader('Matchbox-Bridge', '1.0');
   const txId = globalTransactionIdCounter++;
-  await sendXIntentIntentV0(X, routerWin, {
+  await xintent.sendXIntentIntentV0(X, xintent.routerWin, {
     senderWin: clientWin,
     payload,
     txId,
@@ -26,10 +26,10 @@ const routeIntent = async (req, res) => {
   if(payload.reply){
     for await (const [ev] of on(X, 'event')) {
       if (ev.type == 33 &&
-        [atoms.XINTENT_INTENT_V0, atoms.XINTENT_EVENT_V0].includes(ev.message_type) && 
+        [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) && 
         ev.data[2] == txId
       ) {
-        const { payload: eventData, payloadAtom } = await parseXIntentIntentV0(X, routerWin, ev);
+        const { payload: eventData, payloadAtom } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
         console.log('[EVENT RECEIVED]', eventData);
         if(eventData.disposition == 'final'){
           res.status(200).json(eventData);
@@ -42,7 +42,6 @@ const routeIntent = async (req, res) => {
 };
 
 module.exports = ({ routerWin: theRouterWin, X: xClient, root: xRoot, clientWin: theClientWin}) => {
-  routerWin = theRouterWin;
   X = xClient;
   root = xRoot;
   clientWin = theClientWin;

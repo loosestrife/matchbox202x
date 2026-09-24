@@ -43,7 +43,7 @@ let channelSerialNumberStamp = CHANNEL_BASE;
 /**
  * Allocates a new server channel >= 16,777,216 for a client request.
  */
-const newChannel = (senderWin, txId, intent) => {
+const newChannel = (senderWin, txId, xintentIntent) => {
   let channelNum;
   do {
     channelNum = channelSerialNumberStamp++;
@@ -57,7 +57,8 @@ const newChannel = (senderWin, txId, intent) => {
     senderWin,
     senderCookie: txId, // Original 24-bit client txId
     handlerWin: null,   // Bound once mapped to a service window
-    intent,
+    intent: xintentIntent.payload.intent,
+    xintentIntent,
   };
 
   activeChannels[channelNum] = channelObj;
@@ -212,7 +213,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
       console.log(`duplicate cookie ${xintentIntent.payload.txId}`);
       return;
     }
-    channelObj = newChannel(senderWin, channel, intent);
+    channelObj = newChannel(senderWin, channel, xintentIntent);
   }
 
   // (4) find a handler and send the intent
@@ -251,13 +252,13 @@ const tryToForwardTheIntent = async (xintentIntent) => {
           intendedIntent: intent,
         },
       });
-      if (!intentsAwaitingServicesQueue[intent]) {
-        intentsAwaitingServicesQueue[intent] = [];
-      }
-      intentsAwaitingServicesQueue[intent].push(xintentIntent);
-      return;
+    } else {
+      console.error(`no launchable service found for ${intent}`);
     }
-    console.error(`no launchable service found for ${intent}`);
+    if (!intentsAwaitingServicesQueue[intent]) {
+      intentsAwaitingServicesQueue[intent] = [];
+    }
+    intentsAwaitingServicesQueue[intent].push(xintentIntent);
   }
 };
 
@@ -378,10 +379,92 @@ async function sendXIntentIntentV0(
   return payloadBlob;
 }
 
+/**
+ * Unregisters a window that has been destroyed, cleaning up registries
+ * and handling active channel lifecycles.
+ */
+const xintentUnregisterWindow = async (destroyedWin) => {
+  console.log(`[router] Unregistering window ${widString(destroyedWin)}`);
+
+  // 1. Remove window from intentRegistry
+  for (const intentName of Object.keys(intentRegistry)) {
+    intentRegistry[intentName] = intentRegistry[intentName].filter(
+      (entry) => entry.wid !== destroyedWin
+    );
+    if (intentRegistry[intentName].length === 0) {
+      delete intentRegistry[intentName];
+    }
+  }
+
+  // 2. Remove window from lighterRegistry
+  for (const intentName of Object.keys(lighterRegistry)) {
+    lighterRegistry[intentName] = lighterRegistry[intentName].filter(
+      (entry) => entry.wid !== destroyedWin
+    );
+    if (lighterRegistry[intentName].length === 0) {
+      delete lighterRegistry[intentName];
+    }
+  }
+
+  // 3. Remove queued intents originating from the destroyed sender
+  for (const intentName of Object.keys(intentsAwaitingServicesQueue)) {
+    intentsAwaitingServicesQueue[intentName] = intentsAwaitingServicesQueue[intentName].filter(
+      (xintent) => !((xintent.senderWin == destroyedWin) && (xintent.payload.reply)) 
+    );
+    if (intentsAwaitingServicesQueue[intentName].length === 0) {
+      delete intentsAwaitingServicesQueue[intentName];
+    }
+  }
+
+  // 4. Process active channels
+  const retryIntents = [];
+  const channels = Object.values(activeChannels);
+
+  for (const channelObj of channels) {
+    if (channelObj.senderWin === destroyedWin) {
+      // Sender died: notify handler with sys.Cancel and close channel
+      if (channelObj.handlerWin && channelObj.handlerWin !== destroyedWin) {
+        console.log(
+          `[router] Sender ${widString(destroyedWin)} destroyed; sending sys.Cancel to handler ${widString(channelObj.handlerWin)} on channel ${channelObj.channelNum}`
+        );
+        await sendXIntentIntentV0(X, routerWin, {
+          targetWin: channelObj.handlerWin,
+          senderWin: routerWin,
+          ...getChannelToSend(channelObj.handlerWin, channelObj),
+          payload: {
+            intent: "sys.Cancel",
+            disposition: "cancel",
+            reason: "connection reset by peer",
+          },
+        });
+      }
+      closeChannel(channelObj);
+    } else if (channelObj.handlerWin === destroyedWin) {
+      // Handler died: unbind handler and queue intent for re-forwarding after cleanup
+      console.log(
+        `[router] Handler ${widString(destroyedWin)} destroyed on channel ${channelObj.channelNum}; resetting handler`
+      );
+      channelObj.handlerWin = null;
+      if (channelObj.originalIntent) {
+        retryIntents.push(channelObj.originalIntent);
+      }
+    }
+  }
+
+  // 5. Re-forward intents whose handlers disappeared (now that registries are clean)
+  for (const pendingIntent of retryIntents) {
+    console.log(
+      `[router] Re-attempting to forward intent '${pendingIntent.payload?.intent}' after handler cleanup`
+    );
+    await tryToForwardTheIntent(pendingIntent);
+  }
+};
+
 module.exports = {
   handleXIntentIntentV0,
   handleXIntentEventV0,
   getAllMatchboxToml,
   parseWindowToml,
   parseWindowLighterToml,
+  xintentUnregisterWindow,
 };

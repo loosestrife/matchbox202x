@@ -2,9 +2,9 @@
 
 const {x11, X, rawX, root, routerWin} = require('.');
 const {atoms, widString, connectToRouter} = require('../x11-promises/xintent');
-const {handleXIntentIntentV0, handleXIntentEventV0, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml} = require('./xintent-router');
-const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0} = require('./xblob');
-const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0} = require('./xaudio');
+const {handleXIntentIntentV0, handleXIntentEventV0, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
+const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow} = require('./xblob');
+const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0, xaudioUnregisterWindow} = require('./xaudio');
 const {checkXSecurePolicy} = require('./xsecure');
 
 async function startRouter() {
@@ -143,9 +143,9 @@ async function startRouter() {
     }
 
     if (ev.name === 'DestroyNotify') {
-      //XIntentUnregisterWindow(ev.wid);
-      //XBlobUnlinkWindow(ev.wid);
-      //XAudioUnregisterWindow(ev.wid);
+      xintentUnregisterWindow(ev.wid);
+      xblobUnlinkWindow(ev.wid);
+      xaudioUnregisterWindow(ev.wid);
     }
 
     if (ev.name === 'SelectionClear' && ev.selection === atoms.XINTENT) {

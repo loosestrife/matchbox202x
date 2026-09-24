@@ -42,34 +42,42 @@ async function connectToRouter(X, root) {
     })
   );
 
-  // find the router window
-  const prop = await X.GetProperty(0, root, atoms.XINTENT, atoms.WINDOW, 0, 4);
-  if (!prop || !prop.data || prop.data.length < 4) return 0;
-
-  const routerWin = prop.data.readUInt32LE(0);
-
-  try {
-    await X.GetWindowAttributes(routerWin);
-    const nameProp = await X.GetProperty(
-      0,
-      routerWin,
-      atoms.WM_NAME,
-      atoms.STRING,
-      0,
-      8
-    );
-    if (
-      !nameProp ||
-      !nameProp.data ||
-      nameProp.data.toString("utf8") !== "XINTENT_ROUTER"
-    ) {
-      return 0;
+  const getRouterWin = async () => {
+    const prop = await X.GetProperty(0, root, atoms.XINTENT, atoms.WINDOW, 0, 4);
+    if (!prop || !prop.data || prop.data.length < 4) 
+      return;
+    const candidateRouterWin = prop.data.readUInt32LE(0);
+    try {
+      await X.GetWindowAttributes(candidateRouterWin);
+      const nameProp = await X.GetProperty(
+        0,
+        candidateRouterWin,
+        atoms.WM_NAME,
+        atoms.STRING,
+        0,
+        8
+      );
+      if (
+        !nameProp ||
+        !nameProp.data ||
+        nameProp.data.toString("utf8") != "XINTENT_ROUTER"
+      ) {
+        return;
+      }
+    } catch (err) {
+      return;
     }
-  } catch (err) {
-    return 0;
+    module.exports.routerWin = candidateRouterWin;
   }
-
-  return routerWin;
+  X.on('event', async ev => {
+    if (ev.name === 'DestroyNotify' && ev.wid == module.exports.routerWin) {
+      module.exports.routerWin = undefined;
+    }
+    if (ev.name === 'PropertyNotify' && ev.wid === root && ev.atom === atoms.XINTENT) {
+      await getRouterWin();
+    }
+  });
+  await getRouterWin();
 }
 
 /**

@@ -11,7 +11,7 @@ console.log(TOML.stringify(xintentServicesManifesto));
 
 async function startLighter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
-  const routerWin = await xintent.connectToRouter(X, root);
+  await xintent.connectToRouter(X, root);
 
   const lighterWin = X.AllocID();
   X.CreateWindow(
@@ -39,7 +39,7 @@ async function startLighter() {
         console.error(`got unknown message type atom ${ev.message_type}`);
         return;
       }
-      const xintentIntent = await xintent.parseXIntentIntentV0(X, routerWin, ev);
+      const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
       const payload = xintentIntent.payload;
       if(payload.intent != "sys.Launch"){
         console.log("this only responds to sys.Launch");
