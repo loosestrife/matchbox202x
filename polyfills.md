@@ -123,7 +123,8 @@ anyway
 * * server will still have to issue channels, then keep in memory who is on what channel forever, until the windows on the channel are destroyed
 * * the client will have to know the window and txId from the other client and have to track DestroyNotification from the other client.  The client will only know the other client still existed from the beginning, from, the fact that it recieved a message with `{reply: true}` and then didnt recieve a message with `{disposition: final/error/cancel}` or see the router go down.  However, if the client is told the other client exists and presented this txId, it could watch that window for DestroyNotify and stream `{event: ui.Paste}` to it without any server channels being leaked
 * the existence of an active channels table is essential to the intent redirection feature, because the active channels table tells the intent redirector app what channels are active to have their initial intent redirected
-* so there is a small window for a complex system by which `{event: ui.Paste}` can be streamed back without an active channels table.  It depends on clients watching each other for DestroyNotify and knowing each others window id and txId.  Instead of becomplicating the clients, we use an active channel to designate that the client is listening on the channel.
+* so there is a small window for a complex system by which `{event: ui.Paste}` can be streamed back without an active channels table, but depending on clients watching each other for DestroyNotify and knowing each others window id and txId.  Instead of becomplicating the clients, we use an active channel to designate that the client is listening on the channel.
+* however, both sides can be sure of who theyre talking to once they both have the signed senderWin:txId:timestamp:senderPublicKey:recieverPublicKey
 
 ## Why not let the client atomically claim an atom then give that atom to the XBLOB host
 * using XInterAtom, it leaks atoms
