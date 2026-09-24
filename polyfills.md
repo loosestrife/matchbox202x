@@ -45,7 +45,7 @@ note that
 # XBLOB V0
 an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
 ```js
-{xblobType, mimeType, size, name, data, _dataType}
+{xblobType, type, size, name, data, _dataType}
 ```
 * _dataType is one of text, json, base64
 * xblobType is one of File, Blob, ReadableStream, MediaStream
