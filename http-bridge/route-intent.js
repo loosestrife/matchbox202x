@@ -24,6 +24,24 @@ const routeIntent = async (req, res) => {
     txId,
   });
   if(payload.reply){
+    const BOUNDARY = 'MatchboxFrameBoundary_' + Date.now().toString(16);
+    const writeJsonFrame = (res, data) => res.write(`--${BOUNDARY}
+Content-Type: application/json
+Content-Disposition: inline
+
+${JSON.stringify(data, null, 2)}
+
+`.split('\n').join('\r\n')
+    );
+    const writeBlobFrame = (res, blobBuffer, contentType = 'application/octet-stream') => {
+      res.write(`--${BOUNDARY}
+Content-Type: ${contentType}
+${filename? `Content-Disposition: attachment; filename="${filename}`:'Content-Disposition: inline'}
+
+`.split('\n').join('\r\n'));
+      res.write(blobBuffer);
+      res.write('\r\n');
+    };
     for await (const [ev] of on(X, 'event')) {
       if (ev.type == 33 &&
         [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) && 
@@ -31,8 +49,30 @@ const routeIntent = async (req, res) => {
       ) {
         const { payload: eventData, payloadAtom } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
         console.log('[EVENT RECEIVED]', eventData);
-        if(eventData.disposition == 'final'){
-          res.status(200).json(eventData);
+
+        // 1. Stream JSON frame[cite: 8]
+        writeJsonFrame(res, eventData);
+
+        // 2. Stream Data Blob frame if ev.data[3] contains a valid blob atom/descriptor[cite: 8]
+        const blobAtom = ev.data[3];
+        if (blobAtom) {
+          try {
+            // Read binary buffer associated with blob atom[cite: 8]
+            const blobBuffer = await xintent.XBlobRead(X, xintent.routerWin, blobAtom);
+            xintent.XBlobUnlink(X, xintent.routerWin, clientWin, blobAtom);
+            if (blobBuffer && blobBuffer.length > 0) {
+              const contentType = eventData.type;
+              writeBlobFrame(res, blobBuffer, contentType, filename);
+            }
+          } catch (err) {
+            logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom}: ${err.message}`);
+          }
+        }
+
+        // 3. Finalize stream when disposition is final[cite: 7, 8]
+        if (eventData.disposition === 'final') {
+          res.write(`--${BOUNDARY}--\r\n`);
+          res.end();
           return;
         }
       }
