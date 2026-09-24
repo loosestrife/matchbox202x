@@ -94,7 +94,9 @@ async function startRouter() {
 
   rawX.on('event', async (ev) => {
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
-      console.log("got ClientMessage on routerWin", ev);
+      console.log(`got ClientMessage type ${
+        Object.keys(atoms).find(name => atoms[name] === ev.message_type) ?? ev.message_type
+      } sequence number ${ev.seq}`);
       if (ev.message_type in dispatchTable){
         const clientId = ev.data[0];
         enqueueClientTask(clientId, async () => {

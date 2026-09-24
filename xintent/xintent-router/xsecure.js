@@ -26,7 +26,7 @@ const checkXSecurePolicy = async (context, parsed, ev) => {
   } else {
     user = 'rando';
   }
-  console.log('checking security policy with context', context);
+  //console.log('checking security policy with context', context);
   let policy = 'accept';
   for(const rule of rules){
     if(rule.action == context.action){

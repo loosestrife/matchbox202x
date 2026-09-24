@@ -130,9 +130,10 @@ async function main() {
   const dataBlobAtom = await XBlobCreate(X, routerWin, clientWin, xblobPayload);
 
   // Step B: Transfer ownership of content blob to routerWin
-  await XBlobTransfer(X, routerWin, clientWin, dataBlobAtom, routerWin);
+  XBlobTransfer(X, routerWin, clientWin, dataBlobAtom, routerWin);
 
   // Step C: Dispatch ui.Copy intent referencing dataBlobAtom
+  console.log("blob transferred.  sending intent");
   await sendXIntentIntentV0(X, routerWin, {
     senderWin: clientWin,
     payload: {

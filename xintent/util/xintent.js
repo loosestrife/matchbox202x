@@ -175,14 +175,14 @@ async function sendXIntentIntentV0(
   // 2. Transfer or Grant blob rights BEFORE dispatching intent message
   if (targetWin !== senderWin) {
     if (unlinkPayloadBlob) {
-      await XBlobTransfer(X, routerWin, senderWin, payloadAtom, targetWin);
+      XBlobTransfer(X, routerWin, senderWin, payloadAtom, targetWin);
     } else {
-      await XBlobGrant(X, routerWin, senderWin, payloadAtom, targetWin);
+      XBlobGrant(X, routerWin, senderWin, payloadAtom, targetWin);
     }
   }
 
   // 3. Dispatch the intent frame
-  await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [
+  XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [
     senderWin,
     payloadAtom,
     txId ?? 0,
