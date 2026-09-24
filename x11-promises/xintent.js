@@ -132,8 +132,24 @@ async function XBlobCreate(
   ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
 
   const blobAtom = responseEv.data[1];
-  const payloadBuf = Buffer.from(JSON.stringify(blobData, null, 2));
-  X.ChangeProperty(0, routerWin, blobAtom, atoms.STRING, 8, payloadBuf);
+  const payloadString = Buffer.from(JSON.stringify(blobData, null, 2));
+  const buffer = Buffer.from(payloadString, 'utf8');
+  // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
+  const CHUNK_SIZE = 32768;
+  for (let offset = 0; offset < buffer.length; offset += CHUNK_SIZE) {
+    const chunk = buffer.subarray(offset, offset + CHUNK_SIZE);
+    // Mode 0 = PropModeReplace (first chunk resets/creates the prop)
+    // Mode 2 = PropModeAppend  (subsequent chunks append)
+    const mode = offset === 0 ? 0 : 2;
+    X.ChangeProperty(
+      mode,
+      routerWin,
+      blobAtom,
+      atoms.STRING,
+      8,
+      chunk
+    );
+  }
   return blobAtom;
 }
 
@@ -206,7 +222,7 @@ async function XBlobRead(X, routerWin, blobAtom) {
     blobAtom,
     atoms.STRING,
     0,
-    100000000
+    4_000_000_000
   );
   if (prop && prop.data) {
     return JSON.parse(prop.data.toString());

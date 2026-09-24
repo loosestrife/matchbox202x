@@ -1,5 +1,5 @@
 // index.js
-const x11 = require('../util/x11-promises');
+const x11 = require('../x11-promises/x11-promises');
 
 (async () => {
   Object.assign(module.exports, await x11.createClientWithPromises(), { x11 });

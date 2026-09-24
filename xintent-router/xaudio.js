@@ -1,5 +1,5 @@
 // xaudio.js
-const {atoms, widString} = require('../util/xintent');
+const {atoms, widString} = require('../x11-promises/xintent.js');
 const {X, root, routerWin} = require('./index.js');
 
 const xaudioOutputs = [];

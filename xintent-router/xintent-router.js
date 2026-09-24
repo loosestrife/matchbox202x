@@ -10,7 +10,7 @@ const {
   widString,
   parseXIntentIntentV0,
   XClientMessage,
-} = require("../util/xintent");
+} = require("../x11-promises/xintent");
 const { x11, X, root, routerWin } = require("./index");
 const {
   implicitXBlobGrant,

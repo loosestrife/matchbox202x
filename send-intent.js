@@ -1,6 +1,6 @@
 // send-intent.js
-const x11 = require('./util/x11-promises');
-const {connectToRouter, createClientWindow, sendXIntentIntentV0, atoms} = require('./util/xintent');
+const x11 = require('./x11-promises/x11-promises');
+const {connectToRouter, createClientWindow, sendXIntentIntentV0, atoms} = require('./x11-promises/xintent');
 
 async function sendIntent() {
   const { X, root } = await x11.createClientWithPromises();

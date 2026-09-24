@@ -7,8 +7,8 @@ const {
   XBlobRead,
   atoms,
   widString,
-} = require('./util/xintent');
-const x11 = require('./util/x11-promises');
+} = require('./x11-promises/xintent');
+const x11 = require('./x11-promises/x11-promises');
 
 let currentClipboard = null; // Holds { type, _dataType, data, name }
 
@@ -36,7 +36,13 @@ async function convertImageBuffer(inputBuffer, targetFormat) {
       }
     });
 
-    proc.on('error', (err) => reject(new Error(`Failed to start 'convert': ${err.message}`)));
+    proc.on('error', (err) => {
+      if (err.code === 'ENOENT') {
+        reject(new Error(`'convert' (ImageMagick) is not installed. Run 'sudo apt install imagemagick' or 'pacman -S imagemagick'.`));
+      } else {
+        reject(new Error(`Failed to start 'convert': ${err.message}`));
+      }
+    });
 
     proc.stdin.write(inputBuffer);
     proc.stdin.end();
@@ -44,15 +50,37 @@ async function convertImageBuffer(inputBuffer, targetFormat) {
 }
 
 /**
+ * Writes data to an X11 window property in chunks to prevent 16-bit packet length overflow
+ * (>65,535 bytes). Uses Mode 0 (Replace) for the first chunk, and Mode 2 (Append) for subsequent chunks.
+ */
+function changePropertyChunked(X, window, property, type, format, data, chunkSize = 60000) {
+  if (data.length <= chunkSize) {
+    X.ChangeProperty(0, window, property, type, format, data);
+    return;
+  }
+
+  let offset = 0;
+  let mode = 0; // 0 = Replace
+
+  while (offset < data.length) {
+    const end = Math.min(offset + chunkSize, data.length);
+    const chunk = data.subarray(offset, end);
+    X.ChangeProperty(mode, window, property, type, format, chunk);
+    mode = 2; // 2 = Append
+    offset = end;
+  }
+}
+
+/**
  * Builds standard 32-byte X11 SelectionNotify event buffer (Opcode 31)
  */
 function buildSelectionNotifyBuffer(time, requestor, selection, target, property) {
   const ev = Buffer.alloc(32);
-  ev.writeInt8(31, 0);           // Event Opcode 31 = SelectionNotify
-  ev.writeInt8(0, 1);            // Unused
-  ev.writeUInt16LE(0, 2);        // Sequence Number
-  ev.writeUInt32LE(time, 4);     // Timestamp
-  ev.writeUInt32LE(requestor, 8);// Requestor Window XID
+  ev.writeInt8(31, 0);            // Event Opcode 31 = SelectionNotify
+  ev.writeInt8(0, 1);             // Unused
+  ev.writeUInt16LE(0, 2);         // Sequence Number
+  ev.writeUInt32LE(time, 4);      // Timestamp
+  ev.writeUInt32LE(requestor, 8); // Requestor Window XID
   ev.writeUInt32LE(selection, 12);// Selection Atom (CLIPBOARD)
   ev.writeUInt32LE(target, 16);   // Target Atom
   ev.writeUInt32LE(property, 20); // Property Atom (0 = Refused/Failed)
@@ -208,7 +236,7 @@ async function startDaemon() {
           const buf = Buffer.alloc(supportedTargets.length * 4);
           supportedTargets.forEach((atomId, idx) => buf.writeUInt32LE(atomId, idx * 4));
 
-          X.ChangeProperty(0, requestor, targetProp, atoms.ATOM, 32, buf);
+          changePropertyChunked(X, requestor, targetProp, atoms.ATOM, 32, buf);
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);
           console.log(` -> Responded with ${supportedTargets.length} supported TARGETS`);
@@ -220,7 +248,7 @@ async function startDaemon() {
         // ---------------------------------------------------------------------
         if (isText && [atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
           const textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
-          X.ChangeProperty(0, requestor, targetProp, targetAtom, 8, textBuf);
+          changePropertyChunked(X, requestor, targetProp, targetAtom, 8, textBuf);
 
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);
@@ -244,7 +272,8 @@ async function startDaemon() {
             outputBuf = await convertImageBuffer(rawInputBuf, targetName);
           }
 
-          X.ChangeProperty(0, requestor, targetProp, targetAtom, 8, outputBuf);
+          // Chunk the payload to avoid X11 16-bit packet length overflow (>65,535 bytes)
+          changePropertyChunked(X, requestor, targetProp, targetAtom, 8, outputBuf);
 
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);

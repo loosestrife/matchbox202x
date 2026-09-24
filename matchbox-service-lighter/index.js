@@ -3,8 +3,8 @@ const { spawn } = require('child_process');
 const util = require('util');
 const TOML = require('@iarna/toml');
 const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
-const x11 = require('../util/x11-promises');
-const xintent = require('../util/xintent');
+const x11 = require('../x11-promises/x11-promises');
+const xintent = require('../x11-promises/xintent');
 
 
 console.log(TOML.stringify(xintentServicesManifesto));

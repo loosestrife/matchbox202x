@@ -1,7 +1,7 @@
 // xintent-router/index.js
 
 const {x11, X, rawX, root, routerWin} = require('.');
-const {atoms, widString, connectToRouter} = require('../util/xintent');
+const {atoms, widString, connectToRouter} = require('../x11-promises/xintent');
 const {handleXIntentIntentV0, handleXIntentEventV0, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml} = require('./xintent-router');
 const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0} = require('./xblob');
 const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0} = require('./xaudio');

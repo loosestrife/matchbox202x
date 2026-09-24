@@ -1,5 +1,5 @@
 // xblob.js
-const {atoms, widString, parseJsonFrame} = require('../util/xintent');
+const {atoms, widString, parseJsonFrame} = require('../x11-promises/xintent.js');
 const {X, rawX, x11, root, routerWin} = require('./index.js');
 
 const xblobRegistry = {};

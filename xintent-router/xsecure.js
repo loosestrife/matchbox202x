@@ -2,7 +2,7 @@
 // like iptables or aws waf.  deep packet inspecting firewall
 
 const fs = require('fs');
-const {atoms, widString} = require('../util/xintent');
+const {atoms, widString} = require('../x11-promises/xintent.js');
 const {X, root, routerWin} = require('./index.js');
 
 const authentication = {};

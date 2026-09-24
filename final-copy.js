@@ -6,8 +6,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { connectToRouter, createClientWindow, sendXIntentIntentV0, XBlobCreate, XBlobTransfer } = require('./util/xintent');
-const x11 = require('./util/x11-promises');
+const { connectToRouter, createClientWindow, sendXIntentIntentV0, XBlobCreate, XBlobTransfer } = require('./x11-promises/xintent');
+const x11 = require('./x11-promises/x11-promises');
 
 const MIME_TYPES = {
   '.png': 'image/png',
