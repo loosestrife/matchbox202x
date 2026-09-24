@@ -11,7 +11,7 @@ an XIntentJsonFrame is a special XClientMessage
 | message_type: Atom("MESSAGE_TYPE_ATOM")                               |
 | format      : 32                                                      |
 | data.l[0]   : Sender Window XID                                       |
-| data.l[1]   : Atom where the reciever can find the json payload       |
+| data.l[1]   : Payload XBLOB atom                                      |
 ```
 
 ## XIntentNonJsonFrame
@@ -25,6 +25,22 @@ an XIntentNonJsonFrame is a special XClientMessage
 | format      : 32                                                      |
 | data.l[0]   : Sender Window XID                                       |
 ```
+
+## Limitations
+It is not possible to send an xintent without registering a window, even for fire and forget intents like `ui.Copy`.  This is because XClientMessage is 20 bytes and in order to create a blob to hold the intent payload we must either coordinate with the XBlob server or do some dance where the XBlob server advertises possible blob atoms and we grab one.  In order to send an xintent, we need to 
+```C
+int win = XAllocId();
+XCreateWindow(win);
+int payload = await XBlobCreate(win);
+int blobHost = await XGetSelectionOwner(payload);
+XSetProperty(dpy, blobHost, payload, atoms('STRING'), jsonPayload);
+XClientMessage(...{win, payload})
+```
+note that
+* any other protocol to get a blob atom will have as many round trips
+* the blobHost round trip is gratuitous in XINTENT V0 
+* XCreateWindow is not a round trip, so theres no point in not creating a window to have an ipc port
+* the cooperative security model in XSECURE V0 is going to look at the `_NET_WM_PID` on the window to decide security policy
 
 # XBLOB V0
 an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms

@@ -1,70 +1,133 @@
 // xintent.js
-const crypto = require('crypto');
-const x11 = require('./x11-promises');
+const crypto = require("crypto");
+const x11 = require("./x11-promises");
 
 const atoms = {};
-const widString = wid => '0x' + wid.toString(16);
+const widString = (wid) => "0x" + wid.toString(16);
 
 async function connectToRouter(X, root) {
-  const xintentAtom = await X.InternAtom(true, 'XINTENT');
-  if (!xintentAtom) return 0;
+  const requiredAtoms = ["XINTENT", "XINTENT_INTENT_V0"];
+  const requiredResults = await Promise.all(
+    requiredAtoms.map(async (atomName) => {
+      const atom = await X.InternAtom(true, atomName);
+      if (!atom) {
+        console.log(`required atom ${atomName} not on server`);
+      }
+      atoms[atomName] = atom;
+      return atom;
+    })
+  );
+  if (requiredResults.some((atom) => !atom)) {
+    return 0;
+  }
 
-  atoms.STRING = await X.InternAtom(false, 'STRING');
-  atoms.WINDOW = await X.InternAtom(false, 'WINDOW');
-  atoms.WM_NAME = await X.InternAtom(false, 'WM_NAME');
-  atoms.XINTENT = xintentAtom;
+  const protocolAtoms = [
+    "STRING",
+    "WINDOW",
+    "WM_NAME",
+    "WM_CLASS",
+    "_NET_WM_PID",
+    "CARDINAL",
 
+    "XBLOB_CREATE_V0",
+    "XBLOB_CREATE_RESPONSE_V0",
+    "XBLOB_GRANT_V0",
+    "XBLOB_UNLINK_V0",
+    "XBLOB_TRANSFER_V0",
+  ];
+
+  await Promise.all(
+    protocolAtoms.map(async (atomName) => {
+      atoms[atomName] = await X.InternAtom(false, atomName);
+    })
+  );
+
+  // find the router window
   const prop = await X.GetProperty(0, root, atoms.XINTENT, atoms.WINDOW, 0, 4);
   if (!prop || !prop.data || prop.data.length < 4) return 0;
-  
+
   const routerWin = prop.data.readUInt32LE(0);
 
   try {
     await X.GetWindowAttributes(routerWin);
-    const nameProp = await X.GetProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 0, 8);
-    if (!nameProp || !nameProp.data || !(nameProp.data.toString('utf8') === 'XINTENT_ROUTER')) {
+    const nameProp = await X.GetProperty(
+      0,
+      routerWin,
+      atoms.WM_NAME,
+      atoms.STRING,
+      0,
+      8
+    );
+    if (
+      !nameProp ||
+      !nameProp.data ||
+      nameProp.data.toString("utf8") !== "XINTENT_ROUTER"
+    ) {
       return 0;
     }
   } catch (err) {
     return 0;
   }
 
-  const xintentV0Atom = await X.InternAtom(true, 'XINTENT_INTENT_V0');
-  if (!xintentV0Atom) return 0;
-
-  atoms.XINTENT_INTENT_V0 = xintentV0Atom;
-  atoms.XBLOB_CREATE_V0 = await X.InternAtom(false, 'XBLOB_CREATE_V0');
-  atoms.XBLOB_CREATE_RESPONSE_V0 = await X.InternAtom(false, 'XBLOB_CREATE_RESPONSE_V0');
-  atoms.XBLOB_GRANT_V0 = await X.InternAtom(false, 'XBLOB_GRANT_V0');
-  atoms.XBLOB_UNLINK_V0 = await X.InternAtom(false, 'XBLOB_UNLINK_V0');
-
   return routerWin;
+}
+
+/**
+ * Creates a minimal 1x1 X11 IPC window pre-configured with _NET_WM_PID
+ * and WM_CLASS so XSECURE V0 can inspect client credentials.
+ */
+async function createClientWindow(X, root, name = "xintent-client") {
+  const clientWin = X.AllocID();
+
+  // Create 1x1 unmapped window (0 round-trips)
+  X.CreateWindow(clientWin, root, 0, 0, 1, 1, 0, 0, 0, 0, {
+    eventMask: x11.eventMask.PropertyChange,
+  });
+
+  const pidBuf = Buffer.alloc(4);
+  pidBuf.writeUInt32LE(process.pid, 0);
+  X.ChangeProperty(0, clientWin, atoms._NET_WM_PID, atoms.CARDINAL, 32, pidBuf);
+
+  const wmClass = Buffer.from(`${name}\0${name}\0`);
+  X.ChangeProperty(0, clientWin, atoms.WM_CLASS, atoms.STRING, 8, wmClass);
+
+  return clientWin;
 }
 
 function buildClientMessageBuffer(targetWin, message_type, data) {
   const ev = Buffer.alloc(32);
   ev.writeInt8(33, 0); // ClientMessage
-  ev.writeInt8(32, 1); // 32 bit format
+  ev.writeInt8(32, 1); // 32-bit format
   ev.writeUInt32LE(targetWin, 4);
   ev.writeUInt32LE(message_type, 8);
-  for (let i = 0; (i < data.length) && (i < 5); i++) {
+  for (let i = 0; i < data.length && i < 5; i++) {
     ev.writeUInt32LE(data[i], 12 + 4 * i);
   }
   return ev;
 }
 
-function XClientMessage(X, targetWin, message_type, data) {
+async function XClientMessage(X, targetWin, message_type, data) {
   const ev = buildClientMessageBuffer(targetWin, message_type, data);
   return X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
 }
 
-async function XBlobCreate(X, routerWin, senderWin, blobData, timeoutMs = 5000) {
+async function XBlobCreate(
+  X,
+  routerWin,
+  senderWin,
+  blobData,
+  timeoutMs = 5000
+) {
   const cookie = crypto.randomBytes(4).readUInt32LE(0);
-  const evBuf = buildClientMessageBuffer(routerWin, atoms.XBLOB_CREATE_V0, [senderWin, cookie]);
+  const evBuf = buildClientMessageBuffer(routerWin, atoms.XBLOB_CREATE_V0, [
+    senderWin,
+    cookie,
+  ]);
   const responseEv = await X.seekResponsePacket(
-    ev => ev.type == 33 && 
-      ev.message_type == atoms.XBLOB_CREATE_RESPONSE_V0 && 
-      ev.data[2] == cookie,
+    (ev) =>
+      ev.type === 33 &&
+      ev.message_type === atoms.XBLOB_CREATE_RESPONSE_V0 &&
+      ev.data[2] === cookie,
     timeoutMs
   ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
 
@@ -75,32 +138,82 @@ async function XBlobCreate(X, routerWin, senderWin, blobData, timeoutMs = 5000) 
 }
 
 async function XBlobGrant(X, routerWin, senderWin, blobAtom, granteeWin) {
-  XClientMessage(X, routerWin, atoms.XBLOB_GRANT_V0, [senderWin, blobAtom, granteeWin]);
+  return XClientMessage(X, routerWin, atoms.XBLOB_GRANT_V0, [
+    senderWin,
+    blobAtom,
+    granteeWin,
+  ]);
 }
 
 async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
-  XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [senderWin, blobAtom]);
+  return XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [
+    senderWin,
+    blobAtom,
+  ]);
 }
 
-async function sendXIntentIntentV0(X, routerWin, { targetWin, senderWin, txId, payload, unlinkPayloadBlob = true }) {
+async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
+  return XClientMessage(X, routerWin, atoms.XBLOB_TRANSFER_V0, [
+    senderWin,
+    blobAtom,
+    granteeWin,
+  ]);
+}
+
+async function sendXIntentIntentV0(
+  X,
+  routerWin,
+  { targetWin, senderWin, txId, payload, unlinkPayloadBlob = true }
+) {
   if (!targetWin) {
     targetWin = routerWin;
   }
+
+  // 1. Create payload blob owned by senderWin
   const payloadAtom = await XBlobCreate(X, routerWin, senderWin, payload);
-  XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [senderWin, payloadAtom, txId ?? 0]);
-  if (unlinkPayloadBlob) {
-    XBlobUnlink(X, routerWin, senderWin, payloadAtom);
+
+  // 2. Transfer or Grant blob rights BEFORE dispatching intent message
+  if (targetWin !== senderWin) {
+    if (unlinkPayloadBlob) {
+      await XBlobTransfer(X, routerWin, senderWin, payloadAtom, targetWin);
+    } else {
+      await XBlobGrant(X, routerWin, senderWin, payloadAtom, targetWin);
+    }
   }
-  console.log(`[intent-router] Dispatched ${payload.intent || 'intent'} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`);
+
+  // 3. Dispatch the intent frame
+  await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [
+    senderWin,
+    payloadAtom,
+    txId ?? 0,
+  ]);
+
+  console.log(
+    `[intent-client] Dispatched ${payload.intent || "intent"} to ${widString(targetWin)} (payload blob ${widString(payloadAtom)})`
+  );
   return payloadAtom;
 }
 
 async function XBlobRead(X, routerWin, blobAtom) {
-  const prop = await X.GetProperty(0, routerWin, blobAtom, atoms.STRING, 0, 100000000);
+  let hostWin = await X.GetSelectionOwner(blobAtom);
+  if (!hostWin) {
+    hostWin = routerWin;
+  }
+
+  const prop = await X.GetProperty(
+    0,
+    hostWin,
+    blobAtom,
+    atoms.STRING,
+    0,
+    100000000
+  );
   if (prop && prop.data) {
     return JSON.parse(prop.data.toString());
   } else {
-    throw new Error(`XBlobRead: no data found at ${widString(blobAtom)} on window ${widString(routerWin)}`);
+    throw new Error(
+      `XBlobRead: no data found at ${widString(blobAtom)} on window ${widString(hostWin)}`
+    );
   }
 }
 
@@ -111,13 +224,18 @@ async function parseJsonFrame(X, routerWin, ev) {
 }
 
 async function parseXIntentIntentV0(X, routerWin, ev) {
-  const { senderWin, payload, payloadAtom } = await parseJsonFrame(X, routerWin, ev);
+  const { senderWin, payload, payloadAtom } = await parseJsonFrame(
+    X,
+    routerWin,
+    ev
+  );
   const txId = ev.data[2];
   return { targetWin: ev.wid, senderWin, txId, payload, payloadAtom };
 }
 
 module.exports = {
   connectToRouter,
+  createClientWindow,
   atoms,
   widString,
   parseJsonFrame,
@@ -127,5 +245,6 @@ module.exports = {
   XBlobCreate,
   XBlobGrant,
   XBlobUnlink,
+  XBlobTransfer,
   XBlobRead,
 };

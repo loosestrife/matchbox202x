@@ -149,7 +149,11 @@ function wrapPromiseXClient(client) {
 
   return new Proxy(client, {
     get(target, prop) {
-      if (prop === 'seekResponsePacket') {
+      if (prop == 'barrier') {
+        // GetInputFocus acts as the wire barrier
+        return () => dispatchRequest('GetInputFocus', []).then(() => {});
+      }
+      if (prop == 'seekResponsePacket') {
         return (predicate, timeoutMs = 5000) => {
           return new Proxy(target, {
             get(subTarget, subProp) {

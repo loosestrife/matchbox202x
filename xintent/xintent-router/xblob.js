@@ -1,28 +1,41 @@
 // xblob.js
 const {atoms, widString, parseJsonFrame} = require('../util/xintent');
-const {X, rawX, root, routerWin} = require('./index.js');
+const {X, rawX, x11, root, routerWin} = require('./index.js');
 
 const xblobRegistry = {};
+const xblobAtoms = [];
+const xblobAtomAssignments = [];
 const xblobHosts = {};
 
 const handleXBlobCreateV0 = {
   parse: ev => {
     const targetWin = ev.wid;
-    const [senderWin, blobId] = ev.data;
-    return {targetWin, senderWin, blobId};
+    const [senderWin, cookie] = ev.data;
+    return {targetWin, senderWin, cookie};
   },
   securityContext: parsed => {
     return {
       source: {window: parsed.senderWin},
       action: 'XBlobCreate',
-      resources: [{XBlob: parsed.blobId}],
-    }
+    };
   },
-  accept: parsed => {
-    console.log(`XBlobCreate creating ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
-    xblobCreate(parsed.blobId, parsed.senderWin);
+  accept: async parsed => {
+    const blobAtom = await xblobCreate(parsed.senderWin);
+    console.log(`XBlobCreate created ${widString(blobAtom)} from ${widString(parsed.senderWin)}`);
+
+    const responseEv = Buffer.alloc(32);
+    responseEv.writeInt8(33, 0); // ClientMessage
+    responseEv.writeInt8(32, 1); // 32-bit format
+    responseEv.writeUInt32LE(parsed.senderWin, 4);
+    responseEv.writeUInt32LE(atoms.XBLOB_CREATE_RESPONSE_V0, 8);
+    responseEv.writeUInt32LE(routerWin, 12);     // data.l[0] = senderWin (router)
+    responseEv.writeUInt32LE(blobAtom, 16);      // data.l[1] = allocated blob atom
+    responseEv.writeUInt32LE(parsed.cookie, 20); // data.l[2] = client cookie
+
+    await X.SendEvent(parsed.senderWin, false, x11.eventMask.NoEventMask, responseEv);
   },
 };
+
 const handleXBlobGrantV0 = {
   parse: ev => {
     const targetWin = ev.wid;
@@ -38,13 +51,14 @@ const handleXBlobGrantV0 = {
         exists: parsed.blobId in xblobRegistry,
         authorized: !!(xblobRegistry[parsed.blobId]?.links.filter(win => sameClient(parsed.senderWin, win)).length),
       }],
-    }
+    };
   },
   accept: parsed => {
     console.log(`XBlobGrant granting ${widString(parsed.blobId)} to ${widString(parsed.grantee)} from ${widString(parsed.senderWin)}`);
     implicitXBlobGrant(parsed.blobId, parsed.grantee);
   },
 };
+
 const handleXBlobUnlinkV0 = {
   parse: ev => {
     const targetWin = ev.wid;
@@ -56,33 +70,76 @@ const handleXBlobUnlinkV0 = {
       source: {window: parsed.senderWin},
       action: 'XBlobUnlink',
       resources: [{XBlob: parsed.blobId}],
-    }
+    };
   },
   accept: async parsed => {
     console.log(`XBlobUnlink unlinking ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
     await xblobUnlink(parsed.blobId, parsed.senderWin);
   },
 };
+
+const handleXBlobTransferV0 = {
+  parse: ev => {
+    const targetWin = ev.wid;
+    const [senderWin, blobId, grantee] = ev.data;
+    return { targetWin, senderWin, blobId, grantee };
+  },
+  securityContext: parsed => {
+    return {
+      source: { window: parsed.senderWin },
+      action: 'XBlobTransfer',
+      resources: [{
+        XBlob: parsed.blobId,
+        exists: parsed.blobId in xblobRegistry,
+        authorized: !!(xblobRegistry[parsed.blobId]?.links.filter(win => sameClient(parsed.senderWin, win)).length),
+      }],
+    };
+  },
+  accept: async parsed => {
+    console.log(`XBlobTransfer transferring ${widString(parsed.blobId)} from ${widString(parsed.senderWin)} to ${widString(parsed.grantee)}`);
+    await implicitXBlobTransfer(parsed.blobId, parsed.senderWin, parsed.grantee);
+  },
+};
+
 const handleXAudioNodeRegisterV0 = {
   parse: async ev => {
     const {senderWin, payload} = await parseJsonFrame(X, routerWin, ev);
     return {senderWin, hostName: payload.hostName};
   },
   securityContext: parsed => {
-    return {source: {window: parsed.senderWin}, action: 'XAudioNodeRegister'}
+    return {source: {window: parsed.senderWin}, action: 'XAudioNodeRegister'};
   },
   accept: parsed => {
     xblobHosts[parsed.hostName] = parsed.senderWin;
   }
 };
 
+const xblobCreate = async (senderWin) => {
+  const blobTrackingData = { links: [senderWin] };
 
-const xblobCreate = (blobId, senderWin) => {
-  xblobRegistry[blobId] = {links: [senderWin]};
+  let blobIdx = xblobAtomAssignments.findIndex(slot => slot);
+  if (blobIdx === -1) {
+    blobIdx = xblobAtomAssignments.length;
+  }
+  let blobAtom = xblobAtoms[blobIdx];
+  if (!blobAtom) {
+    blobAtom = await X.InternAtom(false, `XBLOB_BLOB_SLOT_${blobIdx}`);
+    xblobAtoms[blobIdx] = blobAtom;
+    // initially claim ownership for this XAudioNode
+    X.SetSelectionOwner(routerWin, blobAtom, 0);
+  }
+  xblobAtomAssignments[blobIdx] = blobTrackingData;
+  xblobRegistry[blobAtom] = blobTrackingData;
+
+  return blobAtom;
 };
+
 const implicitXBlobGrant = (blobId, grantee) => {
-  xblobRegistry[blobId].links.push(grantee);
+  if (xblobRegistry[blobId]) {
+    xblobRegistry[blobId].links.push(grantee);
+  }
 };
+
 const xblobUnlink = async (blobId, unlinkWin) => {
   const regEntry = xblobRegistry[blobId];
   if (!regEntry) {
@@ -95,21 +152,25 @@ const xblobUnlink = async (blobId, unlinkWin) => {
   } else {
     regEntry.links.splice(link, 1);
   }
+
   if (regEntry.links.length === 0) {
     console.log(`deleting unlinked blob ${widString(blobId)}`);
     await X.DeleteProperty(routerWin, blobId);
     delete xblobRegistry[blobId];
+
+    const blobIdx = xblobAtoms.indexOf(blobId);
+    if (blobIdx !== -1) {
+      xblobAtomAssignments[blobIdx] = undefined;
+    }
   }
 };
+
 const implicitXBlobTransfer = async (blobId, fromWin, toWin) => {
   implicitXBlobGrant(blobId, toWin);
   await xblobUnlink(blobId, fromWin);
 };
 
-
-
 // Modern Xorg hands out 21-bit masks (IDs like 0x3a00003 with base 0x3a00000).
-// Fallback only if the wrapper doesn't expose the setup reply.
 const DEFAULT_MASK = 0x1fffff;
 let mask;
 const resourceMask = () => {
@@ -126,11 +187,11 @@ const sameClient = (a, b) => {
   return ca != null && ca == cb;
 };
 
-
 module.exports = {
   handleXBlobCreateV0,
   handleXBlobGrantV0,
   handleXBlobUnlinkV0,
+  handleXBlobTransferV0,
   handleXAudioNodeRegisterV0,
   xblobCreate,
   implicitXBlobGrant,
