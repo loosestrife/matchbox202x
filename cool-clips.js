@@ -5,7 +5,10 @@ const {
   connectToRouter,
   createClientWindow,
   parseXIntentIntentV0,
+  XBlobCreate,
   XBlobRead,
+  sendXIntentEventV0,
+  sendXIntentIntentV0,
   atoms,
   widString,
 } = xintent;
@@ -18,7 +21,6 @@ let currentClipboard = null; // Holds { type, _dataType, data, name }
  */
 async function convertImageBuffer(inputBuffer, targetFormat) {
   return new Promise((resolve, reject) => {
-    // Format e.g. "image/jpeg" -> "jpeg", "image/png" -> "png"
     const fmt = targetFormat.replace('image/', '').replace('x-', '');
     const proc = spawn('convert', ['-', `${fmt}:-`]);
 
@@ -39,7 +41,7 @@ async function convertImageBuffer(inputBuffer, targetFormat) {
 
     proc.on('error', (err) => {
       if (err.code === 'ENOENT') {
-        reject(new Error(`'convert' (ImageMagick) is not installed. Run 'sudo apt install imagemagick' or 'pacman -S imagemagick'.`));
+        reject(new Error(`'convert' (ImageMagick) is not installed.`));
       } else {
         reject(new Error(`Failed to start 'convert': ${err.message}`));
       }
@@ -52,7 +54,6 @@ async function convertImageBuffer(inputBuffer, targetFormat) {
 
 /**
  * Writes data to an X11 window property in chunks to prevent 16-bit packet length overflow
- * (>65,535 bytes). Uses Mode 0 (Replace) for the first chunk, and Mode 2 (Append) for subsequent chunks.
  */
 function changePropertyChunked(X, window, property, type, format, data, chunkSize = 60000) {
   if (data.length <= chunkSize) {
@@ -88,6 +89,69 @@ function buildSelectionNotifyBuffer(time, requestor, selection, target, property
   return ev;
 }
 
+/**
+ * Requests and fetches active X11 CLIPBOARD data from remote windows if cool-clips is not selection owner
+ */
+async function fetchRemoteX11Clipboard(X, daemonWin, targetAtom) {
+  return new Promise((resolve) => {
+    const propAtom = atoms.XINTENT_MATCHBOX_TOML; // Reuse existing known atom for property buffer
+    let timeoutId = null;
+
+    const selectionHandler = async (ev) => {
+      if (ev.type === 31 && ev.requestor === daemonWin) { // SelectionNotify
+        clearTimeout(timeoutId);
+        X.removeListener('event', selectionHandler);
+
+        if (ev.property === 0) {
+          return resolve(null); // Refused by owner
+        }
+
+        try {
+          const propData = await X.GetProperty(0, daemonWin, propAtom, 0, 0, 10000000); // Read property data
+          X.DeleteProperty(daemonWin, propAtom);
+          resolve(propData.data);
+        } catch {
+          resolve(null);
+        }
+      }
+    };
+
+    X.on('event', selectionHandler);
+
+    // Timeout safety if selection owner doesn't respond
+    timeoutId = setTimeout(() => {
+      X.removeListener('event', selectionHandler);
+      resolve(null);
+    }, 1000);
+
+    X.ConvertSelection(daemonWin, atoms.CLIPBOARD, targetAtom, propAtom, 0);
+  });
+}
+
+/**
+ * Returns current clipboard object, falling back to reading active X11 Selection Owner
+ */
+async function getActiveClipboardData(X, daemonWin) {
+  const owner = await X.GetSelectionOwner(atoms.CLIPBOARD);
+  
+  if (owner === daemonWin && currentClipboard) {
+    return currentClipboard;
+  }
+
+  if (owner !== 0) {
+    const remoteData = await fetchRemoteX11Clipboard(X, daemonWin, atoms.UTF8_STRING);
+    if (remoteData && remoteData.length > 0) {
+      return {
+        type: 'text/plain',
+        data: remoteData.toString('utf8'),
+        _dataType: 'text',
+      };
+    }
+  }
+
+  return currentClipboard || { type: 'text/plain', data: '', _dataType: 'text' };
+}
+
 async function startDaemon() {
   const { X, root } = await x11.createClientWithPromises();
   await connectToRouter(X, root);
@@ -97,10 +161,8 @@ async function startDaemon() {
     process.exit(1);
   }
 
-  // Create daemon window registered with _NET_WM_PID for XSECURE V0
   const daemonWin = await createClientWindow(X, root, 'ui.Copy-daemon');
 
-  // 1. Intern X11 Protocol & Selection Atoms
   const atomList = [
     'XINTENT_MATCHBOX_TOML',
     'CLIPBOARD',
@@ -125,14 +187,16 @@ async function startDaemon() {
     })
   );
 
-  // Fast reverse atom mapping for logging/lookups
   const atomNames = Object.fromEntries(
     Object.entries(atoms).map(([name, val]) => [val, name])
   );
 
-  // 2. Advertise capabilities to matchbox router
+  // 1. Advertise capabilities to matchbox router for both ui.Copy and ui.Paste
   const matchboxToml = [
     '[intents."ui.Copy"]',
+    'invocation = "X11"',
+    '',
+    '[intents."ui.Paste"]',
     'invocation = "X11"'
   ].join('\n');
 
@@ -148,38 +212,53 @@ async function startDaemon() {
   console.log(`[copy-daemon] Online on window ${widString(daemonWin)} (Router: ${widString(xintent.routerWin)})`);
 
   // ---------------------------------------------------------------------------
-  // X11 Event Listener: Handles both Intents & Selection Requests
+  // X11 Event Listener: Handles Intents & Selection Requests
   // ---------------------------------------------------------------------------
   X.on('event', async (ev) => {
     // -------------------------------------------------------------------------
-    // A. Handle incoming `ui.Copy` Intent (ClientMessage Opcode 33)
+    // A. Handle incoming Intents (Opcode 33)
     // -------------------------------------------------------------------------
     if (ev.type === 33 && ev.message_type === atoms.XINTENT_INTENT_V0) {
       try {
-        const { senderWin, payload, txId } = await parseXIntentIntentV0(X, xintent.routerWin, ev);
+        const { senderWin, payload, channel } = await parseXIntentIntentV0(X, xintent.routerWin, ev);
 
+        // --- Handle ui.Copy ---
         if (payload.intent === 'ui.Copy') {
-          console.log(`\n[copy-daemon] Received ui.Copy intent from ${widString(senderWin)} (txId: ${txId})`);
+          console.log(`\n[copy-daemon] Received ui.Copy intent from ${widString(senderWin)} (channel: ${channel})`);
           const contentAtom = payload.blob;
           const content = await XBlobRead(X, xintent.routerWin, contentAtom);
 
           currentClipboard = content;
-
-          // Claim X11 CLIPBOARD selection owner
           X.SetSelectionOwner(daemonWin, atoms.CLIPBOARD);
 
           console.log('--------------------------------------------------');
           console.log(`📋 CLIPBOARD CLAIMED (atoms.CLIPBOARD)`);
-          console.log(` - Source Window : ${widString(senderWin)}`);
           console.log(` - MIME Type     : ${content.type || 'unknown'}`);
-          console.log(` - Blob Type     : ${content.xblobType || 'Blob'}`);
-          if (content.name) console.log(` - File Name     : ${content.name}`);
-          console.log(` - Size          : ${content.size ?? content.data?.length ?? 0} bytes`);
           console.log(` - Encoding      : ${content._dataType || 'text'}`);
           console.log('--------------------------------------------------');
         }
+
+        // --- Handle ui.Paste ---
+        if (payload.intent === 'ui.Paste') {
+          console.log(`\n[copy-daemon] Received ui.Paste intent from ${widString(senderWin)} (channel: ${channel})`);
+          
+          const clipPayload = await getActiveClipboardData(X, daemonWin);
+          const dataBlob = await XBlobCreate(X, xintent.routerWin, daemonWin, clipPayload);
+
+          await sendXIntentIntentV0(X, xintent.routerWin, {
+            senderWin: daemonWin,
+            channel,
+            dataBlob,
+            payload: {
+              intent: 'ui.PasteResponse',
+              disposition: 'final',
+            }
+          });
+
+          console.log(` -> Responded to ui.Paste with data atom 0x${dataAtom.toString(16)} (${clipPayload.type})`);
+        }
       } catch (err) {
-        console.error('[copy-daemon] Error parsing incoming intent frame:', err.message);
+        console.error('[copy-daemon] Error handling intent frame:', err.message);
       }
     }
 
@@ -193,10 +272,7 @@ async function startDaemon() {
       const time = ev.time || 0;
       let targetProp = ev.property === 0 ? targetAtom : ev.property;
 
-      console.log(`[copy-daemon] SelectionRequest from ${widString(requestor)} for target '${targetName}'`);
-
       if (!currentClipboard) {
-        // Refuse request if clipboard is empty
         const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, 0);
         X.SendEvent(requestor, false, 0, notifyBuf);
         return;
@@ -206,12 +282,8 @@ async function startDaemon() {
       const isText = currentClipboard.type?.startsWith('text/') || currentClipboard._dataType === 'text';
 
       try {
-        // ---------------------------------------------------------------------
-        // 1. Target: TARGETS (Advertise supported target formats)
-        // ---------------------------------------------------------------------
         if (targetAtom === atoms.TARGETS) {
           let supportedTargets = [atoms.TARGETS];
-
           if (isImage) {
             supportedTargets.push(
               atoms['image/png'],
@@ -233,59 +305,40 @@ async function startDaemon() {
             }
           }
 
-          // Format 32 array of target Atom IDs
           const buf = Buffer.alloc(supportedTargets.length * 4);
           supportedTargets.forEach((atomId, idx) => buf.writeUInt32LE(atomId, idx * 4));
 
           changePropertyChunked(X, requestor, targetProp, atoms.ATOM, 32, buf);
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);
-          console.log(` -> Responded with ${supportedTargets.length} supported TARGETS`);
           return;
         }
 
-        // ---------------------------------------------------------------------
-        // 2. Target: Text Formats
-        // ---------------------------------------------------------------------
         if (isText && [atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
           const textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
           changePropertyChunked(X, requestor, targetProp, targetAtom, 8, textBuf);
 
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);
-          console.log(` -> Served text payload (${textBuf.length} bytes) as ${targetName}`);
           return;
         }
 
-        // ---------------------------------------------------------------------
-        // 3. Target: Image Formats (Native or On-The-Fly Conversion)
-        // ---------------------------------------------------------------------
         if (isImage && targetName.startsWith('image/')) {
           let rawInputBuf = currentClipboard._dataType === 'base64'
             ? Buffer.from(currentClipboard.data, 'base64')
             : Buffer.from(currentClipboard.data, 'utf8');
 
           let outputBuf = rawInputBuf;
-
-          // Check if format conversion is required (e.g. stored PNG -> requested JPEG)
           if (currentClipboard.type !== targetName) {
-            console.log(` -> Converting image on-the-fly from ${currentClipboard.type} to ${targetName}...`);
             outputBuf = await convertImageBuffer(rawInputBuf, targetName);
           }
 
-          // Chunk the payload to avoid X11 16-bit packet length overflow (>65,535 bytes)
           changePropertyChunked(X, requestor, targetProp, targetAtom, 8, outputBuf);
-
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);
-          console.log(` -> Served image payload (${outputBuf.length} bytes) as ${targetName}`);
           return;
         }
 
-        // ---------------------------------------------------------------------
-        // 4. Unsupported target requested -> Refuse
-        // ---------------------------------------------------------------------
-        console.warn(` -> Target '${targetName}' not supported for current clipboard type (${currentClipboard.type})`);
         const failNotifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, 0);
         X.SendEvent(requestor, false, 0, failNotifyBuf);
 
