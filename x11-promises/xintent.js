@@ -11,7 +11,7 @@ async function connectToRouter(X, root) {
     requiredAtoms.map(async (atomName) => {
       const atom = await X.InternAtom(true, atomName);
       if (!atom) {
-        console.log(`required atom ${atomName} not on server`);
+        console.log(`[xintent] required atom ${atomName} not on server`);
       }
       atoms[atomName] = atom;
       return atom;
@@ -171,7 +171,7 @@ async function XBlobGrant(X, routerWin, senderWin, blobAtom, granteeWin) {
 }
 
 async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
-  console.log(`x11-promises/xintent:XBlobUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  console.log(`[xintent] x11-promises/xintent:XBlobUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [
     senderWin,
     blobAtom,
@@ -214,13 +214,13 @@ const sendXIV0 = async (
   }
 
   if(txId !== undefined && txId > 16777215){
-    console.error("error: txId above 16777216", {txId, channel});
+    console.error("[xintent] error: txId above 16777216", {txId, channel});
   }
   if(channel !== undefined && (channel != 0 && channel < 16777216)){
-    console.error("error: channel under 16777216", {txId, channel});
+    console.error("[xintent] error: channel under 16777216", {txId, channel});
   }
   if(txId !== undefined && channel !== undefined){
-    console.error("error: only allowed to specify one of txId, channel", {txId, channel});
+    console.error("[xintent] error: only allowed to specify one of txId, channel", {txId, channel});
   }
 
   // 3. Dispatch the intent frame
@@ -232,7 +232,7 @@ const sendXIV0 = async (
   ]);
 
   console.log(
-    `[intent-client] Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)}${dataBlob ? ` (data blob ${widString(dataBlob)})` : ''})`
+    `[xintent] Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)}${dataBlob ? ` (data blob ${widString(dataBlob)})` : ''})`
   );
   return payloadBlob;
 }

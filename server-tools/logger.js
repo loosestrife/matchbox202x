@@ -1,5 +1,8 @@
 const async_hooks = require('async_hooks');
+const crypto = require('crypto');
 const alStorage = new async_hooks.AsyncLocalStorage();
+
+let projectName = undefined;
 
 const shortTimestamp = () => {
   const d = new Date();
@@ -46,7 +49,7 @@ const levelOffsets = {
 };
 let loggerKeys = {};
 class Logger {
-  constructor(module){
+  constructor({module}){
     this.module = module;
   }
   keys = function(o) {
@@ -68,7 +71,8 @@ class Logger {
       }
     }
     console.log(
-      `\x1b[${90 + colors[level]}m[${shortTimestamp()} ${level.padEnd(5)}] \x1b[${levelOffsets[level] + colors[level]}m${this.module}:${msg}\x1b[0m`,
+      `\x1b[${
+        90 + colors[level]}m[${shortTimestamp()} ${level.padEnd(5)}] \x1b[${levelOffsets[level] + colors[level]}m${projectName?projectName+':':''}${this.module}: ${msg}\x1b[0m`,
       ...args,
       ...Object.keys(loggerKeys).map(k => ` [${k}=${loggerKeys[k]}]`)
     );
@@ -94,12 +98,15 @@ class Logger {
         } else {
           const x = new Error(message);
           x.code = level;
-          throw new Error(message);
+          throw x;
         }
       } else {
         throw new Error(message);
       }
     }
+  }
+  setProjectName = function(name){
+    projectName = name;
   }
 }
 

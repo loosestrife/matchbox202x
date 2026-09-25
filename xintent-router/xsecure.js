@@ -2,6 +2,8 @@
 // like iptables or aws waf.  deep packet inspecting firewall
 
 const fs = require('fs');
+const {Logger} = require('../server-tools');
+const logger = new Logger({module: 'xsecure'});
 const {atoms, widString} = require('../x11-promises/xintent.js');
 const {X, root, routerWin} = require('./index.js');
 
@@ -26,7 +28,7 @@ const checkXSecurePolicy = async (context, parsed, ev) => {
   } else {
     user = 'rando';
   }
-  //console.log('checking security policy with context', context);
+  // logger.info('checking security policy with context', context);
   let policy = 'accept';
   for(const rule of rules){
     if(rule.action == context.action){

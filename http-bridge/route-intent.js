@@ -58,7 +58,7 @@ const routeIntent = async (req, res) => {
         ev.data[2] == txId
       ) {
         const { payload: eventData } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        console.log('[EVENT RECEIVED]', eventData);
+        logger.info('Event recieved', eventData);
 
         writeJsonFrame(res, eventData);
 

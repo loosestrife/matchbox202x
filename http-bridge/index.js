@@ -4,7 +4,9 @@ const {HttpError, Logger, loggerMiddleware, nnjsonStream, teeOutStream} = requir
 const { createClientWithPromises } = require('../x11-promises/x11-promises');
 const { connectToRouter, createClientWindow } = require('../x11-promises/xintent');
 
+(async () => { // <- nodejs needs this, bun doesnt subscribe to the moral panic over top level await
 const logger = new Logger({module: 'index.js'});
+logger.setProjectName('http-bridge');
 const { X, root } = await createClientWithPromises();
 const routerWin = await connectToRouter(X, root);
 const clientWin = await createClientWindow(X, root, 'http-intent-bridge');
@@ -39,3 +41,4 @@ app.use((err, req, res, next) => {
 app.listen(12345, 'localhost', () => {
   logger.info('matchbox202x intent server running on http://localhost:12345');
 });
+})()

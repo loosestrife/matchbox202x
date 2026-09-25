@@ -255,7 +255,7 @@ async function startDaemon() {
             }
           });
 
-          console.log(` -> Responded to ui.Paste with data atom 0x${dataAtom.toString(16)} (${clipPayload.type})`);
+          console.log(` -> Responded to ui.Paste with data atom 0x${dataBlob.toString(16)} (${clipPayload.type})`);
         }
       } catch (err) {
         console.error('[copy-daemon] Error handling intent frame:', err.message);

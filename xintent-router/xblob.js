@@ -1,5 +1,7 @@
 // xblob.js
 const {atoms, widString, parseJsonFrame} = require('../x11-promises/xintent.js');
+const {Logger} = require('../server-tools');
+const logger = new Logger({module: 'xblob'});
 const {X, rawX, x11, root, routerWin} = require('./index.js');
 
 const xblobRegistry = {};
@@ -21,7 +23,7 @@ const handleXBlobCreateV0 = {
   },
   accept: async parsed => {
     const blobAtom = await xblobCreate(parsed.senderWin);
-    console.log(`XBlobCreate created ${widString(blobAtom)} from ${widString(parsed.senderWin)}`);
+    logger.info(`XBlobCreate created ${widString(blobAtom)} from ${widString(parsed.senderWin)}`);
 
     const responseEv = Buffer.alloc(32);
     responseEv.writeInt8(33, 0); // ClientMessage
@@ -54,7 +56,7 @@ const handleXBlobGrantV0 = {
     };
   },
   accept: parsed => {
-    console.log(`XBlobGrant granting ${widString(parsed.blobId)} to ${widString(parsed.grantee)} from ${widString(parsed.senderWin)}`);
+    logger.info(`XBlobGrant granting ${widString(parsed.blobId)} to ${widString(parsed.grantee)} from ${widString(parsed.senderWin)}`);
     implicitXBlobGrant(parsed.blobId, parsed.grantee);
   },
 };
@@ -73,7 +75,7 @@ const handleXBlobUnlinkV0 = {
     };
   },
   accept: async parsed => {
-    console.log(`XBlobUnlink unlinking ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
+    logger.info(`XBlobUnlink unlinking ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
     await xblobUnlink(parsed.blobId, parsed.senderWin);
   },
 };
@@ -96,7 +98,7 @@ const handleXBlobTransferV0 = {
     };
   },
   accept: async parsed => {
-    console.log(`XBlobTransfer transferring ${widString(parsed.blobId)} from ${widString(parsed.senderWin)} to ${widString(parsed.grantee)}`);
+    logger.info(`XBlobTransfer transferring ${widString(parsed.blobId)} from ${widString(parsed.senderWin)} to ${widString(parsed.grantee)}`);
     await implicitXBlobTransfer(parsed.blobId, parsed.senderWin, parsed.grantee);
   },
 };
@@ -143,18 +145,18 @@ const implicitXBlobGrant = (blobId, grantee) => {
 const xblobUnlink = async (blobId, unlinkWin) => {
   const regEntry = xblobRegistry[blobId];
   if (!regEntry) {
-    console.log(`xblobUnlink: no such blob ${widString(blobId)}`);
+    logger.warn(`xblobUnlink: no such blob ${widString(blobId)}`);
     return;
   }
   const link = regEntry.links.indexOf(unlinkWin);
   if (link === -1) {
-    console.log(`Attempt to unlink blob ${widString(blobId)} from window ${widString(unlinkWin)} which isn't linked`, xblobRegistry);
+    logger.warn(`Attempt to unlink blob ${widString(blobId)} from window ${widString(unlinkWin)} which isn't linked`, xblobRegistry);
   } else {
     regEntry.links.splice(link, 1);
   }
 
   if (regEntry.links.length === 0) {
-    console.log(`deleting unlinked blob ${widString(blobId)}`);
+    logger.info(`deleting unlinked blob ${widString(blobId)}`);
     await X.DeleteProperty(routerWin, blobId);
     delete xblobRegistry[blobId];
 

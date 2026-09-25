@@ -1,4 +1,6 @@
 // xintent-router/index.js
+const {Logger} = require('../server-tools');
+const logger = new Logger({module: 'server.js'});
 
 const {x11, X, rawX, root, routerWin} = require('.');
 const {atoms, widString, connectToRouter} = require('../x11-promises/xintent');
@@ -50,7 +52,7 @@ async function startRouter() {
   {
     const existingRouterWin = await connectToRouter(X, root);
     if(existingRouterWin){
-      console.log('intent router already running', widString(routerWin));
+      logger.info('intent router already running', widString(routerWin));
       process.exit(0);
       return;
     }
@@ -67,10 +69,10 @@ async function startRouter() {
 
   X.ChangeProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 8, 'XINTENT_ROUTER');
 
-  console.log('atoms are', atoms);
+  logger.info('atoms are', atoms);
   X.ChangeWindowAttributes(root, { eventMask: x11.eventMask.SubstructureNotify });
   await getAllMatchboxToml();
-  console.log(`[intent-router] Window created: ${widString(routerWin)}`);
+  logger.info(`Window created: ${widString(routerWin)}`);
 
 
   // Per-client queue to enforce sequential message processing per sender window
@@ -81,7 +83,7 @@ async function startRouter() {
     const current = previous
       .then(taskFn)
       .catch(err => {
-        console.error(`[router] Error processing message for client ${clientId}:`, err);
+        logger.error(`Error processing message for client ${clientId}:`, err);
       })
       .then(() => {
         if (clientQueues.get(clientId) === current) {
@@ -94,7 +96,7 @@ async function startRouter() {
 
   rawX.on('event', async (ev) => {
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
-      console.log(`got ClientMessage type ${
+      logger.info(`got ClientMessage type ${
         Object.keys(atoms).find(name => atoms[name] === ev.message_type) ?? ev.message_type
       } sequence number ${ev.seq}`);
       if (ev.message_type in dispatchTable){
@@ -102,7 +104,7 @@ async function startRouter() {
         enqueueClientTask(clientId, async () => {
           const handler = dispatchTable[ev.message_type];
           const parsed = await handler.parse(ev);
-          console.log(`parsed ${handler.name}`, parsed);
+          logger.info(`parsed ${handler.name}`, parsed);
           const securityContext = await handler.securityContext(parsed);
           const securityPolicy = await checkXSecurePolicy(securityContext, parsed, ev);
           if(securityPolicy == 'accept'){
@@ -120,11 +122,11 @@ async function startRouter() {
             // do nothing
           }
           if(securityPolicy == 'disconnect'){
-            console.log('disconnecting misbehaving client', widString(parsed.sender));
+            logger.info('disconnecting misbehaving client', widString(parsed.sender));
           }
         });
       } else {
-        console.log("unknown message type", ev);
+        logger.warn("unknown message type", ev);
       }
     }
 
@@ -149,11 +151,11 @@ async function startRouter() {
     }
 
     if (ev.name === 'SelectionClear' && ev.selection === atoms.XINTENT) {
-      console.warn('Lost XINTENT selection ownership to another router. Exiting...');
+      logger.warn('Lost XINTENT selection ownership to another router. Exiting...');
       process.exit(0);
     }
   });
-  console.log('[intent-router] Listening for direct window IPC...');
+  logger.info('Listening for direct window IPC...');
 }
 
-startRouter().catch(console.error);
+startRouter().catch(logger.error);

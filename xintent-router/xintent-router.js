@@ -5,6 +5,8 @@ const crypto = require("crypto");
 const TOML = require("@iarna/toml");
 const util = require("util");
 const execAsync = util.promisify(exec);
+const {Logger} = require('../server-tools');
+const logger = new Logger({module: 'xintent-router'});
 const {
   atoms,
   widString,
@@ -68,7 +70,7 @@ const newChannel = (senderWin, txId, xintentIntent) => {
   }
   txidToChannel[senderWin][txId] = channelObj;
 
-  console.log(`[router] Allocated channel ${channelNum} for client ${widString(senderWin)} (cookie txId: ${txId})`);
+  logger.info(`Allocated channel ${channelNum} for client ${widString(senderWin)} (cookie txId: ${txId})`);
   return channelObj;
 };
 
@@ -88,7 +90,7 @@ const closeChannel = (channelObj) => {
     }
   }
 
-  console.log(`[router] Closed and deallocated channel ${channelObj.channelNum}`);
+  logger.info(`Closed and deallocated channel ${channelObj.channelNum}`);
 };
 
 const getChannel = (senderWin, channel) => {
@@ -154,7 +156,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
   if (xintentIntent.payload.reply) {
     if(getChannel(senderWin, channel)){
       // throw new Error(400, 'txId cookie already in use');
-      console.log(`duplicate cookie ${xintentIntent.payload.txId}`);
+      logger.info(`duplicate cookie ${xintentIntent.payload.txId}`);
       return;
     }
     channelObj = newChannel(senderWin, channel, xintentIntent);
@@ -164,7 +166,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
   const registryEntry = intentRegistry[intent];
   if (registryEntry) {
     const { wid, matchboxToml } = registryEntry[0];
-    console.log(`[intent-router] Found service window (${widString(wid)})`);
+    logger.info(`[intent-router] Found service window (${widString(wid)})`);
     if (channelObj) {
       channelObj.handlerWin = wid;
     }
@@ -178,7 +180,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
     });
     return;
   } else {
-    console.info(
+    logger.info(
       `[intent-router] No service mapped for action: ${intent}, falling back to lighter ${JSON.stringify(lighterRegistry, null, 2)}`,
     );
     const lighterRegistryEntry = lighterRegistry[intent];
@@ -197,7 +199,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
         },
       });
     } else {
-      console.error(`no launchable service found for ${intent}`);
+      logger.error(`no launchable service found for ${intent}`);
     }
     if (!intentsAwaitingServicesQueue[intent]) {
       intentsAwaitingServicesQueue[intent] = [];
@@ -213,7 +215,7 @@ const tryToForwardTheEvent = async (xintentEvent) => {
       return;
     }
   }
-  console.log("dropping event that isnt in a channel", xintentEvent);
+  logger.info("dropping event that isnt in a channel", xintentEvent);
 }
 
 const getChannelForMessage = (message) => {
@@ -222,7 +224,7 @@ const getChannelForMessage = (message) => {
   const channelObj = getChannel(senderWin, channel);
   if(!channelObj && channel >= CHANNEL_BASE){
     // throw new Error(404, 'channel not found')
-    console.log(
+    logger.info(
       `Message ${intent} from sender ${widString(senderWin)} on unknown channel ${channel}`,
       xintentIntent,
       activeChannels,
@@ -231,7 +233,7 @@ const getChannelForMessage = (message) => {
   if(channelObj && channel >= CHANNEL_BASE){
     if(senderWin != channelObj.handlerWin){
       // throw new Error(401, 'not on channel')
-      console.log(
+      logger.info(
         `Message ${xintentIntent.payload.intent} from sender ${senderWin} not on channel ${xintentIntent.channel}`,
         xintentIntent,
         activeChannels,
@@ -253,7 +255,7 @@ const forwardMessageToChannel = async (channelObj, message) => {
         // for example sys.Cancel 
         forwardTo = channelObj.handlerWin;
       } else {
-        console.log(
+        logger.info(
           `Message ${messageSubType} in channel ${message.channel} was sent by ${widString(message.senderWin)} not on channel (was the intent redirected?)`,
           message,
           channelObj,
@@ -320,16 +322,16 @@ async function parseWindowToml(wid) {
           if (!intentRegistry[intentName].some((entry) => entry.wid === wid)) {
             intentRegistry[intentName].push({ wid, matchboxToml });
             checkToDrainIntentsQueue(intentName);
-            console.log(
-              `[router] Registered intent '${intentName}' -> Window ${widString(wid)}`,
+            logger.info(
+              `Registered intent '${intentName}' -> Window ${widString(wid)}`,
             );
           }
         }
       }
     }
   } catch (err) {
-    console.error(
-      `[router] Failed parsing TOML on window ${widString(wid)}:`,
+    logger.error(
+      `Failed parsing TOML on window ${widString(wid)}:`,
       err.message,
     );
   }
@@ -346,7 +348,7 @@ async function parseWindowLighterToml(wid) {
   );
   if (prop && prop.data && prop.data.length > 0) {
     const toml = TOML.parse(prop.data.toString("utf8"));
-    console.log(
+    logger.info(
       "got XINTENT_SERVICES_MANIFEST from window",
       widString(wid),
       toml,
@@ -396,8 +398,8 @@ async function sendXIntentIntentV0(
     txId ?? channel ?? 0,
     dataBlob ?? 0,
   ]);
-  console.log(
-    `[intent-router] Dispatched ${payload?.intent} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)})`,
+  logger.info(
+    `Dispatched ${payload?.intent} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)})`,
   );
   return payloadBlob;
 }
@@ -407,7 +409,7 @@ async function sendXIntentIntentV0(
  * and handling active channel lifecycles.
  */
 const xintentUnregisterWindow = async (destroyedWin) => {
-  console.log(`[router] Unregistering window ${widString(destroyedWin)}`);
+  logger.info(`Unregistering window ${widString(destroyedWin)}`);
 
   // 1. Remove window from intentRegistry
   for (const intentName of Object.keys(intentRegistry)) {
@@ -447,8 +449,8 @@ const xintentUnregisterWindow = async (destroyedWin) => {
     if (channelObj.senderWin === destroyedWin) {
       // Sender died: notify handler with sys.Cancel and close channel
       if (channelObj.handlerWin && channelObj.handlerWin !== destroyedWin) {
-        console.log(
-          `[router] Sender ${widString(destroyedWin)} destroyed; sending sys.Cancel to handler ${widString(channelObj.handlerWin)} on channel ${channelObj.channelNum}`
+        logger.info(
+          `Sender ${widString(destroyedWin)} destroyed; sending sys.Cancel to handler ${widString(channelObj.handlerWin)} on channel ${channelObj.channelNum}`
         );
         await sendXIntentIntentV0(X, routerWin, {
           targetWin: channelObj.handlerWin,
@@ -464,8 +466,8 @@ const xintentUnregisterWindow = async (destroyedWin) => {
       closeChannel(channelObj);
     } else if (channelObj.handlerWin === destroyedWin) {
       // Handler died: unbind handler and queue intent for re-forwarding after cleanup
-      console.log(
-        `[router] Handler ${widString(destroyedWin)} destroyed on channel ${channelObj.channelNum}; resetting handler`
+      logger.info(
+        `Handler ${widString(destroyedWin)} destroyed on channel ${channelObj.channelNum}; resetting handler`
       );
       channelObj.handlerWin = null;
       if (channelObj.originalIntent) {
@@ -476,8 +478,8 @@ const xintentUnregisterWindow = async (destroyedWin) => {
 
   // 5. Re-forward intents whose handlers disappeared (now that registries are clean)
   for (const pendingIntent of retryIntents) {
-    console.log(
-      `[router] Re-attempting to forward intent '${pendingIntent.payload?.intent}' after handler cleanup`
+    logger.info(
+      `Re-attempting to forward intent '${pendingIntent.payload?.intent}' after handler cleanup`
     );
     await tryToForwardTheIntent(pendingIntent);
   }

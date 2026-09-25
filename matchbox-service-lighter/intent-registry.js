@@ -4,6 +4,9 @@ const fs = require('node:fs');
 const os = require('os');
 const path = require('node:path');
 const TOML = require('@iarna/toml');
+const {Logger} = require('../server-tools');
+
+const logger = new Logger({module: 'intent-registry'});
 
 const MATCHBOX_PATH = [
   '~/.local/share/matchbox/packages',
@@ -20,7 +23,7 @@ function registerPackage(tomlPath) {
     const packageId = parsed.package?.id;
     if (!packageId) return;
     if (packageRegistry[packageId]) {
-      console.log(`dup package ${packageId}`, packageRegistry[packageId]._path, tomlPath);
+      logger.warn(`dup package ${packageId}`, packageRegistry[packageId]._path, tomlPath);
       return;
     };
     parsed._path = path.dirname(tomlPath);
@@ -36,12 +39,12 @@ function registerPackage(tomlPath) {
       }        
     }
   } catch (err) {
-    console.error(`Failed to parse TOML at ${tomlPath}:`, err);
+    logger.error(`Failed to parse TOML at ${tomlPath}:`, err);
   }
 }
 
 function buildRegistries() {
-  console.log('rebuilding package registry with path', MATCHBOX_PATH);
+  logger.info('rebuilding package registry with path', MATCHBOX_PATH);
   [intentRegistry, packageRegistry].forEach(r =>
     Object.keys(r).forEach(k =>
       delete r[k]
@@ -66,7 +69,7 @@ function buildRegistries() {
       }
     }
   }
-  console.log({intentRegistry, packageRegistry});
+  logger.info({intentRegistry, packageRegistry});
 }
 
 buildRegistries();
