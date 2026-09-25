@@ -144,69 +144,13 @@ const tryToForwardTheIntent = async (xintentIntent) => {
   const {senderWin, channel, payload} = xintentIntent;
   const intent = payload.intent;
 
-  // (1) try to determine if were on a channel
-  let channelObj = getChannel(senderWin, channel);
-  if(!channelObj && channel >= CHANNEL_BASE){
-    // throw new Error(404, 'channel not found')
-    console.log(
-      `Message ${intent} from sender ${widString(senderWin)} on unknown channel ${channel}`,
-      xintentIntent,
-      activeChannels,
-    );
-  }
-  if(channelObj && channel >= CHANNEL_BASE){
-    if(senderWin != channelObj.handlerWin){
-      // throw new Error(401, 'not on channel')
-      console.log(
-        `Message ${xintentIntent.payload.intent} from sender ${senderWin} not on channel ${xintentIntent.channel}`,
-        xintentIntent,
-        activeChannels,
-      );
+  let channelObj = getChannelForMessage(xintentIntent);
+  if(channelObj){
+    if(await forwardMessageToChannel(channelObj, xintentIntent)){
+      return;
     }
   }
 
-  // (2) if were on a channel, forward the message 
-  if(channelObj){
-    if (channelObj.handlerWin) {
-      let forwardTo;
-      if (senderWin == channelObj.handlerWin) {
-        // usual case
-        forwardTo = channelObj.senderWin;
-      } else if (senderWin == channelObj.senderWin) {
-        // for example sys.Cancel 
-        forwardTo = channelObj.handlerWin;
-      } else {
-        console.log(
-          `Message ${xintentIntent.payload.intent} in channel ${xintentIntent.payload.channel} was sent by ${widString(senderWin)} not on channel (was the intent redirected?)`,
-          xintentIntent,
-          channelObj,
-        );
-        return;
-      }
-      implicitXBlobTransfer(xintentIntent.payloadBlob, routerWin, forwardTo);
-      if (xintentIntent.dataBlob) {
-        implicitXBlobTransfer(xintentIntent.dataBlob, routerWin, forwardTo);
-      }
-      await sendXIntentIntentV0(X, routerWin, {
-        targetWin: forwardTo,
-        senderWin: routerWin,
-        ...getChannelToSend(forwardTo, channelObj),
-        payload: xintentIntent.payload,
-        payloadBlob: xintentIntent.payloadBlob,
-        dataBlob: xintentIntent.dataBlob,
-      });
-      if(['final', 'cancel', 'error'].includes(payload.disposition)){
-        closeChannel(channelObj);
-      }
-      return;
-    } else {
-      // the channel object was created, but there is not a handler yet
-      // creating the channel object without a handler enables the user to redirect intents
-      // thats the only reason this else block should be reachable
-    }
-  }
-  
-  // (3) determine if we should open a channel 
   if (xintentIntent.payload.reply) {
     if(getChannel(senderWin, channel)){
       // throw new Error(400, 'txId cookie already in use');
@@ -261,6 +205,85 @@ const tryToForwardTheIntent = async (xintentIntent) => {
     intentsAwaitingServicesQueue[intent].push(xintentIntent);
   }
 };
+
+const tryToForwardTheEvent = async (xintentEvent) => {
+  let channelObj = getChannelForMessage(xintentEvent);
+  if(channelObj){
+    if(await forwardMessageToChannel(channelObj, xintentEvent)){
+      return;
+    }
+  }
+  console.log("dropping event that isnt in a channel", xintentEvent);
+}
+
+const getChannelForMessage = (message) => {
+  const {senderWin, channel} = message;
+
+  const channelObj = getChannel(senderWin, channel);
+  if(!channelObj && channel >= CHANNEL_BASE){
+    // throw new Error(404, 'channel not found')
+    console.log(
+      `Message ${intent} from sender ${widString(senderWin)} on unknown channel ${channel}`,
+      xintentIntent,
+      activeChannels,
+    );
+  }
+  if(channelObj && channel >= CHANNEL_BASE){
+    if(senderWin != channelObj.handlerWin){
+      // throw new Error(401, 'not on channel')
+      console.log(
+        `Message ${xintentIntent.payload.intent} from sender ${senderWin} not on channel ${xintentIntent.channel}`,
+        xintentIntent,
+        activeChannels,
+      );
+    }
+  }
+  return channelObj;
+}
+
+const forwardMessageToChannel = async (channelObj, message) => {
+  const messageSubType = message.intent ?? message.event;
+  if(channelObj){
+    if (channelObj.handlerWin) {
+      let forwardTo;
+      if (message.senderWin == channelObj.handlerWin) {
+        // usual case
+        forwardTo = channelObj.senderWin;
+      } else if (message.senderWin == channelObj.senderWin) {
+        // for example sys.Cancel 
+        forwardTo = channelObj.handlerWin;
+      } else {
+        console.log(
+          `Message ${messageSubType} in channel ${message.channel} was sent by ${widString(message.senderWin)} not on channel (was the intent redirected?)`,
+          message,
+          channelObj,
+        );
+        return true;
+      }
+      implicitXBlobTransfer(message.payloadBlob, routerWin, forwardTo);
+      if (message.dataBlob) {
+        implicitXBlobTransfer(message.dataBlob, routerWin, forwardTo);
+      }
+      await sendXIntentIntentV0(X, routerWin, {
+        targetWin: forwardTo,
+        senderWin: routerWin,
+        ...getChannelToSend(forwardTo, channelObj),
+        payload: message.payload,
+        payloadBlob: message.payloadBlob,
+        dataBlob: message.dataBlob,
+      });
+      if(['final', 'cancel', 'error'].includes(message.payload.disposition)){
+        closeChannel(channelObj);
+      }
+      return true;
+    } else {
+      // the channel object was created, but there is not a handler yet
+      // creating the channel object without a handler enables the user to redirect intents
+      // thats the only reason this else block should be reachable
+      return false;
+    }
+  }
+}
 
 async function checkToDrainIntentsQueue(intentName) {
   const queue = intentsAwaitingServicesQueue[intentName];

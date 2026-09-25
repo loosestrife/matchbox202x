@@ -29,6 +29,7 @@ async function connectToRouter(X, root) {
     "_NET_WM_PID",
     "CARDINAL",
 
+    "XINTENT_EVENT_V0",
     "XBLOB_CREATE_V0",
     "XBLOB_CREATE_RESPONSE_V0",
     "XBLOB_GRANT_V0",
@@ -185,16 +186,10 @@ async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
   ]);
 }
 
-const sendXIntentIntentV0 = (
-  X,
-  routerWin,
-  { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true }
-) => sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, {targetWin, senderWin, txId, channel, payload, unlinkPayloadBlob }); 
-const sendXIntentEventV0 = (
-  X,
-  routerWin,
-  { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true }
-) => sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, {targetWin, senderWin, txId, channel, payload, unlinkPayloadBlob });
+const sendXIntentIntentV0 = (X, routerWin, messageData) =>
+  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, messageData); 
+const sendXIntentEventV0 = (X, routerWin, messageData) =>
+  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, messageData);
 
 const sendXIV0 = async (
   messageTypeAtom,
@@ -237,7 +232,7 @@ const sendXIV0 = async (
   ]);
 
   console.log(
-    `[intent-client] Dispatched ${payload.intent} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)})`
+    `[intent-client] Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)}${dataBlob ? ` (data blob ${widString(dataBlob)})` : ''})`
   );
   return payloadBlob;
 }
