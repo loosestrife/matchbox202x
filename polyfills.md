@@ -131,6 +131,22 @@ anyway
 * using XInterAtom, it leaks atoms
 * using XGetSelectionOwner/XSetSelectionOwner, its an X protocol round trip instead of an XBLOB protocol round trip
 
+## Why your fire-and-forget service has to manually close the channel
+* the alterntive was to use http
+```json
+{
+  "xintent": "0.1",
+  "uri": "xintent://xintent-router/ui/Copy",
+  "headers": {
+    "Accept": "none",
+    "Content-Type": "text/plain"
+  },
+  "body": "hello world",
+}
+```
+your fire and forget service still has to send `202 Accepted` and your other service now sends a multipart/mixed sequence of events back.
+* the other alternative was to define a service as being capable of replying if it registers itself with a `replies: true` in its matchbox.toml
+
 # Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.
 
