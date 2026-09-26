@@ -192,13 +192,16 @@ async function startDaemon() {
   );
 
   // 1. Advertise capabilities to matchbox router for both ui.Copy and ui.Paste
-  const matchboxToml = [
-    '[intents."ui.Copy"]',
-    'invocation = "X11"',
-    '',
-    '[intents."ui.Paste"]',
-    'invocation = "X11"'
-  ].join('\n');
+  const matchboxToml = `
+[intents."ui.Copy"]
+invocation = "X11"
+
+[intents."ui.Paste"]
+invocation = "X11"
+
+[intents."ui.TextProcess"]
+invocation = "X11"
+`;
 
   X.ChangeProperty(
     0,
@@ -235,6 +238,21 @@ async function startDaemon() {
           console.log(`📋 CLIPBOARD CLAIMED (atoms.CLIPBOARD)`);
           console.log(` - MIME Type     : ${content.type || 'unknown'}`);
           console.log(` - Encoding      : ${content._dataType || 'text'}`);
+          console.log('--------------------------------------------------');
+        }
+
+        if (payload.intent == 'ui.TextProcess') {
+          console.log(`\n[copy-daemon] Received ui.TextProcess intent from ${widString(senderWin)} (channel: ${channel})`);
+          currentClipboard = {
+            type: 'text/plain',
+            data: payload.text,
+            _dataType: 'text' 
+          };
+          X.SetSelectionOwner(daemonWin, atoms.CLIPBOARD);
+
+          console.log('--------------------------------------------------');
+          console.log(`📋 CLIPBOARD CLAIMED (atoms.CLIPBOARD)`);
+          console.log(` ${payload.text}`);
           console.log('--------------------------------------------------');
         }
 

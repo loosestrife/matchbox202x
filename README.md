@@ -115,7 +115,7 @@ However processes recieve intents/events, the canonical json and conceptual stru
   "intent": "ui.TextProcess", 
   "text": "how do i restore unix",
   "replace": true,
-  "reply": true
+  "Accept": "*"
 }
 ```
 which gets responded to with
@@ -127,15 +127,13 @@ which gets responded to with
 }
 
 {
-  "intent": "ui.TextProcessReply",
+  "intent": "ui.TextProcessResponse",
   "text": "How do I restore UNIX®?",
   "channel": "aX4f",
   "disposition": "final"
 }
 ```
-The concept of a channel hadn't been named when X was released.  XINTENT would sending window, the recieving window, and a transaction id like AppleScript used, to designate a channel.
-
-None of this was invented here.  The protocol name is NIH-RPC.
+The concept of a channel hadn't been named when X was released.  XINTENT would sending window and a transaction id like AppleScript used to designate a channel.  The channel is opened because the sender sent an Accept like in http.  The disposition is like close(fd) and TCP's FIN/RST.  None of this was invented here.  The protocol name is NIH-RPC.
 
 ```AppleScript
 -- AppleScript executing on System 7 (Mac OS)
@@ -188,6 +186,63 @@ sys.RerouteIntent({ChannelId, recieverName, recieverHost})
 ```
 
 So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-services-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` or whatever user set the intent rerouting hotkey to and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-services-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  Because firefox currently only reads uri's, the blob has to be stowed to /tmp/xblob-bounce-buffers 
+
+
+
+### 3.3 Canonical HTTP translation
+The usual case of xintent is `{intent: ui.Copy, Accept: *}` and a stream of `{event: ui.Paste}`.  However, for anything that COULD require anything special, xintent SHALL use the nearest http equivalent.  
+```http
+XINTENT xintent://cool-app/ui/TextToSpeech
+Accept: *
+text: "how do i restore unix"
+```
+
+```JSON
+{
+  "intent": "ui.TextProcess", 
+  "text": "how do i restore unix",
+  "replace": true,
+  "Accept": "*"
+}
+```
+
+
+```http
+200 OK
+Content-Type: multipart/mixed; boundary=boundary-string
+```
+
+no json equivalent, XINTENT just opens the channel, a `{event: http.204NoContent, disposition: final}` is needed to close the channel if the message had an `Accept` header thereby opening a channel.
+
+```http
+--boundary-string
+event: "ui.Processing"
+percent: 67
+```
+
+```JSON
+{
+  "event": "ui.Processing",
+  "percent": 67,
+}
+```
+
+```http
+--boundary-string
+intent: "ui.TextToSpeechResponse"
+disposition: "final"
+Content-Type: audio/wav
+
+[line noise]
+```
+
+```
+{
+  "intent": "ui.TextToSpeechResponse",
+  "disposition": "final"
+}
+blob id -> {type, size, data} out here
+```
 
 ## 4. Application Package Format (`index.toml`)
 

@@ -153,7 +153,7 @@ const tryToForwardTheIntent = async (xintentIntent) => {
     }
   }
 
-  if (xintentIntent.payload.reply) {
+  if (xintentIntent.payload.Accept) {
     if(getChannel(senderWin, channel)){
       // throw new Error(400, 'txId cookie already in use');
       logger.info(`duplicate cookie ${xintentIntent.payload.txId}`);
@@ -434,7 +434,7 @@ const xintentUnregisterWindow = async (destroyedWin) => {
   // 3. Remove queued intents originating from the destroyed sender
   for (const intentName of Object.keys(intentsAwaitingServicesQueue)) {
     intentsAwaitingServicesQueue[intentName] = intentsAwaitingServicesQueue[intentName].filter(
-      (xintent) => !((xintent.senderWin == destroyedWin) && (xintent.payload.reply)) 
+      (xintent) => !((xintent.senderWin == destroyedWin) && (xintent.payload.Accept)) 
     );
     if (intentsAwaitingServicesQueue[intentName].length === 0) {
       delete intentsAwaitingServicesQueue[intentName];

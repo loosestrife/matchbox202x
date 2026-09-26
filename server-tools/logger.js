@@ -72,7 +72,7 @@ class Logger {
     }
     console.log(
       `\x1b[${
-        90 + colors[level]}m[${shortTimestamp()} ${level.padEnd(5)}] \x1b[${levelOffsets[level] + colors[level]}m${projectName?projectName+':':''}${this.module}: ${msg}\x1b[0m`,
+        90 + colors[level]}m[${shortTimestamp()} ${projectName?projectName:''} ${level.padEnd(5)}] \x1b[${levelOffsets[level] + colors[level]}m${this.module}: ${msg}\x1b[0m`,
       ...args,
       ...Object.keys(loggerKeys).map(k => ` [${k}=${loggerKeys[k]}]`)
     );

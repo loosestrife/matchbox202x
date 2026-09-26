@@ -17,7 +17,7 @@ async function sendIntent() {
     payload: {
       intent: 'ui.TextToSpeech',
       text: 'Direct window IPC works!',
-      reply: true,
+      Accept: 'audio/wav',
     },
   });
   console.log('[sender] Direct ClientMessage dispatched!');  

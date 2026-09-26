@@ -1,0 +1,5 @@
+[intents."ui.TextProcess"]
+invocation = "X11"
+exec = "bun index.js"
+env = {}
+args = []

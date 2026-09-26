@@ -23,7 +23,7 @@ const routeIntent = async (req, res) => {
   const txId = globalTransactionIdCounter++;
 
   // --- 1. Streamed Multipart Response Path ---
-  if (payload.reply) {
+  if (payload.Accept) {
     const BOUNDARY = 'MatchboxFrameBoundary_' + Date.now().toString(16);
 
     res.writeHead(200, {
