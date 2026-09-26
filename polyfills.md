@@ -147,6 +147,13 @@ anyway
 your fire and forget service still has to send `202 Accepted` and your other service now sends a multipart/mixed sequence of events back.
 * the other alternative was to define a service as being capable of replying if it registers itself with a `replies: true` in its matchbox.toml
 
+## Why no flow control
+* in theory tcp is about streams, the streams must drain because the entire stream is what must be preserved.  xintent is a datagram protocol and a valid xintent stream consists of a sequence of datagrams.  therefore xintent doesnt need a multi step closing system
+* in practice a process closes a pipe when its no longer interested in the contents, so tcp doesnt need a multi round disconnection protocol either, but does need to distinguish between the connection ending after everything has been transmitted and before, because tcp has no intrinsic sync points to define the previous parts as valid, a zip file is line noise without the last few bytes
+* however, the tcp stream shutdown procedure is for bursty networks to ask if the sender is done, because the listener might want to continue to listen if the sender isnt done yet
+* and the reason xintent doesnt need that when an intent is complete is well defined.  for example a {intent: ui.Copy} is complete when the clipboard is overwritten and there will be no further {event: ui.Paste}
+* nor does xintent need an application layer sys.Ping because x11 already has a _NET_WM_PING
+
 # Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.
 
