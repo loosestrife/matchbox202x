@@ -81,8 +81,8 @@ an XIntentNonJsonFrame with message type `XBlobStreamChunkRecievedV0` and `data.
 ## XAudioNode registation
 an XAudioNode claims an atom for what numa node its on, as `XAUDIO_NODE_${host}`, and progams use XGetSelection() to find their local XAudioNode.  Then `XBlobCreate` returns a globally unique atom, but the XBLOB is actually on the window that owns the atom according to XGetSelection().
 
-## XAudioNodeMoveBlob
-an XIntentNonJsonFrame with message type `XAudioNodeMoveBlobV0`, `data.l[1]` as the blob atom, `data.l[2]` as the XAudioNode window to move the blob to.
+## XBlobBroadcast
+an XIntentNonJsonFrame with message type `XBlobBroascastV0` and  `data.l[1]` as the blob atom.  Broadcast local modification to other numa nodes with a link.
 
 # XAUDIO V0
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.
