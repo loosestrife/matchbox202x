@@ -1,4 +1,4 @@
-p# V0
+# V0
 It takes 0 intelligence to "invent" stuff that everyone already knows exactly how it works and should have existed already.  The hard part is the V0 polyfills, full of insecurity and questionable decisions.
 
 ## XIntentJsonFrame
