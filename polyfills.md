@@ -1,4 +1,4 @@
-# V0
+p# V0
 It takes 0 intelligence to "invent" stuff that everyone already knows exactly how it works and should have existed already.  The hard part is the V0 polyfills, full of insecurity and questionable decisions.
 
 ## XIntentJsonFrame
@@ -153,6 +153,9 @@ your fire and forget service still has to send `202 Accepted` and your other ser
 * however, the tcp stream shutdown procedure is for bursty networks to ask if the sender is done, because the listener might want to continue to listen if the sender isnt done yet
 * and the reason xintent doesnt need that when an intent is complete is well defined.  for example a {intent: ui.Copy} is complete when the clipboard is overwritten and there will be no further {event: ui.Paste}
 * nor does xintent need an application layer sys.Ping because x11 already has a _NET_WM_PING
+
+## Why all the NAT
+user-desktop has the X session and user has user-phone with flammenwerfer and user-watch with flammenspritzer.  User goes in a cave.  Flammenwerfer and flammenspritzer continue to work over bluetooth because 10.x.x.x is a local address.  When user leaves the cave, flammenwerfer syncs to user-desktop.
 
 # Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.
