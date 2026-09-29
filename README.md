@@ -560,6 +560,16 @@ If `Producer.Node == Consumer.Node`, the data plane bypasses socket buffers enti
 * Inter-Host (Networked over Multi-Gigabit/ATM):
 If `Producer.Node != Consumer.Node`, the control plane emits an `XBlobStreamedChunkAdvisory` to pre-allocate ring buffers on the destination XAudioNode. The payload is then pumped directly out of the producer's kernel STREAMS module to the destination IP over TCP/IP without copying into user-space daemon memory.
 
+## 8.6. The Android Enclave
+an android app to
+* connect android actions to xintent intents
+* some kind of persistent connection, doesnt matter what, to connect xintent intents to android actions
+* that will require an explicit connect/disconnect system from the xintent bridge X client
+* to host html cards, the xintent bridge will translate its xids and tell the android apps to use virtual xids in the 0x10xxxxxx range like a nat router, and also translate xblob ids
+* instant android app with rich command surface and no compile step
+* nothing stopping a further nat bridge to connect the watch to the phone, let them communicate in the cave, then the phone talks to the desktop when the user leaves the cave
+* to bridge user-desktop to user-laptop, will need a peering nat bridge
+
 # 9. How This System Will Come About
 ### 9.1 Web First
 * start with the http bridge serving intents on :12345
