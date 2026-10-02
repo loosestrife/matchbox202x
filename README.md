@@ -175,7 +175,7 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 
 ### 3.2 Example Intents 
 ```
-fs.PickFile({[mimeType]})
+fs.PickFile({[mimeType], holdOpenForWrites})
 fs.PickFiles({[mimeType], maxFiles})
 fs.PickFileResponse({BlobId})
 fs.SaveAs({BlobId, pathHint})
