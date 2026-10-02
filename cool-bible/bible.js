@@ -107,6 +107,7 @@ labeledVerses.forEach(([label, verseText])=>{
   }
   bibleData[book][chapter][verseId] = verseText;
 });
+console.log(Object.keys(bibleData));
 
 
 const paraStarts = labeledVerses.filter(
@@ -155,6 +156,7 @@ const getBibleVerse = (book, chapter, verse) => {
   return bibleData[book][chapter][verse];
 }
 function getBibleSection(book, chapter, startVerse = undefined, endVerse = undefined) {
+  console.log({book, chapter, startVerse, endVerse});
   const chapterVerses = bibleData[book]?.[chapter];
   if (!chapterVerses) return [];
 
@@ -164,7 +166,13 @@ function getBibleSection(book, chapter, startVerse = undefined, endVerse = undef
   }
 
   const finalVerse = endVerse ?? startVerse;
-  return chapterVerses.filter(v => v.verse >= startVerse && v.verse <= finalVerse);
+  const out = {};
+  Object.keys(chapterVerses).forEach(v => {
+    if(v >= startVerse && v <= finalVerse){
+      out[v] = chapterVerses[v];
+    }
+  });
+  return out;
 }
 
 // Map or Set of single-chapter books (including common abbreviations)
@@ -179,6 +187,14 @@ const SINGLE_CHAPTER_BOOKS = new Set([
 function lookupReference(refString) {
   const { book, chapter, startVerse, endVerse } = parseReferenceString(refString);
   return getBibleSection(book, chapter, startVerse, endVerse);
+}
+
+function lookupReferenceFormatted(refString) {
+  const verses = lookupReference(refString);
+  return Object.keys(verses)
+    .map(vn => 
+      (verses[vn][0]=='¶'?'\n  ':'') + vn + verses[vn]
+    ).join(' ');
 }
 
 function parseReferenceString(refString) {
@@ -252,6 +268,6 @@ function parseReferenceString(refString) {
 }
 
 module.exports = {labeledVerses, bibleData,
-  randomVerse, getBibleVerse, getBibleSection, lookupReference,
+  randomVerse, getBibleVerse, getBibleSection, lookupReference, lookupReferenceFormatted,
   bookRef2short, shortRef2long,
   paraGen, paraBooks, paraStarts, bookRef2shortFn};

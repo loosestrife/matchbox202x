@@ -63,7 +63,7 @@ async function startDaemon() {
         if (payload.intent === 'ui.TextProcess') {
           console.log(`\n[cool-bible] Received ui.TextProcess intent from ${widString(senderWin)} on channel ${channel} for ref: "${payload.ref}"`);
 
-          const resultText = bible.lookupReference(payload.text);
+          const resultText = bible.lookupReferenceFormatted(payload.text);
 
 
           await sendXIntentEventV0(X, xintent.routerWin, {

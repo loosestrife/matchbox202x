@@ -2,4 +2,14 @@
 <resources>
 
     <style name="Theme.Flammenwerfer" parent="android:Theme.Material.Light.NoActionBar" />
+
+
+    <!-- Translucent theme for ProcessTextActivity to prevent window focus loss -->
+    <style name="Theme.ProcessTextTranslucent" parent="android:Theme.Material.Light.Dialog">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>

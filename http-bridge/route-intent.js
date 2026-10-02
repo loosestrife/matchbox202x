@@ -19,7 +19,7 @@ const routeIntent = async (req, res) => {
   }
 
   const payload = req.body;
-  logger.info(`[INTENT] ${intent} -> Target: ${targetApp}`);
+  logger.info(`[INTENT] ${intent} -> Target: ${targetApp}`, req.body);
   const txId = globalTransactionIdCounter++;
 
   // --- 1. Streamed Multipart Response Path ---
@@ -58,7 +58,7 @@ const routeIntent = async (req, res) => {
         ev.data[2] == txId
       ) {
         const { payload: eventData } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        logger.info('Event recieved', eventData);
+        //logger.info('Event recieved', eventData);
 
         writeJsonFrame(res, eventData);
 
@@ -78,6 +78,7 @@ const routeIntent = async (req, res) => {
 
         // Finalize stream when disposition is final
         if (eventData.disposition === 'final') {
+          logger.info("Closing stream", {txId});
           res.write(`--${BOUNDARY}--\r\n`);
           res.end();
           return;
