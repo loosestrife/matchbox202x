@@ -81,8 +81,8 @@ an XIntentNonJsonFrame with message type `XBlobStreamChunkRecievedV0` and `data.
 ## XAudioNode registation
 an XAudioNode claims an atom for what numa node its on, as `XAUDIO_NODE_${host}`, and progams use XGetSelection() to find their local XAudioNode.  Then `XBlobCreate` returns a globally unique atom, but the XBLOB is actually on the window that owns the atom according to XGetSelection().
 
-## XAudioNodeMoveBlob
-an XIntentNonJsonFrame with message type `XAudioNodeMoveBlobV0`, `data.l[1]` as the blob atom, `data.l[2]` as the XAudioNode window to move the blob to.
+## XBlobBroadcast
+an XIntentNonJsonFrame with message type `XBlobBroascastV0` and  `data.l[1]` as the blob atom.  Broadcast local modification to other numa nodes with a link.
 
 # XAUDIO V0
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.
@@ -146,6 +146,16 @@ anyway
 ```
 your fire and forget service still has to send `202 Accepted` and your other service now sends a multipart/mixed sequence of events back.
 * the other alternative was to define a service as being capable of replying if it registers itself with a `replies: true` in its matchbox.toml
+
+## Why no flow control
+* in theory tcp is about streams, the streams must drain because the entire stream is what must be preserved.  xintent is a datagram protocol and a valid xintent stream consists of a sequence of datagrams.  therefore xintent doesnt need a multi step closing system
+* in practice a process closes a pipe when its no longer interested in the contents, so tcp doesnt need a multi round disconnection protocol either, but does need to distinguish between the connection ending after everything has been transmitted and before, because tcp has no intrinsic sync points to define the previous parts as valid, a zip file is line noise without the last few bytes
+* however, the tcp stream shutdown procedure is for bursty networks to ask if the sender is done, because the listener might want to continue to listen if the sender isnt done yet
+* and the reason xintent doesnt need that when an intent is complete is well defined.  for example a {intent: ui.Copy} is complete when the clipboard is overwritten and there will be no further {event: ui.Paste}
+* nor does xintent need an application layer sys.Ping because x11 already has a _NET_WM_PING
+
+## Why all the NAT
+user-desktop has the X session and user has user-phone with flammenwerfer and user-watch with flammenspritzer.  User goes in a cave.  Flammenwerfer and flammenspritzer continue to work over bluetooth because 10.x.x.x is a local address.  When user leaves the cave, flammenwerfer syncs to user-desktop.
 
 # Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.

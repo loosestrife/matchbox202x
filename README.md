@@ -41,6 +41,7 @@ This specification defines a unified, lightweight desktop platform constructed e
 * X11: a high performance session bus and shared database with clear semantics for the past 50 years.  So if the session needs a shared database and clear semantics
 * XBLOB: adds web File/Blob/ReadableStream/MediaStream so you can ctrl-C the video lecture on user-laptop and ctrl-V it into the terminal window on user-desktop once nemo catches up and advertises XBLOB File as the copy format
 * XSECURE: coping with your ex-secure system that you connected to the network. We can have iptables or aws waf or whatever deep packet inspecting firewall system we want, and use jwt's from policykit or oauth.  So the keylogger that connected from `ssh -X other-guys-computer` gets its XGrabKeyboard dropped and KeyPress dropped when it doesn't have a focused window.  Paranoid users can put a separate deep packet inspecting firewall in front of their X servers, this isnt rocket surgery, everyone knows how to firewall network protocols.
+* Android bridge app "Flammenwerfer" to send intents back and forth thus hanging your android off your X session, and load html cards with intents so you get an instant phone ui without compiling kotlin in android studio
 * Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands.  Trusted .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http, scripts can send and recieve intents over stdin/stdout in NNJSON format.
 
 ### 1.2 User's Distributed Lifestyle
@@ -558,6 +559,16 @@ When a consumer process issues a request to attach to an XBlobID, the nearest XA
 If `Producer.Node == Consumer.Node`, the data plane bypasses socket buffers entirely. The XAudioNode executes XBlobGrant by remapping the underlying page descriptors directly into the consumer's address space using SBus DVMA remapping (mmap() with MAP_SHARED).
 * Inter-Host (Networked over Multi-Gigabit/ATM):
 If `Producer.Node != Consumer.Node`, the control plane emits an `XBlobStreamedChunkAdvisory` to pre-allocate ring buffers on the destination XAudioNode. The payload is then pumped directly out of the producer's kernel STREAMS module to the destination IP over TCP/IP without copying into user-space daemon memory.
+
+## 8.6. The Android Enclave
+an android app to
+* connect android actions to xintent intents
+* some kind of persistent connection, doesnt matter what, to connect xintent intents to android actions
+* that will require an explicit connect/disconnect system from the xintent bridge X client
+* to host html cards, the xintent bridge will translate its xids and tell the android apps to use virtual xids in the 0x10xxxxxx range like a nat router, and also translate xblob ids
+* instant android app with rich command surface and no compile step
+* nothing stopping a further nat bridge to connect the watch to the phone, let them communicate in the cave, then the phone talks to the desktop when the user leaves the cave
+* to bridge user-desktop to user-laptop, will need a peering nat bridge
 
 # 9. How This System Will Come About
 ### 9.1 Web First
