@@ -145,11 +145,110 @@ object XIntentClient {
                     if (textVal.isNotBlank()) return textVal
                 }
             }
-            // If the response was valid JSON but contained no replacement text field (e.g. {"status":"ok"}), return null
             return null
         }
 
         return trimmed
+    }
+
+    suspend fun sendSaveAsIntent(
+        context: Context,
+        name: String,
+        type: String,
+        size: Long,
+        dataType: String,
+        data: String,
+        targetApp: String = "cool-clips",
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/fs/SaveAs?app=$targetApp"
+
+        val logPrefix = "[fs.SaveAs -> $targetApp]"
+        addLog("$logPrefix Saving file: $name ($type, $size bytes)")
+
+        try {
+            val blobJson = JSONObject().apply {
+                put("name", name)
+                put("type", type)
+                put("size", size)
+                put("_dataType", dataType)
+                put("data", data)
+            }
+
+            val jsonBody = JSONObject().apply {
+                put("intent", "fs.SaveAs")
+                put("app", targetApp)
+                put("blob", blobJson)
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.joinToString("\n---\n") { it.toString(2) }
+            } else {
+                responseText.ifBlank { "(Empty response body)" }
+            }
+
+            Log.i(TAG, "Sent fs.SaveAs to $targetApp [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
+                Result(
+                    success = true,
+                    statusCode = responseCode,
+                    responseBody = formattedDisplay,
+                )
+            } else {
+                addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
+                Result(
+                    success = false,
+                    statusCode = responseCode,
+                    responseBody = formattedDisplay,
+                    errorMessage = "HTTP $responseCode: $formattedDisplay",
+                )
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending fs.SaveAs to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            Result(
+                success = false,
+                errorMessage = errorDetail,
+            )
+        }
     }
 
     suspend fun sendTextProcessIntent(

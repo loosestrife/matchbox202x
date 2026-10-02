@@ -560,15 +560,22 @@ If `Producer.Node == Consumer.Node`, the data plane bypasses socket buffers enti
 * Inter-Host (Networked over Multi-Gigabit/ATM):
 If `Producer.Node != Consumer.Node`, the control plane emits an `XBlobStreamedChunkAdvisory` to pre-allocate ring buffers on the destination XAudioNode. The payload is then pumped directly out of the producer's kernel STREAMS module to the destination IP over TCP/IP without copying into user-space daemon memory.
 
-## 8.6. The Android Enclave
-an android app to
-* connect android actions to xintent intents
-* some kind of persistent connection, doesnt matter what, to connect xintent intents to android actions
-* that will require an explicit connect/disconnect system from the xintent bridge X client
-* to host html cards, the xintent bridge will translate its xids and tell the android apps to use virtual xids in the 0x10xxxxxx range like a nat router, and also translate xblob ids
-* instant android app with rich command surface and no compile step
-* nothing stopping a further nat bridge to connect the watch to the phone, let them communicate in the cave, then the phone talks to the desktop when the user leaves the cave
-* to bridge user-desktop to user-laptop, will need a peering nat bridge
+## 8.6 Shared Mutable State
+* To support XBlobBroadcast, XBlob will need a version number in the xblobs.  XBlobBroadcast will send the new version number in its XClientMessage and interested parties can request data with version number $>=n$
+* XBlob will need hard links and soft links
+Capability | Hard Link | Soft Link
+---
+Bumps Refcount | Yes (Prevents deletion) | No (Ephemeral watcher)
+Receives XBlobBroadcast | Yes | Yes
+Receives XBlobDeleted | N/A (Triggers when refcount hits 0) | Yes (Closes $fd$)
+Can issue XBlobGrant | Yes | No
+
+* the XBlobHost program on user-laptop doesn't need to know that its holding an fd for the flammenwerfer app on user-phone to save cat.jpg to after applying the dog face filter.  It holds the fd until it gets an XBlobDeleted.
+
+
+## 8.7 fs.PickFiles and Directories
+* fs.PickFiles would return a blob of type multipart/mixed
+* a Directory is a ReadableStream of type multipart/mixed.  This does not support every operation on a directory any more than a web blob supports every operation on a file, however, it supports copying directories between computers
 
 # 9. How This System Will Come About
 ### 9.1 Web First
@@ -582,7 +589,11 @@ an android app to
 
 ### 9.2 Android Enclave
 * matchbox202x app on fdroid that loads html cards and provides localhost:12345, maps intents to android intents, and sideloads packages from /Matchbox
-* matchbox202x app does a ssh -X to user-laptop, and allows apps from user-laptop to display html cards
+* some kind of persistent connection, doesnt matter what, to connect xintent intents to android actions the other way. that will require an explicit connect/disconnect system from the xintent bridge X client
+* to host html cards, the xintent bridge will translate its xids and tell the android apps to use virtual xids in the 0x10xxxxxx range like a nat router, and also translate xblob ids
+* instant android app with rich command surface and no compile step
+* nothing stopping a further nat bridge to connect the watch to the phone, let them communicate in the cave, then the phone talks to the desktop when the user leaves the cave
+* to bridge user-desktop to user-laptop, will need a peering nat bridge
 
 ### 9.3 X modifications
 * once everyone is using matchbox202x, the planned fast path can be implemented, and the unix desktop can be what it should have been in the 1990's

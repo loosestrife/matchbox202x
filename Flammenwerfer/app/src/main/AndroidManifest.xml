@@ -32,6 +32,23 @@
             android:exported="false"
             android:theme="@style/Theme.ProcessTextTranslucent" />
 
+        <activity
+            android:name=".SendIntentActivity"
+            android:exported="true"
+            android:label="Save to Desktop (XIntent)"
+            android:theme="@style/Theme.ProcessTextTranslucent">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
         <!-- these are defined in reverse order due to a binder mistake -->
         <activity-alias
             android:name=".ProcessTextAction3"

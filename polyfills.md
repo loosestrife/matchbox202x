@@ -51,8 +51,9 @@ an XBlob V0 is an X property on the blob host window, to be deleted when its out
 {xblobType, type, size, name, data, _dataType}
 ```
 * _dataType is one of text, json, base64
-* xblobType is one of File, Blob, ReadableStream, MediaStream
-if xblobType is a *Stream, _dataType is json and data is a pseudo-rtmp packet
+* xblobType is one of File, Blob, ReadableStream, Directory, MediaStream
+* if type is multipart/mixed, and _dataType is json, the representation would be as an array of xblobs
+* if xblobType is a MediaStream, _dataType is json and data is a pseudo-rtmp packet
 ```js
 {type, timestamp, streamId, seqNum, blob: {type, data}}
 ```

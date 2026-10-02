@@ -111,12 +111,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text(
-                    text = "💡 Long-Tap Menu Directives",
+                    text = "💡 Directives & Shares",
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Select text in any app (Chrome, Notes, etc.) and long-tap to find 'XIntent Action 1', 'XIntent Action 2', or 'XIntent Action 3' in the context menu. If the text field is editable, replacement text returned by the HTTP bridge will automatically replace the selected text!",
+                    text = "1. Long-tap text in any app to use 'XIntent Action 1', 'XIntent Action 2', or 'XIntent Action 3'.\n2. Share files, images, or text from any app using 'Save to Desktop (XIntent)' to send an 'fs.SaveAs' blob intent!",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -199,7 +199,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 onCheckedChange = { canReplace = it },
             )
             Text(
-                text = "Request Text Replacement (replace: true, Accept: text/plain)",
+                text = "Request Text Replacement (replace: true, Accept: *)",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -230,6 +230,31 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("XIntent Action 3 (--app ${action3App.ifBlank { "cool-clips" }})")
+            }
+
+            Button(
+                onClick = {
+                    if (testText.isNotBlank()) {
+                        isSending = true
+                        coroutineScope.launch {
+                            val bytes = testText.toByteArray(Charsets.UTF_8)
+                            XIntentClient.sendSaveAsIntent(
+                                context = context,
+                                name = "test_note.txt",
+                                type = "text/plain",
+                                size = bytes.size.toLong(),
+                                dataType = "text",
+                                data = testText,
+                                targetApp = action1App.ifBlank { "cool-clips" },
+                            )
+                            isSending = false
+                        }
+                    }
+                },
+                enabled = !isSending && testText.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Test fs.SaveAs Blob Intent (--app ${action1App.ifBlank { "cool-clips" }})")
             }
         }
 
