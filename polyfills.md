@@ -70,8 +70,17 @@ an XIntentNonJsonFrame with message type `XBlobCreateResponseV0`, `data.l[1]` as
 ## XBlobGrant
 an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
 
+## XBlobSoftLink
+an XIntentNonJsonFrame with message type `XBlobSoftLinkV0`, `data.l[1]` as the blob atom, `data.l[2]` as the window to get a soft link.
+
 ## XBlobUnlink
 an XIntentNonJsonFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob atom.
+
+## XBlobDestructor
+an XIntentNonJsonFrame with message type `XBlobDestructorV0` and `data.l[1]` as the blob atom.  Informs soft linkers that the blob has reached refcount 0.
+
+## XBlobSoftUnlink
+an XIntentNonJsonFrame with message type `XBlobSoftUnlinkV0` and `data.l[1]` as the blob atom.  Removes the soft link.
 
 ## XBlobStreamChunkAdvise
 an XIntentNonJsonFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to every consumer.
