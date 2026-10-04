@@ -197,6 +197,9 @@ async function XBlobWrite(X, routerWin, senderWin, blobAtom, data, host, version
   if(version){
     data.version = version; // todo: get the current verion and bump it
   }
+  const hostname = os.hostname();
+  const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
+  const xblobHost = await X.GetSelectionOwner(hostAtom);
   const payloadString = Buffer.from(JSON.stringify(blobData, null, 2));
   const buffer = Buffer.from(payloadString, 'utf8');
   // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
@@ -208,13 +211,14 @@ async function XBlobWrite(X, routerWin, senderWin, blobAtom, data, host, version
     const mode = offset === 0 ? 0 : 2;
     X.ChangeProperty(
       mode,
-      routerWin,
+      xblobHost,
       blobAtom,
       atoms.STRING,
       8,
       chunk
     );
   }
+  X.SetSelectionOwner(xblobHost, blobAtom, 0);
 }
 
 
