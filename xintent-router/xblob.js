@@ -92,9 +92,9 @@ const handleXBlobSoftLinkV0 = {
       resources: [{XBlob: parsed.blobId}],
     };
   },
-  accept: async parsed => {
-    logger.info(`XBlobUnlink soft linking ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
-    xblobRegistry[parsed.blobId].softLinks.push(parsed.senderWin);
+  accept: async ({senderWin, blobId}) => {
+    logger.info(`XBlobUnlink soft linking ${widString(blobId)} from ${widString(senderWin)}`);
+    xblobRegistry[blobId].softLinks.push(senderWin);
   },
 };
 
@@ -104,16 +104,16 @@ const handleXBlobSoftUnlinkV0 = {
     const [senderWin, blobId] = ev.data;
     return {targetWin, senderWin, blobId};
   },
-  securityContext: parsed => {
+  securityContext: ({senderWin, blobId}) => {
     return {
-      source: {window: parsed.senderWin},
+      source: {window: senderWin},
       action: 'XBlobSoftUnlink',
-      resources: [{XBlob: parsed.blobId}],
+      resources: [{XBlob: blobId}],
     };
   },
   accept: async ({blobId, senderWin}) => {
     logger.info(`XBlobUnlink soft unlinking ${widString(blobId)} from ${widString(senderWin)}`);
-    const link = xblobRegistry[parsed.blobId].softLinks.indexOf(senderWin);
+    const link = xblobRegistry[blobId].softLinks.indexOf(senderWin);
     xblobRegistry[blobId].softLinks.splice(link, 1);
     await checkForDeletion(blobId, xblobRegistry[blobId]);
   },
@@ -132,20 +132,20 @@ const handleXBlobBroadcastV0 = {
       resources: [{XBlob: parsed.blobId}],
     };
   },
-  accept: async parsed => {
-    logger.info(`XBlobBroadcast broadcasting version ${parsed.version} on host ${widString(host)} of ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
+  accept: async ({senderWin, blobId, host, version}) => {
+    logger.info(`XBlobBroadcast broadcasting version ${version} on host ${widString(host)} of ${widString(blobId)} from ${widString(senderWin)}`);
     for(const broadcastTarget of [
-      ...xblobRegistry[parsed.blobId].links,
-      ...xblobRegistry[parsed.blobId].softLinks
+      ...xblobRegistry[blobId].links,
+      ...xblobRegistry[blobId].softLinks
     ]){
       if([senderWin, routerWin].includes(broadcastTarget)){
         continue;
       }
       XClientMessage(X, broadcastTarget, atoms.XBLOB_BROADCAST_V0, [
-        parsed.senderWin,
-        parsed.blobId,
-        parsed.host,
-        parsed.version,
+        senderWin,
+        blobId,
+        host,
+        version,
       ]);
     }
   },

@@ -1,5 +1,6 @@
 //matchbox-service-lighter/pick-files.js
 const { isUtf8 } = require('node:buffer');
+const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -58,7 +59,7 @@ const pickFile = async (xiIntent) => {
 };
 
 const xblobBroadcast = async message => {
-  const data = XBlobRead(X, xintent.routerWin, message.blob, message.host, message.version);
+  const data = await XBlobRead(X, xintent.routerWin, message.blob, message.host, message.version);
   let buf;
   if(data._dataType == 'text'){
     buf = Buffer.from(data.data, 'utf-8')
@@ -97,10 +98,10 @@ function execShell(command) {
 
 let X;
 let lighterWin;
-const init = g => {
+const init = async g => {
   X = g.X;
   lighterWin = g.lighterWin;
-  const hostame = os.hostname();
+  const hostname = os.hostname();
   const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
   X.SetSelectionOwner(lighterWin, hostAtom, 0);
 };

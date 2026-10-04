@@ -176,7 +176,7 @@ async function XBlobSoftLink(X, routerWin, senderWin, blobAtom) {
 }
 
 async function XBlobSoftUnlink(X, routerWin, senderWin, blobAtom) {
-  console.log(`[xintent] x11-promises/xintent:XBlobSoftLink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  console.log(`[xintent] x11-promises/xintent:XBlobSoftUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_UNLINK_V0, [
     senderWin,
     blobAtom,
@@ -193,7 +193,7 @@ async function XBlobBroadcast(X, routerWin, senderWin, blobAtom, host, version) 
   ]);
 }
 
-async function XBlobWrite(X, routerWin, senderWin, blobAtom, data, host, version){
+async function XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, host, version){
   if(version){
     data.version = version; // todo: get the current verion and bump it
   }
