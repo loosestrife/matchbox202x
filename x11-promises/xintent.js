@@ -1,5 +1,6 @@
 // xintent.js
 const crypto = require("crypto");
+const os = require("os");
 const x11 = require("./x11-promises");
 
 const atoms = {};
@@ -35,6 +36,10 @@ async function connectToRouter(X, root) {
     "XBLOB_GRANT_V0",
     "XBLOB_UNLINK_V0",
     "XBLOB_TRANSFER_V0",
+    "XBLOB_BROADCAST_V0",
+    "XBLOB_SOFT_LINK_V0",
+    "XBLOB_SOFT_UNLINK_V0",
+    "XBLOB_DESTRUCTOR_V0",
   ];
 
   await Promise.all(
@@ -141,24 +146,8 @@ async function XBlobCreate(
   ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
 
   const blobAtom = responseEv.data[1];
-  const payloadString = Buffer.from(JSON.stringify(blobData, null, 2));
-  const buffer = Buffer.from(payloadString, 'utf8');
-  // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
-  const CHUNK_SIZE = 32768;
-  for (let offset = 0; offset < buffer.length; offset += CHUNK_SIZE) {
-    const chunk = buffer.subarray(offset, offset + CHUNK_SIZE);
-    // Mode 0 = PropModeReplace (first chunk resets/creates the prop)
-    // Mode 2 = PropModeAppend  (subsequent chunks append)
-    const mode = offset === 0 ? 0 : 2;
-    X.ChangeProperty(
-      mode,
-      routerWin,
-      blobAtom,
-      atoms.STRING,
-      8,
-      chunk
-    );
-  }
+  XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, os.hostname(), null);
+
   return blobAtom;
 }
 
@@ -178,6 +167,57 @@ async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
   ]);
 }
 
+async function XBlobSoftLink(X, routerWin, senderWin, blobAtom) {
+  console.log(`[xintent] x11-promises/xintent:XBlobSoftLink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_LINK_V0, [
+    senderWin,
+    blobAtom,
+  ]);
+}
+
+async function XBlobSoftUnlink(X, routerWin, senderWin, blobAtom) {
+  console.log(`[xintent] x11-promises/xintent:XBlobSoftLink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_UNLINK_V0, [
+    senderWin,
+    blobAtom,
+  ]);
+}
+
+async function XBlobBroadcast(X, routerWin, senderWin, blobAtom, host, version) {
+  console.log(`[xintent] x11-promises/xintent:XBlobBroadcast(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_UNLINK_V0, [
+    senderWin,
+    blobAtom,
+    host,
+    version,
+  ]);
+}
+
+async function XBlobWrite(X, routerWin, senderWin, blobAtom, data, host, version){
+  if(version){
+    data.version = version; // todo: get the current verion and bump it
+  }
+  const payloadString = Buffer.from(JSON.stringify(blobData, null, 2));
+  const buffer = Buffer.from(payloadString, 'utf8');
+  // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
+  const CHUNK_SIZE = 32768;
+  for (let offset = 0; offset < buffer.length; offset += CHUNK_SIZE) {
+    const chunk = buffer.subarray(offset, offset + CHUNK_SIZE);
+    // Mode 0 = PropModeReplace (first chunk resets/creates the prop)
+    // Mode 2 = PropModeAppend  (subsequent chunks append)
+    const mode = offset === 0 ? 0 : 2;
+    X.ChangeProperty(
+      mode,
+      routerWin,
+      blobAtom,
+      atoms.STRING,
+      8,
+      chunk
+    );
+  }
+}
+
+
 async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
   return XClientMessage(X, routerWin, atoms.XBLOB_TRANSFER_V0, [
     senderWin,
@@ -186,10 +226,10 @@ async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
   ]);
 }
 
-const sendXIntentIntentV0 = (X, routerWin, messageData) =>
-  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, messageData); 
-const sendXIntentEventV0 = (X, routerWin, messageData) =>
-  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, messageData);
+const sendXIntentIntentV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true}) =>
+  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob }); 
+const sendXIntentEventV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true}) =>
+  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob });
 
 const sendXIV0 = async (
   messageTypeAtom,
@@ -237,7 +277,8 @@ const sendXIV0 = async (
   return payloadBlob;
 }
 
-async function XBlobRead(X, routerWin, blobAtom) {
+async function XBlobRead(X, routerWin, blobAtom, host, version) {
+  // ...so yeah we need to connec to host if specified, then get at least the version specified
   let hostWin = await X.GetSelectionOwner(blobAtom);
   if (!hostWin) {
     hostWin = routerWin;
@@ -281,6 +322,20 @@ async function parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob = true}
   return { targetWin: ev.wid, senderWin, channel, payload, payloadBlob, dataBlob };
 }
 
+function parseXBlobBroadcastFrame(X, routerWin, ev){
+  return {
+    blob: ev.data[1],
+    host: ev.data[2],
+    version: ev.data[3],
+  }
+}
+
+function parseXBlobDestructorFrame(X, routerWin, ev) {
+  return {
+    blob: ev.data[1],
+  }
+}
+
 
 module.exports = {
   connectToRouter,
@@ -290,12 +345,18 @@ module.exports = {
   parseJsonFrame,
   parseXIntentIntentV0,
   parseXIntentEventV0: parseXIntentIntentV0,
+  parseXBlobBroadcastFrame,
+  parseXBlobDestructorFrame,
   XClientMessage,
   sendXIntentIntentV0,
   sendXIntentEventV0,
   XBlobCreate,
   XBlobGrant,
   XBlobUnlink,
+  XBlobSoftLink,
+  XBlobSoftUnlink,
   XBlobTransfer,
   XBlobRead,
+  XBlobWrite,
+  XBlobBroadcast,
 };
