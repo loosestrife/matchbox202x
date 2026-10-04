@@ -185,7 +185,7 @@ async function XBlobSoftUnlink(X, routerWin, senderWin, blobAtom) {
 
 async function XBlobBroadcast(X, routerWin, senderWin, blobAtom, host, version) {
   console.log(`[xintent] x11-promises/xintent:XBlobBroadcast(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
-  return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_UNLINK_V0, [
+  return XClientMessage(X, routerWin, atoms.XBLOB_BROADCAST_V0, [
     senderWin,
     blobAtom,
     host,
