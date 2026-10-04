@@ -5,7 +5,7 @@ const logger = new Logger({module: 'server.js'});
 const {x11, X, rawX, root, routerWin} = require('.');
 const {atoms, widString, connectToRouter} = require('../x11-promises/xintent');
 const {handleXIntentIntentV0, handleXIntentEventV0, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
-const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow} = require('./xblob');
+const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0} = require('./xblob');
 const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0, xaudioUnregisterWindow} = require('./xaudio');
 const {checkXSecurePolicy} = require('./xsecure');
 
@@ -33,7 +33,9 @@ async function startRouter() {
     'XBLOB_GRANT_V0': handleXBlobGrantV0,
     'XBLOB_UNLINK_V0': handleXBlobUnlinkV0,
     'XBLOB_TRANSFER_V0': handleXBlobTransferV0,
-    'XAUDIO_NODE_REGISTER_V0': handleXAudioNodeRegisterV0,
+    'XBLOB_BROADCAST_V0': handleXBlobBroadcastV0,
+    'XBLOB_SOFT_LINK_V0': handleXBlobSoftLinkV0,
+    'XBLOB_SOFT_UNLINK_V0': handleXBlobSoftUnlinkV0,
 
     'XAUDIO_GET_AUDIO_OUTPUTS_V0': handleXAudioGetAudioOutputsV0,
     'XAUDIO_PLAY_V0': handleXAudioPlayV0,

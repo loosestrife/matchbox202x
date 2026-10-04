@@ -138,6 +138,9 @@ const handleXBlobBroadcastV0 = {
       ...xblobRegistry[parsed.blobId].links,
       ...xblobRegistry[parsed.blobId].softLinks
     ]){
+      if([senderWin, routerWin].includes(broadcastTarget)){
+        continue;
+      }
       XClientMessage(X, broadcastTarget, atoms.XBLOB_BROADCAST_V0, [
         parsed.senderWin,
         parsed.blobId,
