@@ -1,5 +1,5 @@
 // xblob.js
-const {atoms, widString, parseJsonFrame} = require('../x11-promises/xintent.js');
+const {atoms, widString, parseJsonFrame, XClientMessage} = require('../x11-promises/xintent.js');
 const {Logger} = require('../server-tools');
 const logger = new Logger({module: 'xblob'});
 const {X, rawX, x11, root, routerWin} = require('./index.js');
@@ -7,7 +7,6 @@ const {X, rawX, x11, root, routerWin} = require('./index.js');
 const xblobRegistry = {};
 const xblobAtoms = [];
 const xblobAtomAssignments = [];
-const xblobHosts = {};
 
 const handleXBlobCreateV0 = {
   parse: ev => {
@@ -80,6 +79,75 @@ const handleXBlobUnlinkV0 = {
   },
 };
 
+const handleXBlobSoftLinkV0 = {
+  parse: ev => {
+    const targetWin = ev.wid;
+    const [senderWin, blobId] = ev.data;
+    return {targetWin, senderWin, blobId};
+  },
+  securityContext: parsed => {
+    return {
+      source: {window: parsed.senderWin},
+      action: 'XBlobSoftLink',
+      resources: [{XBlob: parsed.blobId}],
+    };
+  },
+  accept: async parsed => {
+    logger.info(`XBlobUnlink soft linking ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
+    xblobRegistry[parsed.blobId].softLinks.push(parsed.senderWin);
+  },
+};
+
+const handleXBlobSoftUnlinkV0 = {
+  parse: ev => {
+    const targetWin = ev.wid;
+    const [senderWin, blobId] = ev.data;
+    return {targetWin, senderWin, blobId};
+  },
+  securityContext: parsed => {
+    return {
+      source: {window: parsed.senderWin},
+      action: 'XBlobSoftUnlink',
+      resources: [{XBlob: parsed.blobId}],
+    };
+  },
+  accept: async ({blobId, senderWin}) => {
+    logger.info(`XBlobUnlink soft unlinking ${widString(blobId)} from ${widString(senderWin)}`);
+    const link = xblobRegistry[parsed.blobId].softLinks.indexOf(senderWin);
+    xblobRegistry[blobId].softLinks.splice(link, 1);
+    await checkForDeletion(blobId, xblobRegistry[blobId]);
+  },
+};
+
+const handleXBlobBroadcastV0 = {
+  parse: ev => {
+    const targetWin = ev.wid;
+    const [senderWin, blobId, host, version] = ev.data;
+    return {targetWin, senderWin, blobId, host, version};
+  },
+  securityContext: parsed => {
+    return {
+      source: {window: parsed.senderWin},
+      action: 'XBlobBroadcast',
+      resources: [{XBlob: parsed.blobId}],
+    };
+  },
+  accept: async parsed => {
+    logger.info(`XBlobBroadcast broadcasting version ${parsed.version} on host ${widString(host)} of ${widString(parsed.blobId)} from ${widString(parsed.senderWin)}`);
+    for(const broadcastTarget of [
+      ...xblobRegistry[parsed.blobId].links,
+      ...xblobRegistry[parsed.blobId].softLinks
+    ]){
+      XClientMessage(X, broadcastTarget, atoms.XBLOB_BROADCAST_V0, [
+        parsed.senderWin,
+        parsed.blobId,
+        parsed.host,
+        parsed.version,
+      ]);
+    }
+  },
+};
+
 const handleXBlobTransferV0 = {
   parse: ev => {
     const targetWin = ev.wid;
@@ -103,21 +171,11 @@ const handleXBlobTransferV0 = {
   },
 };
 
-const handleXAudioNodeRegisterV0 = {
-  parse: async ev => {
-    const {senderWin, payload} = await parseJsonFrame(X, routerWin, ev);
-    return {senderWin, hostName: payload.hostName};
-  },
-  securityContext: parsed => {
-    return {source: {window: parsed.senderWin}, action: 'XAudioNodeRegister'};
-  },
-  accept: parsed => {
-    xblobHosts[parsed.hostName] = parsed.senderWin;
-  }
-};
-
 const xblobCreate = async (senderWin) => {
-  const blobTrackingData = { links: [senderWin] };
+  const blobTrackingData = {
+    links: [senderWin],
+    softLinks: [],
+  };
 
   let blobIdx = xblobAtomAssignments.findIndex(slot => !slot);
   if (blobIdx === -1) {
@@ -155,7 +213,20 @@ const xblobUnlink = async (blobId, unlinkWin) => {
     regEntry.links.splice(link, 1);
   }
 
-  if (regEntry.links.length === 0) {
+  if (regEntry.links.length == 0){
+    for(const notifyWin of regEntry.softLinks){
+      XClientMessage(X, notifyWin, atoms.XBLOB_DESTRUCTOR_V0, [
+        routerWin,
+        blobId,
+      ]);
+    }
+  }
+
+  await checkForDeletion(blobId, regEntry);
+};
+
+const checkForDeletion = async (blobId, regEntry) => {
+  if (regEntry.links.length == 0 && regEntry.softLinks.length == 0) {
     logger.info(`deleting unlinked blob ${widString(blobId)}`);
     await X.DeleteProperty(routerWin, blobId);
     delete xblobRegistry[blobId];
@@ -203,13 +274,6 @@ const xblobUnlinkWindow = async (destroyedWin) => {
       }
     }
   }
-
-  // 2. Remove any host registrations owned by the destroyed window
-  for (const [hostName, hostWin] of Object.entries(xblobHosts)) {
-    if (hostWin === destroyedWin) {
-      delete xblobHosts[hostName];
-    }
-  }
 };
 
 module.exports = {
@@ -217,7 +281,9 @@ module.exports = {
   handleXBlobGrantV0,
   handleXBlobUnlinkV0,
   handleXBlobTransferV0,
-  handleXAudioNodeRegisterV0,
+  handleXBlobBroadcastV0,
+  handleXBlobSoftLinkV0,
+  handleXBlobSoftUnlinkV0,
   xblobCreate,
   implicitXBlobGrant,
   implicitXBlobTransfer,

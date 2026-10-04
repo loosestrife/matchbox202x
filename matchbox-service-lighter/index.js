@@ -1,12 +1,13 @@
 // matchbox-service-lighter/index.js
 const { spawn } = require('child_process');
+const os = require('os');
 const util = require('util');
 const TOML = require('@iarna/toml');
 const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
 const x11 = require('../x11-promises/x11-promises');
 const xintent = require('../x11-promises/xintent');
 const {Logger} = require('../server-tools');
-const pickFiles = require('./pick-files');
+const pickFiles = require('./xblob-host');
 
 const logger = new Logger({module: 'index.js'});
 logger.setProjectName('service-lighter')
