@@ -74,9 +74,6 @@
       min-height: 50px;
     }
   </style>
-
-  <!-- Load client library via express route -->
-  <script src="/matchbox202x.js"></script>
 </head>
 <body>
 
@@ -106,7 +103,7 @@
 
 <script>
   let intentRegistry = {};
-  let packageRegistry = {};
+  let appRegistry = {};
 
   const intentSelect = document.getElementById('intent-select');
   const appSelect = document.getElementById('app-select');
@@ -144,12 +141,17 @@
     updatePayloadPrefill();
   }
 
-  // Fetch /intents endpoint and initialize controls
+  // Initialize card options using injected xintent library
   async function init() {
     try {
-      const res = await fetch('/intents');
-      const data = await res.json();
-      intentRegistry = data.intents;
+      if (!window.xintent || typeof window.xintent.getTags !== 'function') {
+        throw new Error("xintent client library not attached by flammenwerfer.");
+      }
+
+      const data = await window.xintent.getTags();
+
+      intentRegistry = data.intents || {};
+      appRegistry = data.apps || {};
 
       intentSelect.innerHTML = '';
       const intents = Object.keys(intentRegistry);
@@ -168,14 +170,14 @@
 
       updateAppOptions();
     } catch (err) {
-      outputDiv.textContent = `Failed to load /intents: ${err.message}`;
+      outputDiv.textContent = `Failed to load tags: ${err.message}`;
     }
   }
 
   intentSelect.addEventListener('change', updateAppOptions);
   appSelect.addEventListener('change', updatePayloadPrefill);
 
-  // Dispatch intent and stream response body to UI
+  // Dispatch intent via window.xintent and stream response body to UI
   fireBtn.addEventListener('click', async () => {
     const intent = intentSelect.value;
     const app = appSelect.value || 'localhost';
@@ -191,7 +193,11 @@
     outputDiv.textContent = `[Request Sent] Dispatching ${intent} to ${app}...\n`;
 
     try {
-      const response = await window.matchbox202x.intent(intent, payload, app);
+      if (!window.xintent || typeof window.xintent.intent !== 'function') {
+        throw new Error("xintent client library not attached by flammenwerfer.");
+      }
+
+      const response = await window.xintent.intent(intent, payload, app);
       
       outputDiv.textContent += `[Response ${response.status} ${response.statusText}]\n--- Stream Start ---\n`;
 
@@ -200,7 +206,6 @@
         return;
       }
 
-      // Stream readable stream body chunk by chunk into div
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 

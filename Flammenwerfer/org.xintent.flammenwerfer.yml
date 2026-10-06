@@ -1,0 +1,28 @@
+Categories:
+  - Utility
+  - System
+License: Apache-2.0
+AuthorName: XIntent Project
+SourceCode: https://github.com/xintent/Flammenwerfer
+IssueTracker: https://github.com/xintent/Flammenwerfer/issues
+
+AutoName: Flammenwerfer
+Summary: Bridge Android actions to X11 xintents and load web cards from your desktop
+Description: |-
+  Flammenwerfer bridges Android text selection context menus, share actions,
+  text-to-speech synthesis, and Storage Access Framework document providers
+  to the XIntent desktop session over HTTP.
+
+Builds:
+  - versionName: '1.0'
+    versionCode: 1
+    commit: v1.0.0
+    subdir: Flammenwerfer
+    gradle:
+      - yes
+    output: app/build/outputs/apk/release/app-release-unsigned.apk
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '1.0'
+CurrentVersionCode: 1

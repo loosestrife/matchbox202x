@@ -1,9 +1,7 @@
 (function(window) {
   'use strict';
 
-  const BRIDGE_URL = 'http://localhost:12345';
-
-  window.matchbox202x = {
+  window.xintent = window.xintent || {
     /**
      * Dispatch an intent to the matchbox202x platform
      * @param {string} intent - e.g., 'ui.TextToSpeech'
@@ -17,7 +15,7 @@
         throw new Error("Invalid intent format. Must be 'namespace.action' (e.g. 'ui.TextToSpeech')");
       }
       const [namespace, action] = parts;
-      const endpoint = `${BRIDGE_URL}/intent/${namespace}/${action}?app=${encodeURIComponent(app)}`;
+      const endpoint = `/intent/${namespace}/${action}?app=${encodeURIComponent(app)}`;
 
       try {
         const response = await fetch(endpoint, {
@@ -29,9 +27,21 @@
         });
         return response;
       } catch (err) {
-        console.warn('[matchbox202x] Intent dispatch warning:', err);
+        console.warn('[xintent] Intent dispatch warning:', err);
         throw err;
       }
+    },
+
+    /**
+     * Retrieve intent and app registration tags from the bridge API
+     * @returns {Promise<{intents: Record<string, string[]>, apps: Record<string, any>}>}
+     */
+    getTags: async function() {
+      const res = await fetch('/api/tags');
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      }
+      return res.json();
     }
   };
 })(window);

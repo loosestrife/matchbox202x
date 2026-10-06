@@ -21,9 +21,11 @@ android {
 
     buildTypes {
         release {
-            optimization {
-                enable = false
-            }
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "src/main/keepRules/rules.keep"
+            )
         }
     }
     compileOptions {
@@ -33,6 +35,12 @@ android {
     buildFeatures {
         compose = true
     }
+}
+
+// Ensure deterministic ZIP/APK entry ordering and timestamps for F-Droid Reproducible Builds
+tasks.withType<Zip>().configureEach {
+    isReproducibleFileOrder = true
+    isPreserveFileTimestamps = false
 }
 
 dependencies {
