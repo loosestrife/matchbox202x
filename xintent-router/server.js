@@ -22,6 +22,7 @@ async function startRouter() {
     'XINTENT',
     'XINTENT_DATA',
     'XINTENT_MATCHBOX_TOML',
+    'XINTENT_AGGREGATE_TOML',
     'XINTENT_SERVICES_MANIFEST',
     'XBLOB_CREATE_RESPONSE_V0',
   ];

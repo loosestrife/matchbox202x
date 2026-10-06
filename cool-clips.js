@@ -193,6 +193,9 @@ async function startDaemon() {
 
   // 1. Advertise capabilities to matchbox router for both ui.Copy and ui.Paste
   const matchboxToml = `
+[app]
+id = "cool-clips"
+
 [intents."ui.Copy"]
 invocation = "X11"
 

@@ -1,8 +1,10 @@
 {
   "dependencies": {
     "@iarna/toml": "^2.2.5",
+    "dotenv": "^18.0.5",
     "express": "^5.2.1",
     "serialize-error": "^13.0.1",
-    "x11": "^4.1.0"
+    "x11": "^4.1.0",
+    "yargs": "^18.2.0"
   }
 }

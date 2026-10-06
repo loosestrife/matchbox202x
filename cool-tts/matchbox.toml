@@ -1,4 +1,4 @@
-[package]
+[app]
 id = "cool-tts"
 version = "0.1.0"
 name = "Cool TTS Service"

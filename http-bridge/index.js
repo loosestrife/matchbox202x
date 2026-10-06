@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const {serializeError} = require('serialize-error')
 const {HttpError, Logger, loggerMiddleware, nnjsonStream, teeOutStream} = require('../server-tools');
@@ -10,7 +11,8 @@ logger.setProjectName('http-bridge');
 const { X, root } = await createClientWithPromises();
 const routerWin = await connectToRouter(X, root);
 const clientWin = await createClientWindow(X, root, 'http-intent-bridge');
-const { routeIntent } = require('./route-intent')({ routerWin, X, root, clientWin });
+const { routeIntent, getAggregateToml } = require('./route-intent')({ routerWin, X, root, clientWin });
+const { routeApp } = require('./route-app');
 
 const app = express();
 app.use(express.json());
@@ -24,10 +26,8 @@ app.post('/intent/:namespace/:action', routeIntent);
 app.get('/matchbox202x.js', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'http-everything', 'assets', 'matchbox202x.js'));
 });
-app.get('/intents', (req, res) => {
-  res.json({todo: 'aggregate available intents onto a property of routerWin'});
-});
-//app.get('/apps/:app{/:card}', routeApp);
+app.get('/intents', getAggregateToml);
+app.get('/apps/:app{/:card}', routeApp);
 
 app.use((err, req, res, next) => {
   const status = err.httpCode || 500;

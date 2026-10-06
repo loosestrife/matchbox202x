@@ -30,6 +30,10 @@ async function connectToRouter(X, root) {
     "_NET_WM_PID",
     "CARDINAL",
 
+    'XINTENT_MATCHBOX_TOML',
+    'XINTENT_AGGREGATE_TOML',
+    'XINTENT_SERVICES_MANIFEST',
+
     "XINTENT_EVENT_V0",
     "XBLOB_CREATE_V0",
     "XBLOB_CREATE_RESPONSE_V0",

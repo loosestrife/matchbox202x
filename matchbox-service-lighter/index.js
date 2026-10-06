@@ -16,6 +16,9 @@ logger.info('got manifesto', TOML.stringify(xintentServicesManifesto));
 
 const hostname = os.hostname();
 const matchboxToml = `
+[app]
+id = "matchbox-service-lighter"
+
 [intents]
 "sys.Launch" = true
 "fs.PickFile" = true

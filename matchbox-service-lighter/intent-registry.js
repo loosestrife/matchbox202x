@@ -20,7 +20,7 @@ function registerPackage(tomlPath) {
   try {
     const rawContent = fs.readFileSync(tomlPath, 'utf-8');
     const parsed = TOML.parse(rawContent);
-    const packageId = parsed.package?.id;
+    const packageId = parsed.app?.id;
     if (!packageId) return;
     if (packageRegistry[packageId]) {
       logger.warn(`dup package ${packageId}`, packageRegistry[packageId]._path, tomlPath);

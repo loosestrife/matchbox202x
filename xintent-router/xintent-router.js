@@ -22,99 +22,26 @@ const {
   xblobUnlink,
 } = require("./xblob");
 
-// ipc isn't just client <- messages -> client its client:port <- channels -> client:port
-// WebWorkers lacked ports or channels
-// X11 has windows as ports
-// XINTENT adds channels for intents
-// Channel & Service Registry State
-const activeChannels = {};      // channelNum -> channelObj
-const txidToChannel = {};       // senderWin -> { [txId]: channelObj }
-const intentRegistry = {};      // intent -> [{ wid, matchboxToml }]
-const lighterRegistry = {};     // intent -> [{ wid, computer, packageName, publicKeyHash }]
+const {activeChannels, txidToChannel, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage} = require('./xintent-channels');
+const {
+  intentRegistry,
+  lighterRegistry,
+  getAllMatchboxToml,
+  parseWindowToml,
+  parseWindowLighterToml,
+  updateAggregateToml,
+  initXIntentRegistry,
+} = require('./xintent-registry');
+
 const intentsAwaitingServicesQueue = {}; // intent -> [xintentIntent]
-
-const CHANNEL_BASE = 16777216;  // 0x01000000 (24-bit boundary)
-const MAX_UINT32   = 4294967295; // 0xFFFFFFFF
-
-// ---------------------------------------------------------------------------
-// Channel Allocation & Lifecycle
-// ---------------------------------------------------------------------------
-
-let channelSerialNumberStamp = CHANNEL_BASE;
-
-/**
- * Allocates a new server channel >= 16,777,216 for a client request.
- */
-const newChannel = (senderWin, txId, xintentIntent) => {
-  let channelNum;
-  do {
-    channelNum = channelSerialNumberStamp++;
-    if (channelSerialNumberStamp > MAX_UINT32) {
-      channelSerialNumberStamp = CHANNEL_BASE; // Rollover safely
-    }
-  } while (activeChannels[channelNum]);
-
-  const channelObj = {
-    channelNum,
-    senderWin,
-    senderCookie: txId, // Original 24-bit client txId
-    handlerWin: null,   // Bound once mapped to a service window
-    intent: xintentIntent.payload.intent,
-    xintentIntent,
-  };
-
-  activeChannels[channelNum] = channelObj;
-
-  if (!txidToChannel[senderWin]) {
-    txidToChannel[senderWin] = {};
+async function checkToDrainIntentsQueue(intentName) {
+  const queue = intentsAwaitingServicesQueue[intentName];
+  while (queue && queue.length) {
+    tryToForwardTheIntent(queue.shift());
   }
-  txidToChannel[senderWin][txId] = channelObj;
+}
+initXIntentRegistry({checkToDrainIntentsQueue});
 
-  logger.info(`Allocated channel ${channelNum} for client ${widString(senderWin)} (cookie txId: ${txId})`);
-  return channelObj;
-};
-
-/**
- * Deallocates and purges an active channel from router memory.
- */
-const closeChannel = (channelObj) => {
-  if (!channelObj) return;
-
-  delete activeChannels[channelObj.channelNum];
-
-  const clientMap = txidToChannel[channelObj.senderWin];
-  if (clientMap) {
-    delete clientMap[channelObj.senderCookie];
-    if (Object.keys(clientMap).length === 0) {
-      delete txidToChannel[channelObj.senderWin];
-    }
-  }
-
-  logger.info(`Closed and deallocated channel ${channelObj.channelNum}`);
-};
-
-const getChannel = (senderWin, channel) => {
-  if(channel < CHANNEL_BASE) {
-    return txidToChannel[senderWin]?.[channel];
-  } else {
-    return activeChannels[channel];
-  }
-};
-
-const getChannelToSend = (targetWin, channelObj) => {
-  if(!channelObj){
-    return {channel: 0};
-  }
-  if(targetWin == channelObj.senderWin){
-    return {txId: channelObj.senderCookie};
-  } else {
-    return {channel: channelObj.channelNum};
-  }
-};
-
-// ------------------------------------------------------------------------
-// Actual intent routing
-// ------------------------------------------------------------------------
 const handleXIntentIntentV0 = {
   parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob: false}),
   securityContext: (xintentIntent) => {
@@ -218,30 +145,6 @@ const tryToForwardTheEvent = async (xintentEvent) => {
   logger.info("dropping event that isnt in a channel", xintentEvent);
 }
 
-const getChannelForMessage = (message) => {
-  const {senderWin, channel} = message;
-
-  const channelObj = getChannel(senderWin, channel);
-  if(!channelObj && channel >= CHANNEL_BASE){
-    // throw new Error(404, 'channel not found')
-    logger.info(
-      `Message ${intent} from sender ${widString(senderWin)} on unknown channel ${channel}`,
-      xintentIntent,
-      activeChannels,
-    );
-  }
-  if(channelObj && channel >= CHANNEL_BASE){
-    if(senderWin != channelObj.handlerWin){
-      // throw new Error(401, 'not on channel')
-      logger.info(
-        `Message ${xintentIntent.payload.intent} from sender ${senderWin} not on channel ${xintentIntent.channel}`,
-        xintentIntent,
-        activeChannels,
-      );
-    }
-  }
-  return channelObj;
-}
 
 const forwardMessageToChannel = async (channelObj, message) => {
   const messageSubType = message.intent ?? message.event;
@@ -287,89 +190,8 @@ const forwardMessageToChannel = async (channelObj, message) => {
   }
 }
 
-async function checkToDrainIntentsQueue(intentName) {
-  const queue = intentsAwaitingServicesQueue[intentName];
-  while (queue && queue.length) {
-    tryToForwardTheIntent(queue.shift());
-  }
-}
 
-async function getAllMatchboxToml() {
-  const tree = await X.QueryTree(root);
-  for (const wid of tree.children) {
-    await parseWindowToml(wid);
-    await parseWindowLighterToml(wid);
-  }
-}
 
-async function parseWindowToml(wid) {
-  try {
-    const prop = await X.GetProperty(
-      0,
-      wid,
-      atoms.XINTENT_MATCHBOX_TOML,
-      0,
-      0,
-      1000000,
-    );
-    if (prop && prop.data && prop.data.length > 0) {
-      const matchboxToml = TOML.parse(prop.data.toString("utf8"));
-      if (matchboxToml.intents) {
-        for (const intentName of Object.keys(matchboxToml.intents)) {
-          if (!intentRegistry[intentName]) intentRegistry[intentName] = [];
-
-          // Avoid duplicate bindings for the same window
-          if (!intentRegistry[intentName].some((entry) => entry.wid === wid)) {
-            intentRegistry[intentName].push({ wid, matchboxToml });
-            checkToDrainIntentsQueue(intentName);
-            logger.info(
-              `Registered intent '${intentName}' -> Window ${widString(wid)}`,
-            );
-          }
-        }
-      }
-    }
-  } catch (err) {
-    logger.error(
-      `Failed parsing TOML on window ${widString(wid)}:`,
-      err.message,
-    );
-  }
-}
-
-async function parseWindowLighterToml(wid) {
-  const prop = await X.GetProperty(
-    0,
-    wid,
-    atoms.XINTENT_SERVICES_MANIFEST,
-    atoms.STRING,
-    0,
-    1000000,
-  );
-  if (prop && prop.data && prop.data.length > 0) {
-    const toml = TOML.parse(prop.data.toString("utf8"));
-    logger.info(
-      "got XINTENT_SERVICES_MANIFEST from window",
-      widString(wid),
-      toml,
-    );
-    const computer = toml.computer;
-    for (const packageName of Object.keys(toml.packages)) {
-      const publicKeyHash = toml.packages[packageName].publicKeyHash;
-      for (const intentName of Object.keys(
-        toml.packages[packageName].intents,
-      )) {
-        if (!lighterRegistry[intentName]) lighterRegistry[intentName] = [];
-        lighterRegistry[intentName].push({
-          wid,
-          computer,
-          packageName,
-          publicKeyHash,
-        });
-      }
-    }
-  }
-}
 
 // we need a customized version of this here that doesnt send an XBlobCreate
 async function sendXIntentIntentV0(
@@ -410,12 +232,17 @@ async function sendXIntentIntentV0(
  */
 const xintentUnregisterWindow = async (destroyedWin) => {
   logger.info(`Unregistering window ${widString(destroyedWin)}`);
+  let registryChanged = false;
 
   // 1. Remove window from intentRegistry
   for (const intentName of Object.keys(intentRegistry)) {
+    const originalLen = intentRegistry[intentName].length;
     intentRegistry[intentName] = intentRegistry[intentName].filter(
       (entry) => entry.wid !== destroyedWin
     );
+    if (intentRegistry[intentName].length !== originalLen) {
+      registryChanged = true;
+    }
     if (intentRegistry[intentName].length === 0) {
       delete intentRegistry[intentName];
     }
@@ -423,12 +250,20 @@ const xintentUnregisterWindow = async (destroyedWin) => {
 
   // 2. Remove window from lighterRegistry
   for (const intentName of Object.keys(lighterRegistry)) {
+    const originalLen = lighterRegistry[intentName].length;
     lighterRegistry[intentName] = lighterRegistry[intentName].filter(
       (entry) => entry.wid !== destroyedWin
     );
+    if (lighterRegistry[intentName].length !== originalLen) {
+      registryChanged = true;
+    }
     if (lighterRegistry[intentName].length === 0) {
       delete lighterRegistry[intentName];
     }
+  }
+
+  if (registryChanged) {
+    await updateAggregateToml();
   }
 
   // 3. Remove queued intents originating from the destroyed sender

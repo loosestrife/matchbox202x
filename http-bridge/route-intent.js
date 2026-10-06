@@ -1,10 +1,65 @@
 const { on } = require('node:events');
+const TOML = require('@iarna/toml');
 const { Logger, HttpError } = require('../server-tools');
 const xintent = require('../x11-promises/xintent');
 
 const logger = new Logger({ module: 'route-intent' });
 let routerWin, clientWin, X, root;
 let globalTransactionIdCounter = 1;
+
+/**
+ * Reads the aggregated TOML property off routerWin
+ */
+const fetchAggregateToml = async () => {
+  const targetWin = xintent.routerWin;
+  const atom = xintent.atoms.XINTENT_AGGREGATE_TOML;
+
+  try {
+    logger.info('tryna get AGGREGATE_TOML');
+    const prop = await X.GetProperty(0, targetWin, atom, 0, 0, 1000000);
+    if (prop && prop.data && prop.data.length > 0) {
+      return prop.data.toString('utf8');
+    }
+  } catch (err) {
+    logger.error(`[AGGREGATE TOML] Failed to fetch aggregate property: ${err.message}`);
+  }
+  return null;
+};
+
+/**
+ * HTTP Handler to advertise available intents bus manifest
+ * Supports returning raw TOML or parsed JSON based on headers/query parameters.
+ */
+const getAggregateToml = async (req, res) => {
+  console.log('call to get aggregate toml');
+  const rawToml = await fetchAggregateToml();
+
+  if (!rawToml) {
+    throw new HttpError(503, 'Aggregate intents manifest not available');
+  }
+
+  res.setHeader('Matchbox-Bridge', '1.0');
+
+  const acceptHeader = req.headers.accept || '';
+  if (
+    req.query.format === 'toml' ||
+    acceptHeader.includes('text/x-toml') ||
+    acceptHeader.includes('application/toml')
+  ) {
+    res.setHeader('Content-Type', 'text/x-toml; charset=utf-8');
+    return res.status(200).send(rawToml);
+  }
+
+  try {
+    const parsedManifest = TOML.parse(rawToml);
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(200).json(parsedManifest);
+  } catch (err) {
+    logger.error(`[AGGREGATE TOML] Failed to parse aggregate TOML string: ${err.message}`);
+    res.setHeader('Content-Type', 'text/x-toml; charset=utf-8');
+    return res.status(200).send(rawToml);
+  }
+};
 
 const routeIntent = async (req, res) => {
   const { namespace, action } = req.params;
@@ -45,7 +100,7 @@ const routeIntent = async (req, res) => {
       res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${jsonBody}\r\n\r\n`);
     };
 
-    await xintent.sendXIntentIntentV0(X, xintent.routerWin, {
+    await xintent.sendXIntentIntentV0(X, routerWin || xintent.routerWin, {
       senderWin: clientWin,
       payload,
       txId,
@@ -57,16 +112,15 @@ const routeIntent = async (req, res) => {
         [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) && 
         ev.data[2] == txId
       ) {
-        const { payload: eventData } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        //logger.info('Event recieved', eventData);
+        const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin || xintent.routerWin, ev);
 
         writeJsonFrame(res, eventData);
 
         const blobAtom = ev.data[3];
         if (blobAtom) {
           try {
-            const blob = await xintent.XBlobRead(X, xintent.routerWin, blobAtom);
-            xintent.XBlobUnlink(X, xintent.routerWin, clientWin, blobAtom);
+            const blob = await xintent.XBlobRead(X, routerWin || xintent.routerWin, blobAtom);
+            xintent.XBlobUnlink(X, routerWin || xintent.routerWin, clientWin, blobAtom);
             
             if (blob) {
               writeJsonFrame(res, blob);
@@ -88,7 +142,7 @@ const routeIntent = async (req, res) => {
   }
 
   // --- 2. Fire-and-Forget / Standard Response Path ---
-  await xintent.sendXIntentIntentV0(X, xintent.routerWin, {
+  await xintent.sendXIntentIntentV0(X, routerWin || xintent.routerWin, {
     senderWin: clientWin,
     payload,
     txId,
@@ -102,6 +156,11 @@ module.exports = ({ routerWin: theRouterWin, X: xClient, root: xRoot, clientWin:
   X = xClient;
   root = xRoot;
   clientWin = theClientWin;
+  routerWin = theRouterWin;
 
-  return { routeIntent };
+  return {
+    routeIntent,
+    getAggregateToml,
+    fetchAggregateToml,
+  };
 };

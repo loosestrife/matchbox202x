@@ -149,8 +149,7 @@
     try {
       const res = await fetch('/intents');
       const data = await res.json();
-      intentRegistry = data.intentRegistry || {};
-      packageRegistry = data.packageRegistry || {};
+      intentRegistry = data.intents;
 
       intentSelect.innerHTML = '';
       const intents = Object.keys(intentRegistry);

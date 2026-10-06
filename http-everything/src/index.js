@@ -8,7 +8,7 @@ const nnjsonStream = require('../../server-tools/nnjson-stream');
 const {packageRegistry, intentRegistry} = require('./package-registry');
 
 const logger = Logger({module: 'index.js'});
-const {routeIntent} = require('./route-intent');
+const {routeIntent, getIntents} = require('./route-intent');
 const {routeApp} = require('./route-app');
 const connectedServers = {};
 
@@ -23,10 +23,7 @@ app.use((req, res, next) => {
 app.get('/matchbox202x.js', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'assets', 'matchbox202x.js'));
 });
-app.get('/intents', (req, res) => {
-  // if we ever serve intents to non trusted clients, these will have to be filtered111
-  res.json({intentRegistry, packageRegistry});
-});
+app.get('/intents', (req, res) => getIntents);
 app.post('/intent/:namespace/:action', routeIntent);
 app.get('/apps/:app{/:card}', routeApp);
 

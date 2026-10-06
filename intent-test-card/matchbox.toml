@@ -1,7 +1,7 @@
-[package]
+[app]
 id = "intent-test-card"
 
-[app]
+[app.main]
 type = "html"
 card = "index"
 
