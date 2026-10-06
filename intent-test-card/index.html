@@ -141,12 +141,36 @@
     updatePayloadPrefill();
   }
 
-  // Initialize card options using injected xintent library
+  // Helper to guarantee window.xintent is available before initializing
+  async function ensureXIntent() {
+    if (window.xintent) return window.xintent;
+
+    console.warn('[xintent] Not attached by flammenwerfer. Loading fallback from HTTP bridge...');
+
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      // Point to the HTTP bridge client library route
+      script.src = '/matchbox202x.js';
+      
+      script.onload = () => {
+        if (window.xintent) {
+          resolve(window.xintent);
+        } else {
+          reject(new Error('Script loaded, but window.xintent was not attached.'));
+        }
+      };
+      
+      script.onerror = () => reject(new Error('Failed to load xintent.js from HTTP bridge.'));
+      
+      document.head.appendChild(script);
+    });
+  }
+
+  // Card Initialization
   async function init() {
     try {
-      if (!window.xintent || typeof window.xintent.getTags !== 'function') {
-        throw new Error("xintent client library not attached by flammenwerfer.");
-      }
+      // Ensure xintent client library is loaded before calling API methods
+      await ensureXIntent();
 
       const data = await window.xintent.getTags();
 
@@ -170,7 +194,7 @@
 
       updateAppOptions();
     } catch (err) {
-      outputDiv.textContent = `Failed to load tags: ${err.message}`;
+      outputDiv.textContent = `Initialization Error: ${err.message}`;
     }
   }
 
