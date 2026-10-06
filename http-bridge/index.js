@@ -11,10 +11,11 @@ logger.setProjectName('http-bridge');
 const { X, root } = await createClientWithPromises();
 const routerWin = await connectToRouter(X, root);
 const clientWin = await createClientWindow(X, root, 'http-intent-bridge');
-const { routeIntent, getAggregateToml } = require('./route-intent')({ routerWin, X, root, clientWin });
-const { routeApp } = require('./route-app');
+const { routeIntent, aggregateTomlAsObject } = require('./route-intent')({ routerWin, X, root, clientWin });
+const { routeApp, getApps } = require('./route-app');
 
 const app = express();
+app.set("json spaces", 2);
 app.use(express.json());
 app.use(loggerMiddleware);
 app.use((req, res, next) => {
@@ -26,8 +27,13 @@ app.post('/intent/:namespace/:action', routeIntent);
 app.get('/matchbox202x.js', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'http-everything', 'assets', 'matchbox202x.js'));
 });
-app.get('/intents', getAggregateToml);
 app.get('/apps/:app{/:card}', routeApp);
+app.get('/api/tags', async (req, res) => {
+  res.json({
+    ...await aggregateTomlAsObject(),
+    apps: getApps(),
+  });
+});
 
 app.use((err, req, res, next) => {
   const status = err.httpCode || 500;

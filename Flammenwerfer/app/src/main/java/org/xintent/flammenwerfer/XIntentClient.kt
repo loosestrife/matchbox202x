@@ -89,6 +89,53 @@ object XIntentClient {
         prefs.edit().putString("target_app_action_$actionIndex", cleanApp).apply()
     }
 
+    data class AppCardModel(
+        val appName: String,
+        val description: String = "",
+        val mainCard: String = "index",
+        val cards: List<String> = listOf("index"),
+    )
+
+    fun parseAppCards(tagsJsonResponse: String): List<AppCardModel> {
+        val appCards = mutableListOf<AppCardModel>()
+        val jsonObjects = extractJsonObjects(tagsJsonResponse)
+        if (jsonObjects.isEmpty()) return appCards
+
+        val rootJson = jsonObjects.first()
+        if (rootJson.has("apps")) {
+            val appsJson = rootJson.getJSONObject("apps")
+            val keys = appsJson.keys()
+            while (keys.hasNext()) {
+                val appKey = keys.next()
+                val appObj = appsJson.getJSONObject(appKey)
+                val name = appObj.optString("name", appKey)
+                val description = appObj.optString("description", "")
+                val mainCard = appObj.optString("mainCard", "index")
+
+                val cardsList = mutableListOf<String>()
+                if (appObj.has("cards")) {
+                    val cardsArray = appObj.getJSONArray("cards")
+                    for (i in 0 until cardsArray.length()) {
+                        cardsList.add(cardsArray.getString(i))
+                    }
+                }
+                if (cardsList.isEmpty()) {
+                    cardsList.add(mainCard)
+                }
+
+                appCards.add(
+                    AppCardModel(
+                        appName = name,
+                        description = description,
+                        mainCard = mainCard,
+                        cards = cardsList,
+                    ),
+                )
+            }
+        }
+        return appCards
+    }
+
     data class Result(
         val success: Boolean,
         val statusCode: Int = 0,
@@ -149,6 +196,299 @@ object XIntentClient {
         }
 
         return trimmed
+    }
+
+    suspend fun fetchApiTags(context: Context): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/api/tags"
+
+        val logPrefix = "[GET /api/tags]"
+        addLog("$logPrefix Fetching desktop services & tags...")
+
+        try {
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 15000
+                setRequestProperty("Accept", "application/json")
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.first().toString(2)
+            } else {
+                responseText.ifBlank { "(Empty tags response)" }
+            }
+
+            Log.i(TAG, "Fetched /api/tags [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode)")
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
+                Result(success = false, statusCode = responseCode, responseBody = formattedDisplay, errorMessage = "HTTP $responseCode")
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error fetching /api/tags from $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            Result(success = false, errorMessage = errorDetail)
+        }
+    }
+
+    suspend fun sendTextToSpeechIntent(
+        context: Context,
+        text: String,
+        targetApp: String = "cool-tts",
+        voice: String = "default",
+        speed: Float = 1.0f,
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/ui/TextToSpeech?app=$targetApp"
+
+        val logPrefix = "[ui.TextToSpeech -> $targetApp]"
+        addLog("$logPrefix Synthesizing text:\n\"$text\"")
+
+        try {
+            val jsonBody = JSONObject().apply {
+                put("intent", "ui.TextToSpeech")
+                put("app", targetApp)
+                put("text", text)
+                put("voice", voice)
+                put("speed", speed)
+                put("reply", true)
+                put("Accept", "*")
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "audio/wav, application/json, */*")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.joinToString("\n---\n") { it.toString(2) }
+            } else {
+                responseText.ifBlank { "(Audio or stream response)" }
+            }
+
+            Log.i(TAG, "Sent ui.TextToSpeech to $targetApp [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
+                Result(success = false, statusCode = responseCode, responseBody = formattedDisplay, errorMessage = "HTTP $responseCode")
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending ui.TextToSpeech to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            Result(success = false, errorMessage = errorDetail)
+        }
+    }
+
+    suspend fun sendPickFileIntent(
+        context: Context,
+        holdOpenForWrite: Boolean = true,
+        targetApp: String = "cool-clips",
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/fs/PickFile?app=$targetApp"
+
+        val logPrefix = "[fs.PickFile -> $targetApp]"
+        addLog("$logPrefix Requesting PickFile (holdOpenForWrite=$holdOpenForWrite)")
+
+        try {
+            val jsonBody = JSONObject().apply {
+                put("intent", "fs.PickFile")
+                put("app", targetApp)
+                put("holdOpenForWrite", holdOpenForWrite)
+                put("reply", true)
+                put("Accept", "*")
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "*/*")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.joinToString("\n---\n") { it.toString(2) }
+            } else {
+                responseText.ifBlank { "(Empty response body)" }
+            }
+
+            Log.i(TAG, "Sent fs.PickFile to $targetApp [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
+                Result(success = false, statusCode = responseCode, responseBody = formattedDisplay, errorMessage = "HTTP $responseCode")
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending fs.PickFile to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            Result(success = false, errorMessage = errorDetail)
+        }
+    }
+
+    suspend fun sendXBlobBroadcast(
+        context: Context,
+        blobId: String,
+        name: String,
+        type: String,
+        size: Long,
+        dataType: String,
+        data: String,
+        targetApp: String = "cool-clips",
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/sys/XBlobBroadcast?app=$targetApp"
+
+        val logPrefix = "[XBlobBroadcast -> $targetApp]"
+        addLog("$logPrefix Broadcasting blob $blobId: $name ($type, $size bytes)")
+
+        try {
+            val blobJson = JSONObject().apply {
+                put("name", name)
+                put("type", type)
+                put("size", size)
+                put("_dataType", dataType)
+                put("data", data)
+            }
+
+            val jsonBody = JSONObject().apply {
+                put("event", "XBlobBroadcast")
+                put("blobId", blobId)
+                put("app", targetApp)
+                put("blob", blobJson)
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.joinToString("\n---\n") { it.toString(2) }
+            } else {
+                responseText.ifBlank { "(Empty response body)" }
+            }
+
+            Log.i(TAG, "Sent XBlobBroadcast to $targetApp [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
+                Result(success = false, statusCode = responseCode, responseBody = formattedDisplay, errorMessage = "HTTP $responseCode")
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending XBlobBroadcast to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            Result(success = false, errorMessage = errorDetail)
+        }
     }
 
     suspend fun sendSaveAsIntent(

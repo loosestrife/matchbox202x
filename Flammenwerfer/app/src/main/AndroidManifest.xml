@@ -28,6 +28,12 @@
         </activity>
 
         <activity
+            android:name=".CardsActivity"
+            android:exported="true"
+            android:label="XIntent Web Card"
+            android:theme="@style/Theme.Flammenwerfer" />
+
+        <activity
             android:name=".ProcessTextActivity"
             android:exported="false"
             android:theme="@style/Theme.ProcessTextTranslucent" />
@@ -48,6 +54,39 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <provider
+            android:name=".XIntentDocumentsProvider"
+            android:authorities="org.xintent.flammenwerfer.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
+        <provider
+            android:name=".XIntentHoldOpenDocumentsProvider"
+            android:authorities="org.xintent.flammenwerfer.documents.holdopen"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
+        <service
+            android:name=".XIntentTextToSpeechService"
+            android:exported="true"
+            android:label="XIntent Desktop TTS"
+            android:permission="android.permission.BIND_TTS_SERVICE">
+            <intent-filter>
+                <action android:name="android.intent.action.TTS_SERVICE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
 
         <!-- these are defined in reverse order due to a binder mistake -->
         <activity-alias

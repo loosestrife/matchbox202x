@@ -61,6 +61,12 @@ const getAggregateToml = async (req, res) => {
   }
 };
 
+const aggregateTomlAsObject = async () => {
+  const rawToml = await fetchAggregateToml();
+  const parsedManifest = TOML.parse(rawToml);
+  return parsedManifest;
+}
+
 const routeIntent = async (req, res) => {
   const { namespace, action } = req.params;
   const intent = `${namespace}.${action}`;
@@ -162,5 +168,6 @@ module.exports = ({ routerWin: theRouterWin, X: xClient, root: xRoot, clientWin:
     routeIntent,
     getAggregateToml,
     fetchAggregateToml,
+    aggregateTomlAsObject,
   };
 };

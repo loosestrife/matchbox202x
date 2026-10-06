@@ -1,5 +1,6 @@
 package org.xintent.flammenwerfer
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -63,8 +64,14 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var action2App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 2)) }
     var action3App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 3)) }
 
+    var cardAppInput by remember { mutableStateOf("intent-test-card") }
+    var cardNameInput by remember { mutableStateOf("index") }
+
     var testText by remember { mutableStateOf("In the beginning God created the heavens and the earth.") }
     var canReplace by remember { mutableStateOf(true) }
+    var tagsDisplay by remember { mutableStateOf("Tap 'Fetch /api/tags' to query active desktop intents & apps.") }
+    var discoveredAppCards by remember { mutableStateOf<List<XIntentClient.AppCardModel>>(emptyList()) }
+    var isFetchingTags by remember { mutableStateOf(false) }
     var logText by remember { mutableStateOf(XIntentClient.getLogHistory()) }
     var isSending by remember { mutableStateOf(false) }
 
@@ -75,6 +82,28 @@ fun MainScreen(modifier: Modifier = Modifier) {
         XIntentClient.addLogListener(listener)
         onDispose {
             XIntentClient.removeLogListener(listener)
+        }
+    }
+
+    fun launchWebCard(app: String, card: String) {
+        val intent = Intent(context, CardsActivity::class.java).apply {
+            putExtra(CardsActivity.EXTRA_APP_NAME, app)
+            putExtra(CardsActivity.EXTRA_CARD_NAME, card)
+        }
+        context.startActivity(intent)
+    }
+
+    fun refreshApiTags() {
+        isFetchingTags = true
+        coroutineScope.launch {
+            val result = XIntentClient.fetchApiTags(context)
+            isFetchingTags = false
+            tagsDisplay = if (result.success) {
+                discoveredAppCards = XIntentClient.parseAppCards(result.responseBody)
+                result.responseBody
+            } else {
+                "Failed to fetch /api/tags: ${result.errorMessage}"
+            }
         }
     }
 
@@ -111,12 +140,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text(
-                    text = "💡 Directives & Shares",
+                    text = "💡 Directives, Shares, TTS & Cards",
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "1. Long-tap text in any app to use 'XIntent Action 1', 'XIntent Action 2', or 'XIntent Action 3'.\n2. Share files, images, or text from any app using 'Save to Desktop (XIntent)' to send an 'fs.SaveAs' blob intent!",
+                    text = "1. Long-tap text in any app to use 'XIntent Action 1', 'XIntent Action 2', or 'XIntent Action 3'.\n2. Share files, images, or text using 'Save to Desktop (XIntent)'.\n3. Select 'XIntent Desktop TTS' in Android Text-to-speech settings.\n4. Render web cards directly from desktop apps (/apps/:app/:card)!",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -170,10 +199,152 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 XIntentClient.setTargetApp(context, 2, action2App)
                 XIntentClient.setTargetApp(context, 3, action3App)
                 Toast.makeText(context, "Saved Settings & Target Apps!", Toast.LENGTH_SHORT).show()
+                refreshApiTags()
             },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Save Configuration")
+            Text("Save Configuration & Refresh Tags")
+        }
+
+        // Web Cards Section
+        Text(
+            text = "Desktop Web Cards",
+            style = MaterialTheme.typography.titleMedium,
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "Discovered Web Cards (/api/tags)",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+
+                if (discoveredAppCards.isNotEmpty()) {
+                    discoveredAppCards.forEach { appCard ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = appCard.appName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                if (appCard.description.isNotBlank()) {
+                                    Text(
+                                        text = appCard.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    appCard.cards.forEach { cardName ->
+                                        Button(
+                                            onClick = { launchWebCard(appCard.appName, cardName) },
+                                        ) {
+                                            Text("Launch '$cardName'")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "No cards discovered yet. Tap 'Fetch /api/tags' to populate available desktop cards.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Manual Card Launcher",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = cardAppInput,
+                        onValueChange = { cardAppInput = it },
+                        label = { Text("App Name") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                    )
+
+                    OutlinedTextField(
+                        value = cardNameInput,
+                        onValueChange = { cardNameInput = it },
+                        label = { Text("Card") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                    )
+                }
+
+                Button(
+                    onClick = { launchWebCard(cardAppInput.ifBlank { "intent-test-card" }, cardNameInput.ifBlank { "index" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Render Web Card (${cardAppInput.ifBlank { "intent-test-card" }})")
+                }
+            }
+        }
+
+        // API Tags Display Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "🌐 Desktop Active Tags (/api/tags)",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Button(
+                        onClick = { refreshApiTags() },
+                        enabled = !isFetchingTags,
+                    ) {
+                        Text(if (isFetchingTags) "Loading..." else "Fetch /api/tags")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = tagsDisplay,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .verticalScroll(rememberScrollState()),
+                        )
+                    }
+                }
+            }
         }
 
         // Test Dispatch Section
@@ -230,6 +401,26 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("XIntent Action 3 (--app ${action3App.ifBlank { "cool-clips" }})")
+            }
+
+            Button(
+                onClick = {
+                    if (testText.isNotBlank()) {
+                        isSending = true
+                        coroutineScope.launch {
+                            XIntentClient.sendTextToSpeechIntent(
+                                context = context,
+                                text = testText,
+                                targetApp = action1App.ifBlank { "cool-tts" },
+                            )
+                            isSending = false
+                        }
+                    }
+                },
+                enabled = !isSending && testText.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Test ui.TextToSpeech Intent (--app ${action1App.ifBlank { "cool-tts" }})")
             }
 
             Button(

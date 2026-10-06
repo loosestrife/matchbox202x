@@ -29,3 +29,17 @@ module.exports.routeApp = (req, res) => {
   logger.info(`sending ${cardPath}`)
   res.sendFile(cardPath);
 }
+
+module.exports.getApps = () => Object.fromEntries(
+  Object.entries(packageRegistry)
+    .filter(([_, pkg]) => pkg?.app && pkg?.app?.main?.type == 'html')
+    .map(([appId, pkg]) => [
+      appId,
+      {
+        name: pkg.app.name || appId,
+        description: pkg.app.description || '',
+        mainCard: pkg.app.main?.card || null,
+        cards: (pkg.cards || []).map(card => card.id)
+      }
+    ])
+);

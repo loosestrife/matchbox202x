@@ -1,0 +1,3 @@
+Flammenwerfer acts as an Android enclave bridge for the matchbox202x 1990's Unix Desktop platform, translating local Android Actions into network-transparent X11 xintents.
+
+In addition, it loads lightweight HTML cards dynamically, which have the rich command interface of xintent, enabling orchestration of desktop workflows right from your mobile device without compiling a single line of Kotlin.
