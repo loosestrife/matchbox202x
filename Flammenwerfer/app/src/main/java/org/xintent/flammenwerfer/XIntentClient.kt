@@ -18,10 +18,43 @@ object XIntentClient {
     private const val TAG = "XIntentClient"
     private const val PREFS_NAME = "xintent_prefs"
     private const val KEY_SERVER_URL = "server_url"
+    private const val KEY_LOCAL_FS = "use_local_fs"
+    private const val KEY_LOCAL_CLIPBOARD = "use_local_clipboard"
+    private const val KEY_LOCAL_TTS = "use_local_tts"
     const val DEFAULT_SERVER_URL = "http://10.0.2.2:12345"
 
     private val logListeners = mutableSetOf<() -> Unit>()
     private val logEntries = mutableListOf<String>()
+
+    fun isLocalTtsEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_LOCAL_TTS, false)
+    }
+
+    fun setLocalTtsEnabled(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_LOCAL_TTS, enabled).apply()
+    }
+
+    fun isLocalClipboardEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_LOCAL_CLIPBOARD, false)
+    }
+
+    fun setLocalClipboardEnabled(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_LOCAL_CLIPBOARD, enabled).apply()
+    }
+
+    fun isLocalFsEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_LOCAL_FS, false)
+    }
+
+    fun setLocalFsEnabled(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_LOCAL_FS, enabled).apply()
+    }
 
     fun getLogHistory(): String {
         synchronized(logEntries) {

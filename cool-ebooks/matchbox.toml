@@ -1,8 +1,12 @@
 [app]
-id = "org.unix.cool-ebooks"
+id = "org.xintent.cool-ebook"
 version = "0.1.0"
 name = "Cool Ebooks"
 description = "EPub Demonstrator"
+
+[app.main]
+type = "html"
+card = "main"
 
 [[cards]]
 id = "main"

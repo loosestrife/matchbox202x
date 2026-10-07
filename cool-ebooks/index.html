@@ -2,94 +2,372 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>EPUB Web Reader</title>
+  <title>Cool-Ebooks - EPUB & Double-Buffered TTS Reader</title>
   <!-- Load JSZip (dependency for epub.js) and epub.js via CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
-  <script src="http://localhost:12345/matchbox202x.js"></script>
 
   <style>
+    :root {
+      --bg: #1e1e2e;
+      --card-bg: #282a36;
+      --accent: #ff79c6;
+      --accent-green: #50fa7b;
+      --text: #f8f8f2;
+      --border: #44475a;
+    }
     body {
       font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
       margin: 0;
       padding: 20px;
       display: flex;
       flex-direction: column;
       align-items: center;
     }
-    #viewer {
-      width: 800px;
-      height: 600px;
-      border: 1px solid #ccc;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-      margin-top: 15px;
+    .container {
+      width: 100%;
+      max-width: 850px;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
     }
     .controls {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
       display: flex;
+      flex-wrap: wrap;
       gap: 10px;
       align-items: center;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }
     button {
+      background: var(--accent);
+      color: #000;
+      font-weight: bold;
       padding: 8px 16px;
       cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      transition: opacity 0.2s;
+    }
+    button.btn-green {
+      background: var(--accent-green);
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    select, input[type="file"] {
+      background: #191a21;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 4px;
+    }
+    #viewer {
+      width: 100%;
+      height: 550px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #ffffff;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .tts-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tts-status {
+      font-family: monospace;
+      background: #11111b;
+      padding: 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+      min-height: 40px;
+      color: var(--accent-green);
     }
   </style>
 </head>
 <body>
 
+<div class="container">
+  <h2>📖 Cool-Ebooks (Double-Buffered TTS)</h2>
+
   <div class="controls">
     <input type="file" id="file-input" accept=".epub" />
     <button id="prev">‹ Previous</button>
     <button id="next">Next ›</button>
+
+    <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+      <label for="chunk-size">Chunk:</label>
+      <select id="chunk-size">
+        <option value="15">15 words</option>
+        <option value="25" selected>25 words</option>
+        <option value="40">40 words</option>
+      </select>
+
+      <button id="tts-play" class="btn-green">▶ Play TTS</button>
+      <button id="tts-stop">⏹ Stop</button>
+    </div>
+  </div>
+
+  <div class="tts-box">
+    <strong>🔊 Double-Buffered TTS Pipeline</strong>
+    <div id="tts-status" class="tts-status">Ready. Load an EPUB or click Play TTS to speak visible text.</div>
   </div>
 
   <!-- Container where epub.js renders the iframe -->
   <div id="viewer"></div>
+</div>
 
-  <script>
-    let book;
-    let rendition;
+<script>
+  let book;
+  let rendition;
 
-    document.getElementById('file-input').addEventListener('change', function (e) {
-      const file = e.target.files[0];
-      if (!file) return;
+  let ttsQueue = [];
+  let ttsIndex = 0;
+  let isTtsActive = false;
+  let currentTtsPromise = null;
+  let nextTtsPromise = null;
 
-      const reader = new FileReader();
+  const ttsStatusEl = document.getElementById('tts-status');
+  const ttsPlayBtn = document.getElementById('tts-play');
+  const ttsStopBtn = document.getElementById('tts-stop');
+  const chunkSizeSelect = document.getElementById('chunk-size');
 
-      reader.onload = function (event) {
-        const bookData = event.target.result;
+  function updateTtsStatus(msg) {
+    ttsStatusEl.textContent = msg;
+  }
 
-        // Clear previous reader instance if loading a new file
-        if (rendition) rendition.destroy();
+  // Ensure window.xintent client library is available
+  async function ensureXIntent() {
+    if (window.xintent) return window.xintent;
 
-        // 1. Initialize the Book object with the File ArrayBuffer
-        book = ePub(bookData);
-
-        // 2. Render the book into the target container element
-        rendition = book.renderTo("viewer", {
-          width: "100%",
-          height: "100%",
-          spread: "always" // Shows facing pages when space allows
-        });
-
-        // 3. Display the initial page
-        rendition.display();
-      };
-
-      reader.readAsArrayBuffer(file);
+    return new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = '/matchbox202x.js';
+      script.onload = () => resolve(window.xintent);
+      script.onerror = () => resolve(window.xintent);
+      document.head.appendChild(script);
     });
+  }
 
-    // Pagination controls
-    document.getElementById('next').addEventListener('click', () => rendition && rendition.next());
-    document.getElementById('prev').addEventListener('click', () => rendition && rendition.prev());
+  // Break raw text into sentence/word chunks
+  function chunkText(rawText, chunkSizeWords = 25) {
+    const cleanText = (rawText || '').replace(/\s+/g, ' ').trim();
+    if (!cleanText) return [];
 
-    // Keyboard navigation (Left / Right Arrows)
-    document.addEventListener('keyup', (e) => {
-      if (!rendition) return;
-      if (e.key === 'ArrowRight') rendition.next();
-      if (e.key === 'ArrowLeft') rendition.prev();
-    });
-  </script>
+    const sentences = cleanText.split(/(?<=[.!?])\s+/);
+    const chunks = [];
+    let currentChunk = '';
+
+    for (const sentence of sentences) {
+      const wordCount = (currentChunk + ' ' + sentence).trim().split(/\s+/).length;
+      if (currentChunk && wordCount > chunkSizeWords) {
+        chunks.push(currentChunk.trim());
+        currentChunk = sentence;
+      } else {
+        currentChunk = (currentChunk + ' ' + sentence).trim();
+      }
+    }
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+    return chunks;
+  }
+
+  // Dispatch a single chunk to ui.TextToSpeech via window.xintent
+  async function dispatchTtsChunk(text) {
+    const xintent = await ensureXIntent();
+    if (xintent && typeof xintent.intent === 'function') {
+      try {
+        const response = await xintent.intent('ui.TextToSpeech', {
+          text: text,
+          format: 'audio/wav',
+          speed: 1.0,
+          reply: true,
+          Accept: '*'
+        }, 'cool-tts');
+
+        // Consume response stream if available
+        if (response && response.body) {
+          const reader = response.body.getReader();
+          while (true) {
+            const { done } = await reader.read();
+            if (done) break;
+          }
+        }
+        return true;
+      } catch (err) {
+        console.warn('[cool-ebooks] xintent dispatch failed, falling back to Web Speech:', err);
+      }
+    }
+
+    // Web Speech API Fallback
+    if ('speechSynthesis' in window) {
+      return new Promise((resolve) => {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.onend = () => resolve(true);
+        utter.onerror = () => resolve(true);
+        window.speechSynthesis.speak(utter);
+      });
+    }
+
+    return true;
+  }
+
+  // Double-Buffered TTS Execution Loop
+  async function startDoubleBufferedTts() {
+    if (isTtsActive) return;
+
+    let rawText = "";
+    if (rendition) {
+      try {
+        const contents = rendition.getContents()[0];
+        if (contents && contents.content) {
+          rawText = contents.content.innerText || contents.content.textContent || "";
+        }
+      } catch (e) {}
+    }
+
+    if (!rawText) {
+      rawText = "In the beginning God created the heavens and the earth. And the earth was formless and void; and darkness was upon the face of the deep. And the Spirit of God moved upon the face of the waters. And God said, Let there be light: and there was light.";
+    }
+
+    const chunkSize = parseInt(chunkSizeSelect.value, 10) || 25;
+    ttsQueue = chunkText(rawText, chunkSize);
+
+    if (ttsQueue.length === 0) {
+      updateTtsStatus("No text available to speak.");
+      return;
+    }
+
+    isTtsActive = true;
+    ttsIndex = 0;
+    ttsPlayBtn.disabled = true;
+
+    updateTtsStatus(`[TTS Double-Buffering Started] ${ttsQueue.length} chunks prepared.`);
+
+    // Prime the double buffer: pre-fetch Chunk 0 AND pre-fetch Chunk 1 in parallel
+    currentTtsPromise = dispatchTtsChunk(ttsQueue[0]);
+    if (ttsQueue.length > 1) {
+      nextTtsPromise = dispatchTtsChunk(ttsQueue[1]);
+    } else {
+      nextTtsPromise = null;
+    }
+
+    while (isTtsActive && ttsIndex < ttsQueue.length) {
+      const isPrebuffered = (ttsIndex + 1 < ttsQueue.length);
+      const bufferState = isPrebuffered ? `(Chunk ${ttsIndex + 2} pre-buffered in parallel)` : `(Final chunk)`;
+
+      updateTtsStatus(`[Speaking Chunk ${ttsIndex + 1}/${ttsQueue.length}] ${bufferState}:\n"${ttsQueue[ttsIndex]}"`);
+
+      // Await completion of current chunk
+      await currentTtsPromise;
+
+      if (!isTtsActive) break;
+
+      ttsIndex++;
+
+      if (ttsIndex < ttsQueue.length) {
+        // Promote pre-buffered N+1 chunk to current
+        currentTtsPromise = nextTtsPromise;
+
+        // Pre-buffer N+2 chunk in background
+        if (ttsIndex + 1 < ttsQueue.length) {
+          nextTtsPromise = dispatchTtsChunk(ttsQueue[ttsIndex + 1]);
+        } else {
+          nextTtsPromise = null;
+        }
+      }
+    }
+
+    if (isTtsActive) {
+      updateTtsStatus("Finished reading section.");
+    }
+    stopTts();
+  }
+
+  function stopTts() {
+    isTtsActive = false;
+    currentTtsPromise = null;
+    nextTtsPromise = null;
+    ttsPlayBtn.disabled = false;
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    updateTtsStatus("TTS Stopped.");
+  }
+
+  // EPUB File Loading
+  document.getElementById('file-input').addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = function (event) {
+      const bookData = event.target.result;
+      if (rendition) rendition.destroy();
+
+      book = ePub(bookData);
+      rendition = book.renderTo("viewer", {
+        width: "100%",
+        height: "100%",
+        spread: "always"
+      });
+
+      rendition.display();
+      stopTts();
+      updateTtsStatus(`Loaded EPUB: ${file.name}. Ready for double-buffered TTS.`);
+    };
+
+    reader.readAsArrayBuffer(file);
+  });
+
+  // Event Listeners
+  document.getElementById('next').addEventListener('click', () => {
+    if (rendition) rendition.next();
+    stopTts();
+  });
+
+  document.getElementById('prev').addEventListener('click', () => {
+    if (rendition) rendition.prev();
+    stopTts();
+  });
+
+  ttsPlayBtn.addEventListener('click', startDoubleBufferedTts);
+  ttsStopBtn.addEventListener('click', stopTts);
+
+  // Keyboard navigation (Left / Right Arrows)
+  document.addEventListener('keyup', (e) => {
+    if (!rendition) return;
+    if (e.key === 'ArrowRight') {
+      rendition.next();
+      stopTts();
+    }
+    if (e.key === 'ArrowLeft') {
+      rendition.prev();
+      stopTts();
+    }
+  });
+
+  // Pre-load xintent
+  ensureXIntent();
+</script>
 
 </body>
 </html>

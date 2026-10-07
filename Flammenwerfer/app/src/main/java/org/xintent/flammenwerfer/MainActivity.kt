@@ -63,6 +63,9 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var action1App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 1)) }
     var action2App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 2)) }
     var action3App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 3)) }
+    var localFsEnabled by remember { mutableStateOf(XIntentClient.isLocalFsEnabled(context)) }
+    var localClipboardEnabled by remember { mutableStateOf(XIntentClient.isLocalClipboardEnabled(context)) }
+    var localTtsEnabled by remember { mutableStateOf(XIntentClient.isLocalTtsEnabled(context)) }
 
     var cardAppInput by remember { mutableStateOf("intent-test-card") }
     var cardNameInput by remember { mutableStateOf("index") }
@@ -192,12 +195,66 @@ fun MainScreen(modifier: Modifier = Modifier) {
             singleLine = true,
         )
 
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Checkbox(
+                checked = localFsEnabled,
+                onCheckedChange = {
+                    localFsEnabled = it
+                    XIntentClient.setLocalFsEnabled(context, it)
+                },
+            )
+            Text(
+                text = "Redirect Web Card fs.PickFile & fs.SaveAs to Local Android Storage (SAF)",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Checkbox(
+                checked = localClipboardEnabled,
+                onCheckedChange = {
+                    localClipboardEnabled = it
+                    XIntentClient.setLocalClipboardEnabled(context, it)
+                },
+            )
+            Text(
+                text = "Redirect Web Card ui.Copy & ui.Paste to Local Android Clipboard",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Checkbox(
+                checked = localTtsEnabled,
+                onCheckedChange = {
+                    localTtsEnabled = it
+                    XIntentClient.setLocalTtsEnabled(context, it)
+                },
+            )
+            Text(
+                text = "Redirect Web Card ui.TextToSpeech to Local Android Phone Speech Engine (Cave Mode)",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         Button(
             onClick = {
                 XIntentClient.setServerUrl(context, serverUrl)
                 XIntentClient.setTargetApp(context, 1, action1App)
                 XIntentClient.setTargetApp(context, 2, action2App)
                 XIntentClient.setTargetApp(context, 3, action3App)
+                XIntentClient.setLocalFsEnabled(context, localFsEnabled)
+                XIntentClient.setLocalClipboardEnabled(context, localClipboardEnabled)
+                XIntentClient.setLocalTtsEnabled(context, localTtsEnabled)
                 Toast.makeText(context, "Saved Settings & Target Apps!", Toast.LENGTH_SHORT).show()
                 refreshApiTags()
             },
