@@ -39,6 +39,44 @@ host = "${hostname}"
 name = "${hostname}-speakers"
 `;
 
+const children = new Set();
+
+function trackChild(proc) {
+  if (!proc || !proc.pid) return proc;
+  children.add(proc);
+  const cleanup = () => children.delete(proc);
+  proc.on('exit', cleanup);
+  proc.on('error', cleanup);
+  return proc;
+}
+
+function killChild(proc, signal = 'SIGINT') {
+  if (!proc || !proc.pid) return;
+  try {
+    if (proc.detached) {
+      try {
+        process.kill(-proc.pid, signal);
+      } catch (_) {
+        proc.kill(signal);
+      }
+    } else {
+      proc.kill(signal);
+    }
+  } catch (_) {}
+}
+
+function forwardSignalAndExit(signal) {
+  logger.info(`Received ${signal}. Forwarding to ${children.size} child process(es)...`);
+  for (const proc of children) {
+    killChild(proc, signal);
+  }
+  children.clear();
+  process.exit(0);
+}
+
+process.on('SIGINT', () => forwardSignalAndExit('SIGINT'));
+process.on('SIGTERM', () => forwardSignalAndExit('SIGTERM'));
+
 function checkHttpBridge(port = 12345) {
   return new Promise((resolve) => {
     const req = http.get(`http://localhost:${port}/api/tags`, { timeout: 1000 }, (res) => {
@@ -59,19 +97,24 @@ function spawnRuntime(cmdFile, workingDir) {
       stdio: 'inherit',
       detached: true,
     });
+    trackChild(proc);
     proc.on('error', () => {
-      spawn('node', [cmdFile], {
+      const fallbackProc = spawn('node', [cmdFile], {
         cwd: workingDir,
         stdio: 'inherit',
         detached: true,
       });
+      trackChild(fallbackProc);
     });
+    return proc;
   } catch (_) {
-    spawn('node', [cmdFile], {
+    const fallbackProc = spawn('node', [cmdFile], {
       cwd: workingDir,
       stdio: 'inherit',
       detached: true,
     });
+    trackChild(fallbackProc);
+    return fallbackProc;
   }
 }
 
@@ -125,8 +168,8 @@ async function startLighter() {
     { eventMask: x11.eventMask.PropertyChange }
   );
 
-  pickFiles.init({X, lighterWin});
-  xaudioNode.init({X, lighterWin});
+  pickFiles.init({X, lighterWin, trackChild});
+  xaudioNode.init({X, lighterWin, trackChild});
 
   const xintentServicesManifestAtom = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
   const xintentMatchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
@@ -167,7 +210,9 @@ async function startLighter() {
           const intent = package.intents[payload.intendedIntent];
           logger.info(`Got request to load ${pakName} for ${payload.intendedIntent}`, intent);
 
-          spawn(intent.exec, {shell: true, cwd: package._path || process.cwd(), stdio: 'inherit'}).on('error', err => {
+          const proc = spawn(intent.exec, {shell: true, cwd: package._path || process.cwd(), stdio: 'inherit'});
+          trackChild(proc);
+          proc.on('error', err => {
             logger.error(`Failed to launch service:`, err);   
           });
         }

@@ -75,6 +75,7 @@ async function playSoundBlob(payload) {
     stopProcess(key);
 
     const proc = spawn(player, args, { stdio: ['ignore', 'ignore', 'inherit'] });
+    trackChild(proc);
     activeProcesses.set(key, proc);
 
     proc.on('close', () => {
@@ -125,9 +126,14 @@ async function seekStream(payload) {
   return { status: 'ok', seekTo };
 }
 
+let trackChild = proc => proc;
+
 function init(g) {
   X = g.X;
   lighterWin = g.lighterWin;
+  if (g.trackChild) {
+    trackChild = g.trackChild;
+  }
 }
 
 module.exports = {

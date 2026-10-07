@@ -76,12 +76,15 @@ const xblobDestructor = async message => {
   xintent.XBlobSoftUnlink(X, xintent.routerWin, lighterWin, blob);
 };
 
+let trackChild = proc => proc;
+
 function execShell(command) {
   return new Promise((resolve, reject) => {
     const proc = spawn(command, {
       shell: true,
       stdio: ['ignore', 'pipe', 'inherit']
     });
+    trackChild(proc);
 
     let stdout = '';
     proc.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -101,6 +104,9 @@ let lighterWin;
 const init = async g => {
   X = g.X;
   lighterWin = g.lighterWin;
+  if (g.trackChild) {
+    trackChild = g.trackChild;
+  }
   const hostname = os.hostname();
   const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
   X.SetSelectionOwner(lighterWin, hostAtom, 0);
