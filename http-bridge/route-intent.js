@@ -72,8 +72,6 @@ const routeIntent = async (req, res) => {
   const intent = `${namespace}.${action}`;
   const payload = req.body || {};
 
-  const targetApp = req.query.app || payload.app;
-
   // If query string app is provided but missing from body payload, populate it
   if (req.query.app && !payload.app) {
     payload.app = req.query.app;
@@ -88,37 +86,38 @@ const routeIntent = async (req, res) => {
     throw new HttpError(400, `url path intent (${intent}) must match intent specified in intent json (${payload.intent}): ${JSON.stringify(payload)}`);
   }
 
-  // Ensure intent and app fields are set on payload
   if (!payload.intent) {
     payload.intent = intent;
   }
-  if (!payload.app) {
-    payload.app = targetApp;
-  }
+
+  const targetApp = payload.app;
 
   // Store intent context in AsyncLocalStorage so all error logs include the intent JSON
   logger.setContext({
     intent,
-    targetApp,
+    targetApp: targetApp || undefined,
     intentJson: payload
   });
 
-  logger.info(`[INTENT] ${intent} -> Target: ${targetApp}`, payload);
+  logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, payload);
   const txId = globalTransactionIdCounter++;
 
   try {
     // --- 1. Streamed Multipart Response Path ---
     if (payload.Accept) {
+      let headersSent = false;
       const BOUNDARY = 'MatchboxFrameBoundary_' + Date.now().toString(16);
 
-      res.writeHead(200, {
-        'Content-Type': `multipart/mixed; boundary=${BOUNDARY}`,
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'Matchbox-Bridge': '1.0',
-      });
-
       const writeJsonFrame = (res, data, customHeaders = {}) => {
+        if (!headersSent) {
+          res.writeHead(200, {
+            'Content-Type': `multipart/mixed; boundary=${BOUNDARY}`,
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'Matchbox-Bridge': '1.0',
+          });
+          headersSent = true;
+        }
         const jsonBody = JSON.stringify(data, null, 2);
         const headers = [
           'Content-Type: application/json',
@@ -130,45 +129,69 @@ const routeIntent = async (req, res) => {
         res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${jsonBody}\r\n\r\n`);
       };
 
-      await xintent.sendXIntentIntentV0(X, xintent.routerWin, {
+      const responsePromise = new Promise((resolve, reject) => {
+        const responseHandler = async (ev) => {
+          if (
+            ev &&
+            ev.type == 33 &&
+            [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) &&
+            ev.data &&
+            ev.data[2] == txId
+          ) {
+            try {
+              const routerWin = await xintent.getValidRouterWin(X, root);
+              const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin, ev);
+
+              writeJsonFrame(res, eventData);
+
+              const blobAtom = ev.data[3];
+              if (blobAtom) {
+                try {
+                  const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
+                  xintent.XBlobUnlink(X, routerWin, clientWin, blobAtom);
+
+                  if (blob) {
+                    writeJsonFrame(res, blob);
+                  }
+                } catch (err) {
+                  logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
+                }
+              }
+
+              // Finalize stream when disposition is final or error
+              if (eventData.disposition === 'final' || eventData.disposition === 'error') {
+                logger.info("Closing stream", {txId});
+                if (headersSent) {
+                  res.write(`--${BOUNDARY}--\r\n`);
+                  res.end();
+                }
+                X.removeListener('event', responseHandler);
+                resolve();
+              }
+            } catch (err) {
+              logger.error(`[STREAM ERROR] ${err.message}`);
+              X.removeListener('event', responseHandler);
+              if (headersSent) {
+                res.end();
+              } else {
+                reject(err);
+              }
+              resolve();
+            }
+          }
+        };
+
+        X.on('event', responseHandler);
+      });
+
+      const routerWin = await xintent.getValidRouterWin(X, root);
+      await xintent.sendXIntentIntentV0(X, routerWin, {
         senderWin: clientWin,
         payload,
         txId,
       });
 
-      for await (const [ev] of on(X, 'event')) {
-        if (
-          ev.type == 33 &&
-          [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) &&
-          ev.data[2] == txId
-        ) {
-          const { payload: eventData } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-
-          writeJsonFrame(res, eventData);
-
-          const blobAtom = ev.data[3];
-          if (blobAtom) {
-            try {
-              const blob = await xintent.XBlobRead(X, xintent.routerWin, blobAtom);
-              xintent.XBlobUnlink(X, xintent.routerWin, clientWin, blobAtom);
-
-              if (blob) {
-                writeJsonFrame(res, blob);
-              }
-            } catch (err) {
-              logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
-            }
-          }
-
-          // Finalize stream when disposition is final
-          if (eventData.disposition === 'final') {
-            logger.info("Closing stream", {txId});
-            res.write(`--${BOUNDARY}--\r\n`);
-            res.end();
-            return;
-          }
-        }
-      }
+      return await responsePromise;
     }
 
     // --- 2. Fire-and-Forget / Standard Response Path ---
@@ -181,7 +204,11 @@ const routeIntent = async (req, res) => {
     res.setHeader('Matchbox-Bridge', '1.0');
     res.status(200).json({ status: 'ok', intent, targetApp });
   } catch (err) {
-    logger.error(`[ROUTE INTENT ERROR] ${intent} to ${targetApp} failed: ${err.message}`, { intentPayload: payload, error: err });
+    logger.error(
+      `[ROUTE INTENT ERROR] ${intent}${targetApp ? ` to ${targetApp}` : ''} failed: ${err.message}`,
+      err.stack || err,
+      { intentPayload: payload }
+    );
     throw err;
   }
 };

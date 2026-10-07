@@ -1,9 +1,9 @@
 const path = require('path');
 const fs = require('fs');
 const {Logger, HttpError} = require('../server-tools');
-const {packageRegistry, intentRegistry} = require('./package-registry');
+const {packageRegistry} = require('./package-registry');
 
-const logger = new Logger({module: 'route-intent'});
+const logger = new Logger({module: 'route-app'});
 
 module.exports.routeApp = (req, res) => {
   logger.info(`request for app ${req.params.app} card ${req.params.card}`);
@@ -32,11 +32,11 @@ module.exports.routeApp = (req, res) => {
   logger.debug('package.app', app);
   if(!app) throw new HttpError(400, `package ${appName} is not an app`);
   let cardId;
-  if(req.params.card){
+  if (req.params.card) {
     cardId = req.params.card;
   } else {
-    if(app.main?.type != "html") throw new HttpError(400, `cant serve main type ${app.main?.type} of ${appName}`);
-    cardId = app.main.card;
+    cardId = app.main?.card || (package.cards && package.cards[0]?.id);
+    if (!cardId) throw new HttpError(400, `no main card configured for ${appName}`);
   }
   const card = (package.cards || []).find(c => c.id == cardId);
   if(!card) throw new HttpError(404, `card ${cardId} not found in package ${appName}`);
@@ -49,15 +49,13 @@ module.exports.routeApp = (req, res) => {
 }
 
 module.exports.getApps = () => Object.fromEntries(
-  Object.entries(packageRegistry)
-    .filter(([_, pkg]) => pkg?.app && pkg?.app?.main?.type == 'html')
-    .map(([appId, pkg]) => [
-      appId,
-      {
-        name: pkg.app.name || appId,
-        description: pkg.app.description || '',
-        mainCard: pkg.app.main?.card || null,
-        cards: (pkg.cards || []).map(card => card.id)
-      }
-    ])
+  Object.entries(packageRegistry).map(([appId, pkg]) => [
+    appId,
+    {
+      name: pkg.app.name || appId,
+      description: pkg.app.description || '',
+      mainCard: pkg.app.main?.card || (pkg.cards && pkg.cards[0]?.id) || null,
+      cards: (pkg.cards || []).map(card => card.id)
+    }
+  ])
 );

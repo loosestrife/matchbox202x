@@ -164,10 +164,6 @@ const forwardMessageToChannel = async (channelObj, message) => {
         );
         return true;
       }
-      implicitXBlobTransfer(message.payloadBlob, routerWin, forwardTo);
-      if (message.dataBlob) {
-        implicitXBlobTransfer(message.dataBlob, routerWin, forwardTo);
-      }
       await sendXIntentIntentV0(X, routerWin, {
         targetWin: forwardTo,
         senderWin: routerWin,
@@ -176,7 +172,7 @@ const forwardMessageToChannel = async (channelObj, message) => {
         payloadBlob: message.payloadBlob,
         dataBlob: message.dataBlob,
       });
-      if(['final', 'cancel', 'error'].includes(message.payload.disposition)){
+      if(['final', 'cancel', 'error'].includes(message.payload?.disposition)){
         closeChannel(channelObj);
       }
       return true;

@@ -3,7 +3,7 @@
 xintent.py - Python client library for Matchbox / XIntent services.
 
 Provides both:
-1. XIntentServer: NNJSON stdin/stdout pipe mode (used by matchbox-service-lighter).
+1. XIntentServer: Dual-mode server (NNJSON stdin/stdout pipe mode AND X11 IPC window mode).
 2. XIntentXlibClient: Native X11 IPC mode using python-xlib (mirroring xintent.js).
 """
 
@@ -11,6 +11,7 @@ import sys
 import json
 import time
 import os
+import select
 from typing import Callable, Dict, Any, Optional
 
 try:
@@ -23,10 +24,10 @@ except ImportError:
 
 class XIntentServer:
     """
-    Matchbox XIntent Service Server (Pipe / NNJSON mode).
+    Matchbox XIntent Service Server.
 
-    Reads NNJSON frames from stdin, dispatches them to registered intent
-    handlers, and outputs response frames and xevents to stdout.
+    Handles incoming intents over both stdin NNJSON frames and native X11 window IPC events,
+    dispatching them to registered intent handlers.
     """
 
     def __init__(self, app_id: str = "cool-tts", toml_path: Optional[str] = None):
@@ -41,6 +42,7 @@ class XIntentServer:
         candidates = [
             "matchbox.toml",
             os.path.join(os.path.dirname(__file__), "matchbox.toml"),
+            os.path.join(os.path.dirname(__file__), "../cool-tts/matchbox.toml"),
         ]
         for path in candidates:
             if os.path.exists(path):
@@ -55,30 +57,24 @@ class XIntentServer:
             if x11_path not in sys.path:
                 sys.path.insert(0, x11_path)
 
-            from x11_promises import X11PromisesClient, HAS_XLIB
-            if not HAS_XLIB:
-                return
-
-            x11 = X11PromisesClient()
-            client_win = x11.create_client_window(name=self.app_id)
-            atom_toml = x11.intern_atom("MATCHBOX_TOML")
-
-            if self.toml_path and os.path.exists(self.toml_path):
-                with open(self.toml_path, "r", encoding="utf-8") as f:
-                    toml_content = f.read()
-                x11.set_window_property_string(client_win.id, atom_toml, toml_content)
-                self.x11_client = x11
-                sys.stderr.write(f"[xintent] Registered MATCHBOX_TOML on X11 window {hex(client_win.id)} for '{self.app_id}'\n")
-                sys.stderr.flush()
+            from xintent_xlib import XIntentXlibClient
+            if XIntentXlibClient:
+                self.x11_client = XIntentXlibClient(app_id=self.app_id)
+                if self.toml_path and os.path.exists(self.toml_path):
+                    with open(self.toml_path, "r", encoding="utf-8") as f:
+                        toml_content = f.read()
+                    self.x11_client.register_matchbox_toml(toml_content)
+                    sys.stderr.write(f"[libxintent.py] Registered MATCHBOX_TOML on X11 window {hex(self.x11_client.client_win.id)} for '{self.app_id}'\n")
+                    sys.stderr.flush()
         except Exception as e:
-            sys.stderr.write(f"[xintent] Could not register X11 MATCHBOX_TOML: {e}\n")
+            sys.stderr.write(f"[libxintent.py] Could not register X11 MATCHBOX_TOML: {e}\n")
             sys.stderr.flush()
 
     def on_intent(self, intent_name: str):
         """Decorator to register a handler function for an intent (e.g. 'ui.TextToSpeech')."""
 
         def decorator(func: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]):
-            self.handlers[intent_name] = func
+            self.register_handler(intent_name, func)
             return func
 
         return decorator
@@ -90,6 +86,8 @@ class XIntentServer:
     ):
         """Registers a handler function for an intent."""
         self.handlers[intent_name] = handler
+        if self.x11_client:
+            self.x11_client.on_intent(intent_name)(handler)
 
     def send_event(
         self,
@@ -175,7 +173,7 @@ class XIntentServer:
                             disposition="final",
                         )
             except Exception as err:
-                sys.stderr.write(f"[xintent] Error executing handler for '{intent_name}': {err}\n")
+                sys.stderr.write(f"[libxintent.py] Error executing handler for '{intent_name}': {err}\n")
                 sys.stderr.flush()
                 self.send_event(
                     event_name=f"{intent_name}Error",
@@ -185,36 +183,49 @@ class XIntentServer:
                     status="error",
                 )
         else:
-            sys.stderr.write(f"[xintent] No handler registered for intent '{intent_name}' in app '{self.app_id}'\n")
+            sys.stderr.write(f"[libxintent.py] No handler registered for intent '{intent_name}' in app '{self.app_id}'\n")
             sys.stderr.flush()
 
     def run(self):
         """
-        Main loop reading NNJSON (double-newline separated JSON) frames from stdin.
+        Main loop reading NNJSON (double-newline separated JSON) frames from stdin and X11 ClientMessages.
         """
-        sys.stderr.write(f"[xintent-pipe] Service '{self.app_id}' listening on stdin...\n")
+        sys.stderr.write(f"[libxintent.py] Service '{self.app_id}' listening on stdin and X11 IPC...\n")
         sys.stderr.flush()
         buffer = ""
+        stdin_open = True
         while True:
             try:
-                chunk = sys.stdin.read(1)
-                if not chunk:
+                if self.x11_client:
+                    self.x11_client.process_events_once()
+
+                if stdin_open:
+                    r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                    if r:
+                        chunk = sys.stdin.read(1)
+                        if not chunk:
+                            stdin_open = False
+                        else:
+                            buffer += chunk
+                            while "\n\n" in buffer:
+                                frame_str, buffer = buffer.split("\n\n", 1)
+                                frame_str = frame_str.strip()
+                                if frame_str:
+                                    try:
+                                        frame = json.loads(frame_str)
+                                        self.process_frame(frame)
+                                    except json.JSONDecodeError as e:
+                                        sys.stderr.write(f"[libxintent.py] Invalid JSON frame: {e} in '{frame_str}'\n")
+                                        sys.stderr.flush()
+                else:
+                    time.sleep(0.05)
+
+                if not stdin_open and not self.x11_client:
                     break
-                buffer += chunk
-                while "\n\n" in buffer:
-                    frame_str, buffer = buffer.split("\n\n", 1)
-                    frame_str = frame_str.strip()
-                    if frame_str:
-                        try:
-                            frame = json.loads(frame_str)
-                            self.process_frame(frame)
-                        except json.JSONDecodeError as e:
-                            sys.stderr.write(f"[xintent] Invalid JSON frame: {e} in '{frame_str}'\n")
-                            sys.stderr.flush()
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                sys.stderr.write(f"[xintent] Reader error: {e}\n")
+                sys.stderr.write(f"[libxintent.py] Reader error: {e}\n")
                 sys.stderr.flush()
                 break
 

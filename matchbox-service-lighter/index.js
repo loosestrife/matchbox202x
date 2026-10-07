@@ -159,9 +159,6 @@ async function ensureHttpBridge() {
 async function startLighter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
 
-  await ensureXIntentRouter(X, root);
-  await ensureHttpBridge();
-
   const lighterWin = X.AllocID();
   X.CreateWindow(
     lighterWin, root,
@@ -174,6 +171,7 @@ async function startLighter() {
 
   const xintentServicesManifestAtom = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
   const xintentMatchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
+  const netWmPidAtom = await X.InternAtom(false, '_NET_WM_PID');
 
   const xintentAtom = await X.InternAtom(false, 'XINTENT');
   const xintentIntentV0Atom = await X.InternAtom(false, 'XINTENT_INTENT_V0');
@@ -194,8 +192,11 @@ async function startLighter() {
 
   const pidBuf = Buffer.alloc(4);
   pidBuf.writeUInt32LE(process.pid, 0);
-  X.ChangeProperty(0, lighterWin, xintent.atoms._NET_WM_PID, xintent.atoms.CARDINAL, 32, pidBuf);
+  X.ChangeProperty(0, lighterWin, netWmPidAtom, X.atoms.CARDINAL, 32, pidBuf);
   logger.info(`Registered services (0x${lighterWin.toString(16)})`);
+
+  await ensureXIntentRouter(X, root);
+  await ensureHttpBridge();
 
   // 4. Handle Direct Start Signals & XAudio Commands from xintent-router
   rawX.on('event', async (ev) => {

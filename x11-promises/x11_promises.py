@@ -36,7 +36,8 @@ class X11PromisesClient:
     def intern_atom(self, atom_name: str, only_if_exists: bool = False) -> int:
         if atom_name in self.atoms:
             return self.atoms[atom_name]
-        atom_id = self.disp.intern_atom(atom_name, only_if_exists)
+        res = self.disp.intern_atom(atom_name, only_if_exists)
+        atom_id = int(res) if res else 0
         if atom_id:
             self.atoms[atom_name] = atom_id
         return atom_id
@@ -76,13 +77,15 @@ class X11PromisesClient:
         """
         Constructs and dispatches a 32-byte X11 ClientMessage event.
         """
+        import array
         target_win = self.disp.create_resource_object("window", target_win_id)
-        data_5 = (data[:5] + [0] * (5 - len(data)))[:5]
+        data_5 = (list(data)[:5] + [0] * (5 - len(list(data))))[:5]
+        arr = array.array('I', [int(x) & 0xFFFFFFFF for x in data_5])
 
         event = protocol.event.ClientMessage(
             window=target_win,
             client_type=message_type_atom,
-            data=(32, data_5),
+            data=(32, arr),
         )
         target_win.send_event(event, event_mask=X.NoEventMask)
         self.disp.flush()
@@ -94,9 +97,14 @@ class X11PromisesClient:
         Reads string window property across 32KB chunks.
         """
         win = self.disp.create_resource_object("window", win_id)
-        prop = win.get_full_property(property_atom, Xatom.STRING)
+        prop = win.get_full_property(property_atom, X.AnyPropertyType)
         if prop and prop.value:
-            return bytes(prop.value).decode("utf-8", errors="replace")
+            if isinstance(prop.value, bytes):
+                return prop.value.decode("utf-8", errors="replace")
+            elif isinstance(prop.value, str):
+                return prop.value
+            else:
+                return bytes(prop.value).decode("utf-8", errors="replace")
         return None
 
     def set_window_property_string(
@@ -122,4 +130,10 @@ class X11PromisesClient:
         self.disp.flush()
 
     def get_selection_owner(self, atom_id: int) -> int:
-        return self.disp.get_selection_owner(atom_id)
+        owner = self.disp.get_selection_owner(atom_id)
+        if owner:
+            if hasattr(owner, 'id'):
+                return owner.id
+            if isinstance(owner, int):
+                return owner
+        return 0

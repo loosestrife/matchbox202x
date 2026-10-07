@@ -61,14 +61,17 @@ app.use((err, req, res, next) => {
   const store = alStorage.getStore();
   const intentPayload = store?.values?.intentJson || req.body;
 
-  if (intentPayload) {
-    logger[level]('Express error handler:', err, 'Intent JSON:', intentPayload);
-  } else {
-    logger[level]('Express error handler:', err);
+  logger[level](
+    `[HTTP BRIDGE ERROR ${status}] ${err.message || err}`,
+    err.stack || err,
+    intentPayload ? { intentPayload } : {}
+  );
+
+  if (res.headersSent) {
+    return next(err);
   }
 
-  res.status(status);
-  res.json(serializeError(err));
+  res.status(status).json(serializeError(err));
 });
 
 // localhost bridge

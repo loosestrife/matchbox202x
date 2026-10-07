@@ -186,17 +186,30 @@ async function startRouter() {
     }
 
     if (ev.name === 'CreateNotify') {
-      X.ChangeWindowAttributes(ev.wid, { eventMask: x11.eventMask.PropertyChange });
-      await parseWindowToml(ev.wid);
-      await parseWindowLighterToml(ev.wid);
+      const createdWin = ev.window || ev.wid;
+      try {
+        X.ChangeWindowAttributes(createdWin, { eventMask: x11.eventMask.PropertyChange });
+      } catch (_) {}
+      await parseWindowToml(createdWin);
+      await parseWindowLighterToml(createdWin);
     }
 
-    if (ev.name === 'PropertyNotify' && ev.atom === atoms.MATCHBOX_TOML) {
-      await parseWindowToml(ev.wid);
-    }
-
-    if (ev.name === 'PropertyNotify' && ev.atom === atoms.XINTENT_SERVICES_MANIFEST) {
-      await parseWindowLighterToml(ev.wid);
+    if (ev.name === 'PropertyNotify') {
+      const propWin = ev.window || ev.wid;
+      if (ev.atom === atoms.MATCHBOX_TOML) {
+        await parseWindowToml(propWin);
+      } else if (ev.atom === atoms.XINTENT_SERVICES_MANIFEST) {
+        await parseWindowLighterToml(propWin);
+      } else {
+        try {
+          const atomName = await X.GetAtomName(ev.atom);
+          if (atomName === 'MATCHBOX_TOML') {
+            await parseWindowToml(propWin);
+          } else if (atomName === 'XINTENT_SERVICES_MANIFEST') {
+            await parseWindowLighterToml(propWin);
+          }
+        } catch (_) {}
+      }
     }
 
     if (ev.name === 'DestroyNotify') {

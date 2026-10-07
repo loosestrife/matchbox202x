@@ -69,7 +69,7 @@ function buildRegistries() {
       }
     }
   }
-  logger.info({intentRegistry, packageRegistry});
+  logger.info('Package registry built:', { intentRegistry, packageRegistry });
 }
 
 buildRegistries();

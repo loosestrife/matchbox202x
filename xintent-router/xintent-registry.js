@@ -110,16 +110,21 @@ async function updateAggregateToml() {
 
 async function getAllMatchboxToml() {
   const tree = await X.QueryTree(root);
-  for (const wid of tree.children) {
-    await parseWindowToml(wid);
-    await parseWindowLighterToml(wid);
+  if (tree && tree.children) {
+    for (const wid of tree.children) {
+      try {
+        X.ChangeWindowAttributes(wid, { eventMask: x11.eventMask.PropertyChange });
+      } catch (_) {}
+      await parseWindowToml(wid);
+      await parseWindowLighterToml(wid);
+    }
+    await updateAggregateToml();
   }
-  await updateAggregateToml();
 }
 
 async function parseWindowToml(wid) {
   try {
-    const propertyAtom = atoms.XINTENT_MATCHBOX_TOML || atoms.MATCHBOX_TOML;
+    const propertyAtom = atoms.MATCHBOX_TOML || await X.InternAtom(false, 'MATCHBOX_TOML');
     const prop = await X.GetProperty(
       0,
       wid,
@@ -131,6 +136,7 @@ async function parseWindowToml(wid) {
     if (prop && prop.data && prop.data.length > 0) {
       const matchboxToml = TOML.parse(prop.data.toString("utf8"));
       windowRegistry[wid] = matchboxToml;
+      logger.info(`Discovered service window ${widString(wid)} (${matchboxToml.app?.id || 'service'})`);
       let updated = false;
 
       if (matchboxToml.intents) {
@@ -168,31 +174,35 @@ async function parseWindowToml(wid) {
 
 async function parseWindowLighterToml(wid) {
   try {
+    const manifestAtom = atoms.XINTENT_SERVICES_MANIFEST || await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
     const prop = await X.GetProperty(
       0,
       wid,
-      atoms.XINTENT_SERVICES_MANIFEST,
-      atoms.STRING,
+      manifestAtom,
+      0,
       0,
       1000000,
     );
-    if (prop && prop.data && prop.data.length > 0) {
-      const toml = TOML.parse(prop.data.toString("utf8"));
-      logger.info(
-        "got XINTENT_SERVICES_MANIFEST from window",
-        widString(wid),
-        toml,
-      );
-      const computer = toml.computer;
-      let updated = false;
+    if (!prop || !prop.data || prop.data.length === 0) {
+      return;
+    }
+    const toml = TOML.parse(prop.data.toString("utf8"));
+    logger.info(
+      "got XINTENT_SERVICES_MANIFEST from window",
+      widString(wid),
+      toml,
+    );
+    const computer = toml.computer;
+    let updated = false;
 
-      for (const packageName of Object.keys(toml.packages || {})) {
-        const pkg = toml.packages[packageName];
-        const publicKeyHash = pkg.publicKeyHash;
+    for (const packageName of Object.keys(toml.packages || {})) {
+      const pkg = toml.packages[packageName];
+      const publicKeyHash = pkg.publicKeyHash;
 
-        if (pkg.intents) {
-          for (const intentName of Object.keys(pkg.intents)) {
-            if (!lighterRegistry[intentName]) lighterRegistry[intentName] = [];
+      if (pkg.intents) {
+        for (const intentName of Object.keys(pkg.intents)) {
+          if (!lighterRegistry[intentName]) lighterRegistry[intentName] = [];
+          if (!lighterRegistry[intentName].some(e => e.wid === wid && e.packageName === packageName)) {
             lighterRegistry[intentName].push({
               wid,
               computer,
@@ -202,15 +212,15 @@ async function parseWindowLighterToml(wid) {
             updated = true;
           }
         }
+      }
 
-        if (pkg.XAudioSink || pkg.XAudioSource) {
-          lighterAudioRegistry[packageName] = { wid, computer, pkg };
-          updated = true;
-        }
+      if (pkg.XAudioSink || pkg.XAudioSource) {
+        lighterAudioRegistry[packageName] = { wid, computer, pkg };
+        updated = true;
       }
-      if (updated) {
-        await updateAggregateToml();
-      }
+    }
+    if (updated) {
+      await updateAggregateToml();
     }
   } catch (err) {
     logger.error(
@@ -226,6 +236,17 @@ function unregisterWindowRegistry(destroyedWin) {
   if (windowRegistry[destroyedWin]) {
     delete windowRegistry[destroyedWin];
     registryChanged = true;
+  }
+
+  for (const [intentName, entries] of Object.entries(intentRegistry)) {
+    const origLen = entries.length;
+    intentRegistry[intentName] = entries.filter(e => e.wid !== destroyedWin);
+    if (intentRegistry[intentName].length === 0) {
+      delete intentRegistry[intentName];
+    }
+    if ((intentRegistry[intentName]?.length || 0) !== origLen) {
+      registryChanged = true;
+    }
   }
 
   for (const [pkgName, entry] of Object.entries(lighterAudioRegistry)) {

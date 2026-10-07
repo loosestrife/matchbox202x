@@ -107,6 +107,9 @@ function wrapPromiseXClient(client) {
       });
     } else {
       orig.call(client, ...args);
+      if (!preconfiguredSeek) {
+        resolvePromise();
+      }
     }
 
     reqSeq = client.seq_num;
@@ -122,13 +125,16 @@ function wrapPromiseXClient(client) {
       timeoutTimer: null
     };
 
-    if (reqSeq !== undefined) {
+    if (reqSeq !== undefined && (isReply || preconfiguredSeek)) {
       pendingRequests.set(reqSeq, pendingEntry);
     }
 
     // Attach .seekResponsePacket(...) builder method to returned Promise
     promise.seekResponsePacket = function(predicate, timeoutMs = 5000) {
       pendingEntry.seekPredicate = predicate;
+      if (reqSeq !== undefined) {
+        pendingRequests.set(reqSeq, pendingEntry);
+      }
 
       if (timeoutMs > 0) {
         pendingEntry.timeoutTimer = setTimeout(() => {

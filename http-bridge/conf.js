@@ -2,6 +2,9 @@ const yargs = require('yargs')
 const { hideBin } = require('yargs/helpers');
 const argv = yargs(hideBin(process.argv)).parse();
 const dotenv = require('dotenv');
+const { Logger } = require('../server-tools');
+
+const logger = new Logger({ module: 'conf' });
 
 const conf = {
   packagePath: [
@@ -23,5 +26,5 @@ const conf = {
   }
 }
 
-console.log('conf is', conf);
+logger.info('http-bridge configuration:', conf);
 module.exports = conf;

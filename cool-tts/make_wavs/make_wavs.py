@@ -12,6 +12,11 @@ import sys
 from .logger import logger
 from .conf import conf
 from .tts import TTS_REGISTRY
+
+x11_promises_dir = str(Path(__file__).resolve().parent.parent.parent / "x11-promises")
+if x11_promises_dir not in sys.path:
+    sys.path.insert(0, x11_promises_dir)
+
 from xintent import XIntentServer
 
 engine = None

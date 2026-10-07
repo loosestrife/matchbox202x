@@ -29,6 +29,38 @@ function init(options = {}) {
 const atoms = {};
 const widString = (wid) => "0x" + wid.toString(16);
 
+async function getRouterWin(X, root) {
+  try {
+    const candidateRouterWin = await X.GetSelectionOwner(atoms.XINTENT);
+    if (!candidateRouterWin) {
+      module.exports.routerWin = undefined;
+      return null;
+    }
+    await X.GetWindowAttributes(candidateRouterWin);
+    const nameProp = await X.GetProperty(
+      0,
+      candidateRouterWin,
+      atoms.WM_NAME,
+      atoms.STRING,
+      0,
+      14
+    );
+    if (
+      !nameProp ||
+      !nameProp.data ||
+      nameProp.data.toString("utf8").trim() !== "XINTENT_ROUTER"
+    ) {
+      module.exports.routerWin = undefined;
+      return null;
+    }
+    module.exports.routerWin = candidateRouterWin;
+    return candidateRouterWin;
+  } catch (err) {
+    module.exports.routerWin = undefined;
+    return null;
+  }
+}
+
 async function connectToRouter(X, root) {
   const requiredAtoms = ["XINTENT", "XINTENT_INTENT_V0"];
   const requiredResults = await Promise.all(
@@ -75,42 +107,82 @@ async function connectToRouter(X, root) {
     })
   );
 
-  const getRouterWin = async () => {
-    const prop = await X.GetProperty(0, root, atoms.XINTENT, atoms.WINDOW, 0, 4);
-    if (!prop || !prop.data || prop.data.length < 4) 
-      return;
-    const candidateRouterWin = prop.data.readUInt32LE(0);
+  if (!module.exports._hasXIntentListener) {
+    module.exports._hasXIntentListener = true;
     try {
-      await X.GetWindowAttributes(candidateRouterWin);
-      const nameProp = await X.GetProperty(
-        0,
-        candidateRouterWin,
-        atoms.WM_NAME,
-        atoms.STRING,
-        0,
-        8
-      );
-      if (
-        !nameProp ||
-        !nameProp.data ||
-        nameProp.data.toString("utf8") != "XINTENT_ROUTER"
-      ) {
-        return;
+      X.ChangeWindowAttributes(root, { eventMask: x11.eventMask.PropertyChange });
+    } catch (_) {}
+    X.on('event', async ev => {
+      if (ev.name === 'DestroyNotify' && ev.wid == module.exports.routerWin) {
+        module.exports.routerWin = undefined;
       }
-    } catch (err) {
-      return;
-    }
-    module.exports.routerWin = candidateRouterWin;
+      if (ev.name === 'PropertyNotify' && ev.wid === root && ev.atom === atoms.XINTENT) {
+        await getRouterWin(X, root);
+      }
+    });
   }
-  X.on('event', async ev => {
-    if (ev.name === 'DestroyNotify' && ev.wid == module.exports.routerWin) {
+
+  return await waitForRouterWin(X, root, 5000);
+}
+
+async function waitForRouterWin(X, root, timeoutMs = 10000) {
+  if (module.exports.routerWin) {
+    try {
+      await X.GetWindowAttributes(module.exports.routerWin);
+      return module.exports.routerWin;
+    } catch (_) {
       module.exports.routerWin = undefined;
     }
-    if (ev.name === 'PropertyNotify' && ev.wid === root && ev.atom === atoms.XINTENT) {
-      await getRouterWin();
+  }
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    let timer = null;
+
+    const propertyHandler = async (ev) => {
+      if (ev && ev.name === 'PropertyNotify' && ev.wid === root && ev.atom === atoms.XINTENT) {
+        const candidate = await getRouterWin(X, root);
+        if (candidate && !resolved) {
+          resolved = true;
+          if (timer) clearTimeout(timer);
+          X.removeListener('event', propertyHandler);
+          resolve(candidate);
+        }
+      }
+    };
+
+    X.on('event', propertyHandler);
+
+    const pollInterval = setInterval(async () => {
+      if (resolved) {
+        clearInterval(pollInterval);
+        return;
+      }
+      const candidate = await getRouterWin(X, root);
+      if (candidate && !resolved) {
+        resolved = true;
+        clearInterval(pollInterval);
+        if (timer) clearTimeout(timer);
+        X.removeListener('event', propertyHandler);
+        resolve(candidate);
+      }
+    }, 250);
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          clearInterval(pollInterval);
+          X.removeListener('event', propertyHandler);
+          resolve(module.exports.routerWin || null);
+        }
+      }, timeoutMs);
     }
   });
-  await getRouterWin();
+}
+
+async function getValidRouterWin(X, root) {
+  return await waitForRouterWin(X, root, 5000);
 }
 
 /**
@@ -259,23 +331,25 @@ async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
   ]);
 }
 
-const sendXIntentIntentV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true}) =>
-  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob }); 
-const sendXIntentEventV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true}) =>
-  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob });
+const sendXIntentIntentV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
+  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
+const sendXIntentEventV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
+  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
 
 const sendXIV0 = async (
   messageTypeAtom,
   X,
   routerWin,
-  { targetWin, senderWin, txId, channel, payload, dataBlob, unlinkPayloadBlob = true}
+  { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}
 ) => {
   if (!targetWin) {
     targetWin = routerWin;
   }
 
-  // 1. Create payload blob owned by senderWin
-  const payloadBlob = await XBlobCreate(X, routerWin, senderWin, payload);
+  // 1. Create payload blob if not provided
+  if (!payloadBlob) {
+    payloadBlob = await XBlobCreate(X, routerWin, senderWin, payload);
+  }
 
   // 2. Transfer or Grant blob rights BEFORE dispatching intent message
   if (targetWin !== senderWin) {
@@ -296,11 +370,13 @@ const sendXIV0 = async (
     logger.error("only allowed to specify one of txId, channel", {txId, channel});
   }
 
+  const channelToSend = (channel !== undefined && channel !== 0) ? channel : (txId !== undefined ? txId : 0);
+
   // 3. Dispatch the intent frame
   await XClientMessage(X, targetWin, messageTypeAtom, [
     senderWin,
     payloadBlob,
-    txId ?? channel ?? 0,
+    channelToSend,
     dataBlob ?? 0,
   ]);
 
@@ -403,6 +479,8 @@ function parseXBlobDestructorFrame(X, routerWin, ev) {
 module.exports = {
   init,
   connectToRouter,
+  waitForRouterWin,
+  getValidRouterWin,
   createClientWindow,
   atoms,
   widString,
