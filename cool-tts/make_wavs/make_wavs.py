@@ -8,51 +8,83 @@ import tempfile
 import time
 from pathlib import Path
 import sys
-import tempfile
 
 from .logger import logger
 from .conf import conf
 from .tts import TTS_REGISTRY
+from xintent import XIntentServer
 
 engine = None
+
+
 def main():
     engine_cls = TTS_REGISTRY[conf.tts]
     global engine
-    engine= engine_cls()
+    engine = engine_cls()
     if conf.intent_server:
         return intent_server()
+
     with open(conf.infile, "r", encoding="utf-8") as f:
         text = f.read().strip()
 
     os.makedirs(os.path.dirname(conf.outfile), exist_ok=True)
-    fd = os.open(conf.outFile, "wb")
-    generate_audio_data(engine, text, fd)
+    with open(conf.outfile, "wb") as fd:
+        generate_audio_data(engine, text, fd)
 
 
 def intent_server():
-    buf = ""
-    for line in sys.stdin:
-        if line.strip():
-            buf += line + '\n'
-        else:
-            obj = json.loads(buf)
-            buf = ""
-            process_stdin(obj)
+    server = XIntentServer(app_id="cool-tts")
 
-def process_stdin(obj):
-    logger.info("got NNJSON frame", obj)
-    if(obj["intent"] == "ui.TextToSpeech"):
-        # haha were not doing anonymous file descriptors if /tmp isnt enough we do shm
-        # fd = os.open("/tmp", os.O_TMPFILE | os.O_RDWR, 0o600)
-        generate_audio_data(engine, obj["text"], fd)
-        print(json.dumps({"intent":"ui.TextToSpeechResponse", "disposition": "final", "fd": fd, "channel": obj["channel"]}), '\n\n')
+    @server.on_intent("ui.TextToSpeech")
+    def handle_text_to_speech(frame):
+        logger.info(f"got NNJSON frame: {frame}")
 
-def generate_audio_data(engine, text: str, output_fd: int) -> bool:
+        payload = frame.get("payload", frame) if isinstance(frame.get("payload"), dict) else frame
+        text = payload.get("text") or frame.get("text", "")
+
+        if not text:
+            return {"status": "error", "message": "No text provided for TTS"}
+
+        file_id = f"tts_{int(time.time() * 1000)}.wav"
+        out_path = os.path.join(tempfile.gettempdir(), file_id)
+
+        try:
+            with open(out_path, "wb") as fd:
+                generate_audio_data(engine, text, fd)
+
+            logger.info(f"[cool-tts] Audio generated successfully at {out_path}")
+            return {
+                "status": "ok",
+                "file_name": file_id,
+                "file_path": out_path,
+                "disposition": "final",
+            }
+        except Exception as e:
+            logger.info(f"[cool-tts] TTS generation failed: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "disposition": "error",
+            }
+
+    server.run()
+
+
+def generate_audio_data(engine, text: str, output_fd) -> bool:
     samples, rate = engine.generate_samples(text)
-    f = sf.SoundFile(output_fd, mode="w", samplerate=rate, channels=1, format="WAV", subtype="PCM_16", closefd=False)
+    f = sf.SoundFile(
+        output_fd,
+        mode="w",
+        samplerate=rate,
+        channels=1,
+        format="WAV",
+        subtype="PCM_16",
+        closefd=False,
+    )
     f.write(samples)
     f.flush()
-    f.close() # this soundfile api name is misleading
+    f.close()
+
 
 def format_time(seconds: float) -> str:
     """Formats seconds into MM:SS or HH:MM:SS string."""
@@ -61,6 +93,7 @@ def format_time(seconds: float) -> str:
     if h > 0:
         return f"{h:02d}h{m:02d}m{s:02d}s"
     return f"{m:02d}m{s:02d}s"
+
 
 if __name__ == "__main__":
     main()

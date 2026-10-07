@@ -4,81 +4,49 @@ import json
 import time
 import os
 import soundfile as sf
-# Import required stack dependencies
 from chonkie import RecursiveChunker
-# Note: qwen_tts imported dynamically or instantiated per model specs
+from xintent import XIntentServer
 
-def nih_rpc_message(payload):
-    """Writes line-delimited JSON back to stdout for libplatform routing."""
-    sys.stdout.write(json.dumps(payload) + "\n\n")
-    sys.stdout.flush()
 
-def handle_text_to_speech(intent_data):
-    action = intent_data.get("action")
-    payload = intent_data.get("payload", {})
-    sender = intent_data.get("sender")
-    channel = intent_data.get("channel") # For synchronous sendAwaitFullResponse tracking
-    
+def handle_text_to_speech(frame):
+    payload = frame.get("payload", frame) if isinstance(frame.get("payload"), dict) else frame
     text = payload.get("text", "")
-    target_app = payload.get("target_app") # App receiving the audio file
-    
-    if not text:
-        return
+    target_app = payload.get("target_app") or frame.get("sender")
 
-    # 1. Chunk text using Chonkie
-    chunker = RecursiveChunker()
-    chunks = chunker.chunk(text)
-    
-    # 2. Render audio data using TTS engine (Simulated render array for model loop)
-    # audio_data, samplerate = qwen_tts.generate(text)
+    if not text:
+        return {"status": "error", "message": "No text provided for TTS"}
+
+    # 1. Chunk text using Chonkie if available
+    try:
+        chunker = RecursiveChunker()
+        chunks = chunker.chunk(text)
+    except Exception:
+        chunks = [text]
+
+    # 2. Render audio data using TTS engine (Simulated render array for fallback)
     samplerate = 24000
-    dummy_audio = [0.0] * (samplerate * 2) # 2 seconds of audio buffer
-    
+    dummy_audio = [0.0] * (samplerate * 2)  # 2 seconds of audio buffer
+
     # 3. Write output to app local /tmp directory
     file_id = f"tts_{int(time.time() * 1000)}.wav"
     tmp_path = os.path.join("/tmp", file_id)
     sf.write(tmp_path, dummy_audio, samplerate)
-    
-    # 4. Initiate NIH-RPC named file transfer protocol
-    # Hand off file ownership from cool-tts space to target_app space
-    transfer_intent = {
-        "type": "intent",
-        "action": "sys.TransferFile",
-        "timestamp": int(time.time()),
-        "payload": {
-            "source_path": tmp_path,
-            "target_app": target_app or sender,
-            "read_only": False
-        }
-    }
-    nih_rpc_message(transfer_intent)
 
-    # 5. Emit synchronous/final response payload if a channel was provided
-    if channel:
-        response = {
-            "type": "intent",
-            "action": "sys.SendData",
-            "disposition": "final-response",
-            "channel": channel,
-            "payload": {
-                "status": "completed",
-                "file_name": file_id
-            }
-        }
-        nih_rpc_message(response)
+    # 4. Return response payload
+    return {
+        "status": "completed",
+        "file_name": file_id,
+        "file_path": tmp_path,
+        "target_app": target_app,
+        "disposition": "final",
+    }
+
 
 def main():
-    """Main loop reading line-delimited JSON intents over stdin."""
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            intent_data = json.loads(line)
-            if intent_data.get("action") == "ui.TextToSpeech":
-                handle_text_to_speech(intent_data)
-        except json.JSONDecodeError:
-            continue
+    server = XIntentServer(app_id="cool-tts")
+    server.register_handler("ui.TextToSpeech", handle_text_to_speech)
+    server.run()
+
 
 if __name__ == "__main__":
     main()

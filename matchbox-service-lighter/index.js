@@ -72,7 +72,7 @@ async function startLighter() {
           const intent = package.intents[payload.intendedIntent];
           logger.info(`Got request to load ${pakName} for ${payload.intendedIntent}`, intent);
 
-          spawn(intent.exec, {shell: true, stdio: 'inherit'}).on('error', err => {
+          spawn(intent.exec, {shell: true, cwd: package._path || process.cwd(), stdio: 'inherit'}).on('error', err => {
             logger.error(`Failed to launch service:`, err);   
           });
           // no need to inform intent-registry.  intent-registry waits for the new service to declae its matchbox.toml
