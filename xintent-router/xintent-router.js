@@ -30,6 +30,7 @@ const {
   parseWindowToml,
   parseWindowLighterToml,
   updateAggregateToml,
+  unregisterWindowRegistry,
   initXIntentRegistry,
 } = require('./xintent-registry');
 
@@ -260,6 +261,10 @@ const xintentUnregisterWindow = async (destroyedWin) => {
     if (lighterRegistry[intentName].length === 0) {
       delete lighterRegistry[intentName];
     }
+  }
+
+  if (unregisterWindowRegistry(destroyedWin)) {
+    registryChanged = true;
   }
 
   if (registryChanged) {

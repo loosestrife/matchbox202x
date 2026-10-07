@@ -6,6 +6,8 @@ const { X, root, routerWin } = require("./index");
 
 const intentRegistry = {};      // intent -> [{ wid, matchboxToml }]
 const lighterRegistry = {};     // intent -> [{ wid, computer, packageName, publicKeyHash }]
+const windowRegistry = {};      // wid -> matchboxToml
+const lighterAudioRegistry = {};// packageName -> { wid, computer, pkg }
 
 async function updateAggregateToml() {
   const aggregate = { intents: {} };
@@ -20,14 +22,51 @@ async function updateAggregateToml() {
     }
   };
 
-  // 1. Aggregate active running intent handlers
-  for (const [intentName, entries] of Object.entries(intentRegistry)) {
-    for (const entry of entries) {
-      const { matchboxToml, wid } = entry;
-      const appName =
-        matchboxToml?.app?.id ||
-        `win-${wid}`;
-      addAppToIntent(intentName, appName);
+  const processAudioSection = (sectionKey, item, appName, wid) => {
+    if (!item) return;
+    if (!aggregate[sectionKey]) aggregate[sectionKey] = {};
+
+    if (Array.isArray(item)) {
+      item.forEach(sub => processAudioSection(sectionKey, sub, appName, wid));
+      return;
+    }
+
+    if (typeof item === 'object') {
+      const sinkName = item.name || item.id;
+      if (sinkName) {
+        aggregate[sectionKey][sinkName] = {
+          app: appName,
+          ...(wid ? { wid: widString(wid) } : {}),
+          ...item
+        };
+      } else {
+        for (const [k, v] of Object.entries(item)) {
+          aggregate[sectionKey][k] = {
+            app: appName,
+            ...(wid ? { wid: widString(wid) } : {}),
+            ...(typeof v === 'object' ? v : { name: k, value: v })
+          };
+        }
+      }
+    }
+  };
+
+  // 1. Aggregate active running intent handlers & audio endpoints
+  for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
+    const wid = parseInt(widStr, 10);
+    const appName = matchboxToml?.app?.id || `win-${wid}`;
+
+    if (matchboxToml.intents) {
+      for (const intentName of Object.keys(matchboxToml.intents)) {
+        addAppToIntent(intentName, appName);
+      }
+    }
+
+    if (matchboxToml.XAudioSink) {
+      processAudioSection("XAudioSink", matchboxToml.XAudioSink, appName, wid);
+    }
+    if (matchboxToml.XAudioSource) {
+      processAudioSection("XAudioSource", matchboxToml.XAudioSource, appName, wid);
     }
   }
 
@@ -36,6 +75,17 @@ async function updateAggregateToml() {
     for (const entry of entries) {
       const appName = entry.packageName || entry.package;
       addAppToIntent(intentName, appName);
+    }
+  }
+
+  // 3. Aggregate audio endpoints declared in service lighter manifestos
+  for (const [pakName, entry] of Object.entries(lighterAudioRegistry)) {
+    const pkg = entry.pkg;
+    if (pkg.XAudioSink) {
+      processAudioSection("XAudioSink", pkg.XAudioSink, pakName, entry.wid);
+    }
+    if (pkg.XAudioSource) {
+      processAudioSection("XAudioSource", pkg.XAudioSource, pakName, entry.wid);
     }
   }
 
@@ -69,25 +119,29 @@ async function getAllMatchboxToml() {
 
 async function parseWindowToml(wid) {
   try {
+    const propertyAtom = atoms.XINTENT_MATCHBOX_TOML || atoms.MATCHBOX_TOML;
     const prop = await X.GetProperty(
       0,
       wid,
-      atoms.MATCHBOX_TOML,
+      propertyAtom,
       0,
       0,
       1000000,
     );
     if (prop && prop.data && prop.data.length > 0) {
       const matchboxToml = TOML.parse(prop.data.toString("utf8"));
+      windowRegistry[wid] = matchboxToml;
       let updated = false;
+
       if (matchboxToml.intents) {
         for (const intentName of Object.keys(matchboxToml.intents)) {
           if (!intentRegistry[intentName]) intentRegistry[intentName] = [];
 
-          // Avoid duplicate bindings for the same window
           if (!intentRegistry[intentName].some((entry) => entry.wid === wid)) {
             intentRegistry[intentName].push({ wid, matchboxToml });
-            checkToDrainIntentsQueue(intentName);
+            if (typeof checkToDrainIntentsQueue === 'function') {
+              checkToDrainIntentsQueue(intentName);
+            }
             logger.info(
               `Registered intent '${intentName}' -> Window ${widString(wid)}`,
             );
@@ -95,6 +149,11 @@ async function parseWindowToml(wid) {
           }
         }
       }
+
+      if (matchboxToml.XAudioSink || matchboxToml.XAudioSource) {
+        updated = true;
+      }
+
       if (updated) {
         await updateAggregateToml();
       }
@@ -127,18 +186,25 @@ async function parseWindowLighterToml(wid) {
       const computer = toml.computer;
       let updated = false;
 
-      for (const packageName of Object.keys(toml.packages)) {
-        const publicKeyHash = toml.packages[packageName].publicKeyHash;
-        for (const intentName of Object.keys(
-          toml.packages[packageName].intents,
-        )) {
-          if (!lighterRegistry[intentName]) lighterRegistry[intentName] = [];
-          lighterRegistry[intentName].push({
-            wid,
-            computer,
-            packageName,
-            publicKeyHash,
-          });
+      for (const packageName of Object.keys(toml.packages || {})) {
+        const pkg = toml.packages[packageName];
+        const publicKeyHash = pkg.publicKeyHash;
+
+        if (pkg.intents) {
+          for (const intentName of Object.keys(pkg.intents)) {
+            if (!lighterRegistry[intentName]) lighterRegistry[intentName] = [];
+            lighterRegistry[intentName].push({
+              wid,
+              computer,
+              packageName,
+              publicKeyHash,
+            });
+            updated = true;
+          }
+        }
+
+        if (pkg.XAudioSink || pkg.XAudioSource) {
+          lighterAudioRegistry[packageName] = { wid, computer, pkg };
           updated = true;
         }
       }
@@ -154,14 +220,34 @@ async function parseWindowLighterToml(wid) {
   }
 }
 
+function unregisterWindowRegistry(destroyedWin) {
+  let registryChanged = false;
+
+  if (windowRegistry[destroyedWin]) {
+    delete windowRegistry[destroyedWin];
+    registryChanged = true;
+  }
+
+  for (const [pkgName, entry] of Object.entries(lighterAudioRegistry)) {
+    if (entry.wid === destroyedWin) {
+      delete lighterAudioRegistry[pkgName];
+      registryChanged = true;
+    }
+  }
+
+  return registryChanged;
+}
+
 let checkToDrainIntentsQueue;
 module.exports = {
   intentRegistry,
   lighterRegistry,
+  windowRegistry,
   getAllMatchboxToml,
   parseWindowToml,
   parseWindowLighterToml,
   updateAggregateToml,
+  unregisterWindowRegistry,
   initXIntentRegistry: ({checkToDrainIntentsQueue: fn}) => {
     checkToDrainIntentsQueue = fn;
   },

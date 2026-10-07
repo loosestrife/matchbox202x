@@ -1,6 +1,6 @@
 const { on } = require('node:events');
 const TOML = require('@iarna/toml');
-const { Logger, HttpError } = require('../server-tools');
+const { Logger, HttpError, alStorage } = require('../server-tools');
 const xintent = require('../x11-promises/xintent');
 
 const logger = new Logger({ module: 'route-intent' });
@@ -65,97 +65,125 @@ const aggregateTomlAsObject = async () => {
   const rawToml = await fetchAggregateToml();
   const parsedManifest = TOML.parse(rawToml);
   return parsedManifest;
-}
+};
 
 const routeIntent = async (req, res) => {
   const { namespace, action } = req.params;
   const intent = `${namespace}.${action}`;
-  const targetApp = req.query.app || req.body.app;
+  const payload = req.body || {};
 
-  if (req.query.app && req.query.app != req.body.app) {
-    throw new HttpError(400, 'advisory query string app specification must match app specified in intent json');
-  }
-  if (intent != req.body.intent) {
-    throw new HttpError(400, 'url path intent must match intent specified in intent json');
+  const targetApp = req.query.app || payload.app || 'localhost';
+
+  // If query string app is provided but missing from body payload, populate it
+  if (req.query.app && !payload.app) {
+    payload.app = req.query.app;
   }
 
-  const payload = req.body;
-  logger.info(`[INTENT] ${intent} -> Target: ${targetApp}`, req.body);
+  // If both query string app and body app are provided, enforce advisory match
+  if (req.query.app && payload.app && req.query.app !== payload.app) {
+    throw new HttpError(400, `advisory query string app specification (${req.query.app}) must match app specified in intent json (${payload.app}): ${JSON.stringify(payload)}`);
+  }
+
+  if (payload.intent && intent !== payload.intent) {
+    throw new HttpError(400, `url path intent (${intent}) must match intent specified in intent json (${payload.intent}): ${JSON.stringify(payload)}`);
+  }
+
+  // Ensure intent and app fields are set on payload
+  if (!payload.intent) {
+    payload.intent = intent;
+  }
+  if (!payload.app) {
+    payload.app = targetApp;
+  }
+
+  // Store intent context in AsyncLocalStorage so all error logs include the intent JSON
+  logger.setContext({
+    intent,
+    targetApp,
+    intentJson: payload
+  });
+
+  logger.info(`[INTENT] ${intent} -> Target: ${targetApp}`, payload);
   const txId = globalTransactionIdCounter++;
 
-  // --- 1. Streamed Multipart Response Path ---
-  if (payload.Accept) {
-    const BOUNDARY = 'MatchboxFrameBoundary_' + Date.now().toString(16);
+  try {
+    // --- 1. Streamed Multipart Response Path ---
+    if (payload.Accept) {
+      const BOUNDARY = 'MatchboxFrameBoundary_' + Date.now().toString(16);
 
-    res.writeHead(200, {
-      'Content-Type': `multipart/mixed; boundary=${BOUNDARY}`,
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'Matchbox-Bridge': '1.0',
-    });
+      res.writeHead(200, {
+        'Content-Type': `multipart/mixed; boundary=${BOUNDARY}`,
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'Matchbox-Bridge': '1.0',
+      });
 
-    const writeJsonFrame = (res, data, customHeaders = {}) => {
-      const jsonBody = JSON.stringify(data, null, 2);
-      const headers = [
-        'Content-Type: application/json',
-        'Content-Disposition: inline',
-        `Content-Length: ${Buffer.byteLength(jsonBody)}`,
-        ...Object.entries(customHeaders).map(([key, val]) => `${key}: ${val}`)
-      ];
+      const writeJsonFrame = (res, data, customHeaders = {}) => {
+        const jsonBody = JSON.stringify(data, null, 2);
+        const headers = [
+          'Content-Type: application/json',
+          'Content-Disposition: inline',
+          `Content-Length: ${Buffer.byteLength(jsonBody)}`,
+          ...Object.entries(customHeaders).map(([key, val]) => `${key}: ${val}`)
+        ];
 
-      res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${jsonBody}\r\n\r\n`);
-    };
+        res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${jsonBody}\r\n\r\n`);
+      };
 
+      await xintent.sendXIntentIntentV0(X, routerWin || xintent.routerWin, {
+        senderWin: clientWin,
+        payload,
+        txId,
+      });
+
+      for await (const [ev] of on(X, 'event')) {
+        if (
+          ev.type == 33 &&
+          [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) &&
+          ev.data[2] == txId
+        ) {
+          const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin || xintent.routerWin, ev);
+
+          writeJsonFrame(res, eventData);
+
+          const blobAtom = ev.data[3];
+          if (blobAtom) {
+            try {
+              const blob = await xintent.XBlobRead(X, routerWin || xintent.routerWin, blobAtom);
+              xintent.XBlobUnlink(X, routerWin || xintent.routerWin, clientWin, blobAtom);
+
+              if (blob) {
+                writeJsonFrame(res, blob);
+              }
+            } catch (err) {
+              logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
+            }
+          }
+
+          // Finalize stream when disposition is final
+          if (eventData.disposition === 'final') {
+            logger.info("Closing stream", {txId});
+            res.write(`--${BOUNDARY}--\r\n`);
+            res.end();
+            return;
+          }
+        }
+      }
+    }
+
+    // --- 2. Fire-and-Forget / Standard Response Path ---
     await xintent.sendXIntentIntentV0(X, routerWin || xintent.routerWin, {
       senderWin: clientWin,
       payload,
       txId,
     });
 
-    for await (const [ev] of on(X, 'event')) {
-      if (
-        ev.type == 33 &&
-        [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) && 
-        ev.data[2] == txId
-      ) {
-        const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin || xintent.routerWin, ev);
-
-        writeJsonFrame(res, eventData);
-
-        const blobAtom = ev.data[3];
-        if (blobAtom) {
-          try {
-            const blob = await xintent.XBlobRead(X, routerWin || xintent.routerWin, blobAtom);
-            xintent.XBlobUnlink(X, routerWin || xintent.routerWin, clientWin, blobAtom);
-            
-            if (blob) {
-              writeJsonFrame(res, blob);
-            }
-          } catch (err) {
-            logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom}: ${err.message}`);
-          }
-        }
-
-        // Finalize stream when disposition is final
-        if (eventData.disposition === 'final') {
-          logger.info("Closing stream", {txId});
-          res.write(`--${BOUNDARY}--\r\n`);
-          res.end();
-          return;
-        }
-      }
-    }
+    res.setHeader('Matchbox-Bridge', '1.0');
+    res.status(200).json({ status: 'ok', intent, targetApp });
+  } catch (err) {
+    logger.error(`[ROUTE INTENT ERROR] ${intent} to ${targetApp} failed: ${err.message}`, { intentPayload: payload, error: err });
+    throw err;
   }
-
-  // --- 2. Fire-and-Forget / Standard Response Path ---
-  await xintent.sendXIntentIntentV0(X, routerWin || xintent.routerWin, {
-    senderWin: clientWin,
-    payload,
-    txId,
-  });
-
-  res.setHeader('Matchbox-Bridge', '1.0');
-  res.status(200).json({ status: 'ok', intent, targetApp });
 };
 
 module.exports = ({ routerWin: theRouterWin, X: xClient, root: xRoot, clientWin: theClientWin }) => {

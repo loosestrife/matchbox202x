@@ -195,6 +195,8 @@
     if (xintent && typeof xintent.intent === 'function') {
       try {
         const response = await xintent.intent('ui.TextToSpeech', {
+          intent: 'ui.TextToSpeech',
+          app: 'cool-tts',
           text: text,
           format: 'audio/wav',
           speed: 1.0,

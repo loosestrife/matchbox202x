@@ -1,6 +1,8 @@
 // matchbox-service-lighter/index.js
 const { spawn } = require('child_process');
+const http = require('http');
 const os = require('os');
+const path = require('path');
 const util = require('util');
 const TOML = require('@iarna/toml');
 const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
@@ -8,6 +10,7 @@ const x11 = require('../x11-promises/x11-promises');
 const xintent = require('../x11-promises/xintent');
 const {Logger} = require('../server-tools');
 const pickFiles = require('./xblob-host');
+const xaudioNode = require('./xaudio-node');
 
 const logger = new Logger({module: 'index.js'});
 logger.setProjectName('service-lighter')
@@ -23,6 +26,11 @@ id = "matchbox-service-lighter"
 "sys.Launch" = true
 "fs.PickFile" = true
 "fs.PickFilePath" = true
+"xaudio.PlaySoundBlob" = true
+"xaudio.PrefetchSoundBlob" = true
+"xaudio.PlayStream" = true
+"xaudio.ControlStream" = true
+"xaudio.SeekStream" = true
 
 [XBlobHost]
 host = "${hostname}"
@@ -31,9 +39,84 @@ host = "${hostname}"
 name = "${hostname}-speakers"
 `;
 
+function checkHttpBridge(port = 12345) {
+  return new Promise((resolve) => {
+    const req = http.get(`http://localhost:${port}/api/tags`, { timeout: 1000 }, (res) => {
+      resolve(res.statusCode >= 200 && res.statusCode < 500);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+function spawnRuntime(cmdFile, workingDir) {
+  try {
+    const proc = spawn('bun', [cmdFile], {
+      cwd: workingDir,
+      stdio: 'inherit',
+      detached: true,
+    });
+    proc.on('error', () => {
+      spawn('node', [cmdFile], {
+        cwd: workingDir,
+        stdio: 'inherit',
+        detached: true,
+      });
+    });
+  } catch (_) {
+    spawn('node', [cmdFile], {
+      cwd: workingDir,
+      stdio: 'inherit',
+      detached: true,
+    });
+  }
+}
+
+async function ensureXIntentRouter(X, root) {
+  let routerWin = await xintent.connectToRouter(X, root);
+  if (!routerWin) {
+    logger.info('[service-lighter] xintent-router not detected. Auto-launching xintent-router...');
+    const routerDir = path.join(__dirname, '../xintent-router');
+    const entryFile = path.join(routerDir, 'index.js');
+
+    spawnRuntime(entryFile, routerDir);
+
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      routerWin = await xintent.connectToRouter(X, root);
+      if (routerWin) {
+        logger.info(`[service-lighter] Connected to auto-launched xintent-router (0x${routerWin.toString(16)})`);
+        break;
+      }
+    }
+  } else {
+    logger.info(`[service-lighter] Connected to existing xintent-router (0x${routerWin.toString(16)})`);
+  }
+  return routerWin;
+}
+
+async function ensureHttpBridge() {
+  const isRunning = await checkHttpBridge(12345);
+  if (!isRunning) {
+    logger.info('[service-lighter] http-bridge not detected on port 12345. Auto-launching http-bridge...');
+    const bridgeDir = path.join(__dirname, '../http-bridge');
+    const entryFile = path.join(bridgeDir, 'index.js');
+
+    spawnRuntime(entryFile, bridgeDir);
+    logger.info('[service-lighter] Auto-launched http-bridge service on port 12345.');
+  } else {
+    logger.info('[service-lighter] http-bridge is active on http://localhost:12345.');
+  }
+}
+
 async function startLighter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
-  await xintent.connectToRouter(X, root);
+
+  await ensureXIntentRouter(X, root);
+  await ensureHttpBridge();
 
   const lighterWin = X.AllocID();
   X.CreateWindow(
@@ -43,6 +126,7 @@ async function startLighter() {
   );
 
   pickFiles.init({X, lighterWin});
+  xaudioNode.init({X, lighterWin});
 
   const xintentServicesManifestAtom = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
   const xintentMatchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
@@ -54,6 +138,12 @@ async function startLighter() {
   const xblobDestructorAtom = await X.InternAtom(false, 'XBLOB_DESTRUCTOR_V0');
   const xblobBroadcastAtom = await X.InternAtom(false, 'XBLOB_BROADCAST_V0');
 
+  const xaudioPlaySoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PLAY_SOUND_BLOB_V0');
+  const xaudioPrefetchSoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PREFETCH_SOUND_BLOB_V0');
+  const xaudioPlayStreamAtom = await X.InternAtom(false, 'XAUDIO_PLAY_STREAM_V0');
+  const xaudioControlStreamAtom = await X.InternAtom(false, 'XAUDIO_CONTROL_STREAM_V0');
+  const xaudioSeekStreamAtom = await X.InternAtom(false, 'XAUDIO_SEEK_STREAM_V0');
+
   X.ChangeProperty(0, lighterWin, X.atoms.WM_NAME, X.atoms.STRING, 8, 'MATCHBOX_SERVICE_LIGHTER');
   X.ChangeProperty(0, lighterWin, xintentServicesManifestAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
   X.ChangeProperty(0, lighterWin, xintentMatchboxTomlAtom, X.atoms.STRING, 8, matchboxToml);
@@ -63,13 +153,15 @@ async function startLighter() {
   X.ChangeProperty(0, lighterWin, xintent.atoms._NET_WM_PID, xintent.atoms.CARDINAL, 32, pidBuf);
   logger.info(`Registered services (0x${lighterWin.toString(16)})`);
 
-  // 4. Handle Direct Start Signals from xintent-router
+  // 4. Handle Direct Start Signals & XAudio Commands from xintent-router
   rawX.on('event', async (ev) => {
     if ((ev.type === 33 || ev.name === 'ClientMessage') && ev.wid === lighterWin) {
       if (ev.message_type == xintentIntentV0Atom) {
         const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
         const payload = xintentIntent.payload;
-        if(payload.intent == "sys.Launch"){
+        const intentName = payload.intent || payload.action || payload.event;
+
+        if (intentName === "sys.Launch") {
           const pakName = payload.package;
           const package = packageRegistry[pakName];
           const intent = package.intents[payload.intendedIntent];
@@ -78,18 +170,52 @@ async function startLighter() {
           spawn(intent.exec, {shell: true, cwd: package._path || process.cwd(), stdio: 'inherit'}).on('error', err => {
             logger.error(`Failed to launch service:`, err);   
           });
-          // no need to inform intent-registry.  intent-registry waits for the new service to declae its matchbox.toml
         }
-        else if(payload.intent == "fs.PickFilePath"){
+        else if (intentName === "fs.PickFilePath") {
           pickFiles.pickFilePath(xintentIntent);
         }
-        else if(payload.intent == "fs.PickFile"){
+        else if (intentName === "fs.PickFile") {
           pickFiles.pickFile(xintentIntent);
         }
+        else if (["xaudio.PlaySoundBlob", "XAudioPlaySoundBlob", "XAudioPlaySoundBlobV0"].includes(intentName)) {
+          xaudioNode.playSoundBlob(payload);
+        }
+        else if (["xaudio.PrefetchSoundBlob", "XAudioPrefetchSoundBlob", "XAudioPrefetchSoundBlobV0"].includes(intentName)) {
+          xaudioNode.prefetchSoundBlob(payload);
+        }
+        else if (["xaudio.PlayStream", "PlayStream", "XAudioPlayStreamV0"].includes(intentName)) {
+          xaudioNode.playStream(payload);
+        }
+        else if (["xaudio.ControlStream", "ControlStream", "XAudioControlStreamV0"].includes(intentName)) {
+          xaudioNode.controlStream(payload);
+        }
+        else if (["xaudio.SeekStream", "SeekStream", "XAudioSeekStreamV0"].includes(intentName)) {
+          xaudioNode.seekStream(payload);
+        }
         else {
-          logger.warn("unknown intent", payload.intent);
+          logger.warn("unknown intent", intentName);
           return;
         }
+      }
+      else if (ev.message_type == xaudioPlaySoundBlobAtom) {
+        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+        xaudioNode.playSoundBlob(payload);
+      }
+      else if (ev.message_type == xaudioPrefetchSoundBlobAtom) {
+        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+        xaudioNode.prefetchSoundBlob(payload);
+      }
+      else if (ev.message_type == xaudioPlayStreamAtom) {
+        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+        xaudioNode.playStream(payload);
+      }
+      else if (ev.message_type == xaudioControlStreamAtom) {
+        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+        xaudioNode.controlStream(payload);
+      }
+      else if (ev.message_type == xaudioSeekStreamAtom) {
+        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+        xaudioNode.seekStream(payload);
       }
       else if (ev.message_type == xblobBroadcastAtom) {
         const frame = xintent.parseXBlobBroadcastFrame(X, xintent.routerWin, ev);
@@ -106,7 +232,7 @@ async function startLighter() {
     }
   });
 
-  logger.info('Listening for incoming launch intents...');
+  logger.info('Listening for incoming launch intents and XAudio commands...');
 }
 
 startLighter().catch(console.error);

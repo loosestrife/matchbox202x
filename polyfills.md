@@ -95,13 +95,16 @@ an XAudioNode claims an atom for what numa node its on, as `XAUDIO_NODE_${host}`
 an XIntentNonJsonFrame with message type `XBlobBroadcastV0`, `data.l[1]` as the blob id, `data.l[2]` as the host atom, `data.l[3]` as the version atom.  Broadcasts local modification to other numa nodes.
 
 # XAUDIO V0
-The XAUDIO server probably does something like dump audio into ffmpeg on demand.
+The XAUDIO server probably does something like dump audio into ffmpeg on demand.  It registers itself in its MATCHBOX_TOML as
+```toml
+[XAudioSink]
+name = "my-speakers"
+```
+thereby registering itself to recieve XAudio commands
 ## XAudioPlaySoundBlob
 an XIntentJsonFrame with message type `XAudioPlaySoundBlobV0` and payload `{BlobId, OutputId, volume, loop}`
 ## XAudioPrefetchSoundBlob
-an XIntentJsonFrame with message type `XAudioPrefetchSoundBlobV0` and payload `{BlobId, OutputId}`.  It does nothing.
-## XAudioGetAudioOutputs 
-this one is an `XIntentIntentV0` and it gets a reply with a `{outputs: [{type: speakers, name: the computers sound output}]}`
+an XIntentJsonFrame with message type `XAudioPrefetchSoundBlobV0` and payload `{BlobId, OutputId}`.  XAudioSink's SHOULD download the blob data and be ready to play it.
 ## PlayStream
 an XIntentJsonFrame with message type `XAudioPlayStreamV0` and payload `{BlobId, OutputId, volume}`
 ## ControlStream

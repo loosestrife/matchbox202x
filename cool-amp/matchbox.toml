@@ -1,0 +1,19 @@
+# cool-amp matchbox.toml
+[app]
+id = "cool-amp"
+version = "0.1.0"
+name = "Cool Amp"
+description = "Winamp-Style Audio Player & MediaStream Broadcaster"
+
+[app.main]
+type = "html"
+card = "index"
+
+[[cards]]
+id = "index"
+path = "index.html"
+title = "Cool Amp"
+
+[intents."fs.Open"]
+invocation = "html"
+card = "index"

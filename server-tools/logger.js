@@ -52,9 +52,17 @@ class Logger {
   constructor({module}){
     this.module = module;
   }
+  setContext = function(o) {
+    const store = alStorage.getStore();
+    if (store && store.values) {
+      Object.assign(store.values, o);
+    } else {
+      Object.assign(loggerKeys, o);
+    }
+    return this;
+  }
   keys = function(o) {
-    Object.assign(loggerKeys, o);
-    return this
+    return this.setContext(o);
   }
   log = function(level, ...args) {
     let msg;
@@ -74,7 +82,10 @@ class Logger {
       `\x1b[${
         90 + colors[level]}m[${shortTimestamp()} ${projectName?projectName:''} ${level.padEnd(5)}] \x1b[${levelOffsets[level] + colors[level]}m${this.module}: ${msg}\x1b[0m`,
       ...args,
-      ...Object.keys(loggerKeys).map(k => ` [${k}=${loggerKeys[k]}]`)
+      ...Object.keys(loggerKeys).map(k => {
+        const val = typeof loggerKeys[k] === 'object' ? JSON.stringify(loggerKeys[k]) : loggerKeys[k];
+        return ` [${k}=${val}]`;
+      })
     );
     loggerKeys = {};
   }

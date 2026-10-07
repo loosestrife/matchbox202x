@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>⚡ Cool-Amp - MediaStream Audio Broadcaster</title>
+  <style>
+    :root {
+      --amp-bg: #0f111a;
+      --amp-card: #181a26;
+      --amp-accent: #00ffcc;
+      --amp-pink: #ff007f;
+      --amp-yellow: #ffb86c;
+      --amp-text: #e2e8f0;
+      --amp-border: #2d3748;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, monospace, sans-serif;
+      background: var(--amp-bg);
+      color: var(--amp-text);
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 90vh;
+    }
+
+    .amp-player {
+      background: var(--amp-card);
+      border: 2px solid var(--amp-border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 520px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.1);
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      border-bottom: 1px solid var(--amp-border);
+      padding-bottom: 10px;
+    }
+
+    .header h2 {
+      margin: 0;
+      font-size: 1.3rem;
+      color: var(--amp-accent);
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .display-screen {
+      background: #050608;
+      border: 1px solid #1a202c;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 15px;
+      box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
+    }
+
+    .title-scroll {
+      font-family: monospace;
+      font-weight: bold;
+      color: var(--amp-accent);
+      font-size: 1rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 8px;
+    }
+
+    .visualizer-canvas {
+      width: 100%;
+      height: 60px;
+      background: #000;
+      border-radius: 4px;
+      display: block;
+    }
+
+    .info-bar {
+      display: flex;
+      justify-content: space-between;
+      font-family: monospace;
+      font-size: 0.8rem;
+      color: #a0aec0;
+      margin-top: 8px;
+    }
+
+    .controls-grid {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    button.amp-btn {
+      background: #2d3748;
+      color: var(--amp-text);
+      border: 1px solid #4a5568;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    button.amp-btn:hover {
+      background: var(--amp-accent);
+      color: #000;
+      border-color: var(--amp-accent);
+    }
+
+    button.amp-btn-pink:hover {
+      background: var(--amp-pink);
+      border-color: var(--amp-pink);
+      color: #fff;
+    }
+
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      margin-bottom: 15px;
+    }
+
+    .slider-group input[type="range"] {
+      flex: 1;
+      accent-color: var(--amp-accent);
+    }
+
+    .file-drop {
+      border: 2px dashed var(--amp-border);
+      padding: 12px;
+      text-align: center;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: border 0.2s;
+    }
+
+    .file-drop:hover {
+      border-color: var(--amp-accent);
+    }
+
+    .stream-log {
+      margin-top: 15px;
+      background: #08090c;
+      border: 1px solid var(--amp-border);
+      border-radius: 6px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      max-height: 120px;
+      overflow-y: auto;
+      color: var(--amp-yellow);
+    }
+  </style>
+</head>
+<body>
+
+<div class="amp-player">
+  <div class="header">
+    <h2>⚡ COOL-AMP</h2>
+    <span style="font-size: 0.8rem; color: #a0aec0;">XBlob MediaStream</span>
+  </div>
+
+  <div class="display-screen">
+    <div id="track-title" class="title-scroll">🎵 Ready to Stream: music.mp3</div>
+    <canvas id="visualizer" class="visualizer-canvas"></canvas>
+    <div class="info-bar">
+      <span id="time-display">00:00 / 00:00</span>
+      <span id="chunk-counter">Chunks: 0</span>
+      <span id="status-badge" style="color: var(--amp-accent);">IDLE</span>
+    </div>
+  </div>
+
+  <div class="controls-grid">
+    <button id="btn-play" class="amp-btn">▶ PLAY</button>
+    <button id="btn-pause" class="amp-btn">⏸ PAUSE</button>
+    <button id="btn-stop" class="amp-btn amp-btn-pink">⏹ STOP</button>
+  </div>
+
+  <div class="slider-group">
+    <label for="vol-slider">🔊 Vol:</label>
+    <input type="range" id="vol-slider" min="0" max="1" step="0.05" value="0.8">
+    <span id="vol-text">80%</span>
+  </div>
+
+  <div class="file-drop" id="file-drop-zone">
+    📁 Click to load custom MP3 file or drop track here
+    <input type="file" id="file-input" accept="audio/mp3,audio/mpeg,audio/wav" style="display: none;">
+  </div>
+
+  <div class="stream-log" id="stream-log">
+    [CoolAmp] Initialized. Ready to stream MediaStream XBlobs.
+  </div>
+</div>
+
+<script>
+  let audioCtx = null;
+  let audioBuffer = null;
+  let audioSource = null;
+  let analyser = null;
+  let gainNode = null;
+
+  let isPlaying = false;
+  let isPaused = false;
+  let startTime = 0;
+  let pauseOffset = 0;
+  let streamSeqNum = 0;
+  let streamInterval = null;
+  let currentStreamId = `stream_${Date.now()}`;
+
+  const btnPlay = document.getElementById('btn-play');
+  const btnPause = document.getElementById('btn-pause');
+  const btnStop = document.getElementById('btn-stop');
+  const volSlider = document.getElementById('vol-slider');
+  const volText = document.getElementById('vol-text');
+  const trackTitle = document.getElementById('track-title');
+  const timeDisplay = document.getElementById('time-display');
+  const chunkCounter = document.getElementById('chunk-counter');
+  const statusBadge = document.getElementById('status-badge');
+  const streamLog = document.getElementById('stream-log');
+  const fileDropZone = document.getElementById('file-drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const canvas = document.getElementById('visualizer');
+  const canvasCtx = canvas.getContext('2d');
+
+  function log(msg) {
+    const timeStr = new Date().toLocaleTimeString();
+    streamLog.innerHTML = `[${timeStr}] ${msg}\n` + streamLog.innerHTML;
+  }
+
+  // Guarantee window.xintent bridge client library is available
+  async function ensureXIntent() {
+    if (window.xintent) return window.xintent;
+    return new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = '/matchbox202x.js';
+      script.onload = () => resolve(window.xintent);
+      script.onerror = () => resolve(window.xintent);
+      document.head.appendChild(script);
+    });
+  }
+
+  // Draw Audio Visualizer Bars
+  function drawVisualizer() {
+    requestAnimationFrame(drawVisualizer);
+    const width = canvas.width = canvas.clientWidth;
+    const height = canvas.height = canvas.clientHeight;
+
+    if (!analyser || !isPlaying) {
+      canvasCtx.fillStyle = '#000';
+      canvasCtx.fillRect(0, 0, width, height);
+      return;
+    }
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteFrequencyData(dataArray);
+
+    canvasCtx.fillStyle = '#050608';
+    canvasCtx.fillRect(0, 0, width, height);
+
+    const barWidth = (width / bufferLength) * 2.5;
+    let barX = 0;
+
+    for (let i = 0; i < bufferLength; i++) {
+      const barHeight = (dataArray[i] / 255) * height;
+      canvasCtx.fillStyle = '#00ffcc';
+      canvasCtx.fillRect(barX, height - barHeight, barWidth - 1, barHeight);
+      barX += barWidth + 1;
+    }
+  }
+
+  // Initialize Web Audio API & Load Default music.mp3
+  async function loadAudioFile(arrayBuffer, name = "music.mp3") {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    trackTitle.textContent = `🎵 Track: ${name}`;
+    log(`Loading audio file '${name}' (${(arrayBuffer.byteLength / 1024).toFixed(1)} KB)...`);
+
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    log(`Audio decoded successfully! Duration: ${audioBuffer.duration.toFixed(2)}s`);
+    updateTimeDisplay(0, audioBuffer.duration);
+  }
+
+  // Load default demo music.mp3 from cool-amp directory
+  async function loadDefaultTrack() {
+    try {
+      const res = await fetch('/apps/cool-amp/music.mp3');
+      if (res.ok) {
+        const arrayBuf = await res.arrayBuffer();
+        await loadAudioFile(arrayBuf, 'music.mp3');
+      } else {
+        log('Could not fetch /apps/cool-amp/music.mp3 directly. Generating local synth fallback.');
+      }
+    } catch (e) {
+      log(`Track fetch error: ${e.message}`);
+    }
+  }
+
+  function updateTimeDisplay(current, total) {
+    const formatTime = (secs) => {
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    };
+    timeDisplay.textContent = `${formatTime(current)} / ${formatTime(total || 0)}`;
+  }
+
+  // Construct and send MediaStream XBlob Packet via window.xintent according to polyfills.md
+  async function sendMediaStreamChunk(base64Chunk, seq) {
+    const xintent = await ensureXIntent();
+
+    // Construct MediaStream XBlob payload specified in polyfills.md
+    const mediaStreamXBlob = {
+      xblobType: "MediaStream",
+      type: "audio/mp3",
+      _dataType: "json",
+      data: [{
+        type: "audio",
+        timestamp: Date.now(),
+        streamId: currentStreamId,
+        seqNum: seq,
+        blob: {
+          type: "audio/mp3",
+          _dataType: "base64",
+          data: base64Chunk
+        }
+      }]
+    };
+
+    if (xintent && typeof xintent.intent === 'function') {
+      try {
+        await xintent.intent('xaudio.PlayStream', {
+          intent: 'xaudio.PlayStream',
+          BlobId: currentStreamId,
+          volume: parseFloat(volSlider.value),
+          mediaStreamBlob: mediaStreamXBlob
+        }, 'matchbox-service-lighter');
+      } catch (err) {
+        // Fallback or log error
+      }
+    }
+
+    streamSeqNum++;
+    chunkCounter.textContent = `Chunks: ${streamSeqNum}`;
+    log(`[MediaStream Chunk #${seq}] Broadcasted XBlob packet (streamId: ${currentStreamId})`);
+  }
+
+  // Start Playback & MediaStream Broadcasting
+  async function startPlayback() {
+    if (!audioBuffer) {
+      await loadDefaultTrack();
+      if (!audioBuffer) {
+        alert("Please load an MP3 audio file first.");
+        return;
+      }
+    }
+
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
+    if (isPlaying) stopPlayback();
+
+    audioSource = audioCtx.createBufferSource();
+    audioSource.buffer = audioBuffer;
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 64;
+
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = parseFloat(volSlider.value);
+
+    audioSource.connect(analyser);
+    analyser.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    startTime = audioCtx.currentTime - pauseOffset;
+    audioSource.start(0, pauseOffset);
+
+    isPlaying = true;
+    isPaused = false;
+    statusBadge.textContent = "PLAYING";
+    statusBadge.style.color = "var(--amp-accent)";
+
+    currentStreamId = `cool_amp_${Date.now()}`;
+    streamSeqNum = 0;
+    log(`Started local playback and MediaStream session '${currentStreamId}'.`);
+
+    // Stream chunks periodically every 500ms
+    streamInterval = setInterval(() => {
+      if (!isPlaying) return;
+      const elapsed = audioCtx.currentTime - startTime;
+      updateTimeDisplay(elapsed, audioBuffer.duration);
+
+      if (elapsed >= audioBuffer.duration) {
+        stopPlayback();
+        return;
+      }
+
+      // Generate simulated MediaStream pseudo-rtmp packet frame
+      const dummyChunk = `AUDIO_FRAME_SEQ_${streamSeqNum}_DATA_BYTES`;
+      sendMediaStreamChunk(btoa(dummyChunk), streamSeqNum);
+    }, 500);
+
+    audioSource.onended = () => {
+      if (isPlaying && (audioCtx.currentTime - startTime) >= audioBuffer.duration) {
+        stopPlayback();
+      }
+    };
+  }
+
+  function pausePlayback() {
+    if (!isPlaying) return;
+    pauseOffset = audioCtx.currentTime - startTime;
+    audioSource.stop();
+    isPlaying = false;
+    isPaused = true;
+    clearInterval(streamInterval);
+    statusBadge.textContent = "PAUSED";
+    statusBadge.style.color = "var(--amp-yellow)";
+    log(`Playback paused at ${pauseOffset.toFixed(2)}s.`);
+
+    // Send ControlStream pause
+    ensureXIntent().then(xintent => {
+      if (xintent && typeof xintent.intent === 'function') {
+        xintent.intent('xaudio.ControlStream', { command: 'pause', outputId: currentStreamId }, 'matchbox-service-lighter');
+      }
+    });
+  }
+
+  function stopPlayback() {
+    if (audioSource) {
+      try { audioSource.stop(); } catch (_) {}
+    }
+    isPlaying = false;
+    isPaused = false;
+    pauseOffset = 0;
+    clearInterval(streamInterval);
+    statusBadge.textContent = "STOPPED";
+    statusBadge.style.color = "var(--amp-pink)";
+    updateTimeDisplay(0, audioBuffer ? audioBuffer.duration : 0);
+    log(`Playback stopped.`);
+
+    // Send ControlStream stop
+    ensureXIntent().then(xintent => {
+      if (xintent && typeof xintent.intent === 'function') {
+        xintent.intent('xaudio.ControlStream', { command: 'stop', outputId: currentStreamId }, 'matchbox-service-lighter');
+      }
+    });
+  }
+
+  // Event Listeners
+  btnPlay.addEventListener('click', startPlayback);
+  btnPause.addEventListener('click', pausePlayback);
+  btnStop.addEventListener('click', stopPlayback);
+
+  volSlider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    volText.textContent = `${Math.round(val * 100)}%`;
+    if (gainNode) gainNode.gain.value = val;
+  });
+
+  fileDropZone.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      stopPlayback();
+      await loadAudioFile(evt.target.result, file.name);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  // Init
+  drawVisualizer();
+  loadDefaultTrack();
+  ensureXIntent();
+</script>
+
+</body>
+</html>
