@@ -4,7 +4,7 @@ const { Logger, HttpError, alStorage } = require('../server-tools');
 const xintent = require('../x11-promises/xintent');
 
 const logger = new Logger({ module: 'route-intent' });
-let routerWin, clientWin, X, root;
+let clientWin, X, root;
 let globalTransactionIdCounter = 1;
 
 /**
@@ -72,7 +72,7 @@ const routeIntent = async (req, res) => {
   const intent = `${namespace}.${action}`;
   const payload = req.body || {};
 
-  const targetApp = req.query.app || payload.app || 'localhost';
+  const targetApp = req.query.app || payload.app;
 
   // If query string app is provided but missing from body payload, populate it
   if (req.query.app && !payload.app) {
@@ -130,7 +130,7 @@ const routeIntent = async (req, res) => {
         res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${jsonBody}\r\n\r\n`);
       };
 
-      await xintent.sendXIntentIntentV0(X, routerWin || xintent.routerWin, {
+      await xintent.sendXIntentIntentV0(X, xintent.routerWin, {
         senderWin: clientWin,
         payload,
         txId,
@@ -142,15 +142,15 @@ const routeIntent = async (req, res) => {
           [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) &&
           ev.data[2] == txId
         ) {
-          const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin || xintent.routerWin, ev);
+          const { payload: eventData } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
 
           writeJsonFrame(res, eventData);
 
           const blobAtom = ev.data[3];
           if (blobAtom) {
             try {
-              const blob = await xintent.XBlobRead(X, routerWin || xintent.routerWin, blobAtom);
-              xintent.XBlobUnlink(X, routerWin || xintent.routerWin, clientWin, blobAtom);
+              const blob = await xintent.XBlobRead(X, xintent.routerWin, blobAtom);
+              xintent.XBlobUnlink(X, xintent.routerWin, clientWin, blobAtom);
 
               if (blob) {
                 writeJsonFrame(res, blob);
@@ -172,7 +172,7 @@ const routeIntent = async (req, res) => {
     }
 
     // --- 2. Fire-and-Forget / Standard Response Path ---
-    await xintent.sendXIntentIntentV0(X, routerWin || xintent.routerWin, {
+    await xintent.sendXIntentIntentV0(X, xintent.routerWin, {
       senderWin: clientWin,
       payload,
       txId,
@@ -186,11 +186,10 @@ const routeIntent = async (req, res) => {
   }
 };
 
-module.exports = ({ routerWin: theRouterWin, X: xClient, root: xRoot, clientWin: theClientWin }) => {
+module.exports = ({ X: xClient, root: xRoot, clientWin: theClientWin }) => {
   X = xClient;
   root = xRoot;
   clientWin = theClientWin;
-  routerWin = theRouterWin;
 
   return {
     routeIntent,

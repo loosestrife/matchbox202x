@@ -8,10 +8,11 @@ const TOML = require('@iarna/toml');
 const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
 const x11 = require('../x11-promises/x11-promises');
 const xintent = require('../x11-promises/xintent');
-const {Logger} = require('../server-tools');
+const {Logger, alStorage} = require('../server-tools');
 const pickFiles = require('./xblob-host');
 const xaudioNode = require('./xaudio-node');
 
+xintent.init({logger: new Logger({module: 'libxintent'})});
 const logger = new Logger({module: 'index.js'});
 logger.setProjectName('service-lighter')
 
@@ -199,81 +200,110 @@ async function startLighter() {
   // 4. Handle Direct Start Signals & XAudio Commands from xintent-router
   rawX.on('event', async (ev) => {
     if ((ev.type === 33 || ev.name === 'ClientMessage') && ev.wid === lighterWin) {
-      if (ev.message_type == xintentIntentV0Atom) {
-        const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        const payload = xintentIntent.payload;
-        const intentName = payload.intent || payload.action || payload.event;
+      alStorage.run(
+        {
+          values: {
+            msgType: ev.message_type,
+            seq: ev.seq,
+          },
+          timers: {
+            start: new Date()
+          }
+        },
+        async () => {
+          try {
+            if (ev.message_type == xintentIntentV0Atom) {
+              const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              const payload = xintentIntent.payload;
+              const intentName = payload.intent || payload.action || payload.event;
+              logger.setContext({
+                intent: intentName,
+                sender: xintent.widString(xintentIntent.senderWin),
+                channel: xintentIntent.channel,
+              });
 
-        if (intentName === "sys.Launch") {
-          const pakName = payload.package;
-          const package = packageRegistry[pakName];
-          const intent = package.intents[payload.intendedIntent];
-          logger.info(`Got request to load ${pakName} for ${payload.intendedIntent}`, intent);
+              if (intentName === "sys.Launch") {
+                const pakName = payload.package;
+                const package = packageRegistry[pakName];
+                const intent = package.intents[payload.intendedIntent];
+                logger.setContext({ package: pakName, intendedIntent: payload.intendedIntent });
+                logger.info(`Got request to load ${pakName} for ${payload.intendedIntent}`, intent);
 
-          const proc = spawn(intent.exec, {shell: true, cwd: package._path || process.cwd(), stdio: 'inherit'});
-          trackChild(proc);
-          proc.on('error', err => {
-            logger.error(`Failed to launch service:`, err);   
-          });
+                const proc = spawn(intent.exec, {shell: true, cwd: package._path || process.cwd(), stdio: 'inherit'});
+                trackChild(proc);
+                proc.on('error', err => {
+                  logger.error(`Failed to launch service:`, err);
+                });
+              }
+              else if (intentName === "fs.PickFilePath") {
+                await pickFiles.pickFilePath(xintentIntent);
+              }
+              else if (intentName === "fs.PickFile") {
+                await pickFiles.pickFile(xintentIntent);
+              }
+              else if (["xaudio.PlaySoundBlob", "XAudioPlaySoundBlob", "XAudioPlaySoundBlobV0"].includes(intentName)) {
+                await xaudioNode.playSoundBlob(payload, xintentIntent.senderWin);
+              }
+              else if (["xaudio.PrefetchSoundBlob", "XAudioPrefetchSoundBlob", "XAudioPrefetchSoundBlobV0"].includes(intentName)) {
+                await xaudioNode.prefetchSoundBlob(payload);
+              }
+              else if (["xaudio.PlayStream", "PlayStream", "XAudioPlayStreamV0"].includes(intentName)) {
+                await xaudioNode.playStream(payload, xintentIntent.senderWin);
+              }
+              else if (["xaudio.ControlStream", "ControlStream", "XAudioControlStreamV0"].includes(intentName)) {
+                await xaudioNode.controlStream(payload);
+              }
+              else if (["xaudio.SeekStream", "SeekStream", "XAudioSeekStreamV0"].includes(intentName)) {
+                await xaudioNode.seekStream(payload);
+              }
+              else {
+                logger.warn("unknown intent", intentName);
+                return;
+              }
+            }
+            else if (ev.message_type == xaudioPlaySoundBlobAtom) {
+              const { payload, senderWin } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              logger.setContext({ intent: 'xaudio.PlaySoundBlob' });
+              await xaudioNode.playSoundBlob(payload, senderWin);
+            }
+            else if (ev.message_type == xaudioPrefetchSoundBlobAtom) {
+              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              logger.setContext({ intent: 'xaudio.PrefetchSoundBlob' });
+              await xaudioNode.prefetchSoundBlob(payload);
+            }
+            else if (ev.message_type == xaudioPlayStreamAtom) {
+              const { payload, senderWin } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              logger.setContext({ intent: 'xaudio.PlayStream' });
+              await xaudioNode.playStream(payload, senderWin);
+            }
+            else if (ev.message_type == xaudioControlStreamAtom) {
+              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              logger.setContext({ intent: 'xaudio.ControlStream' });
+              await xaudioNode.controlStream(payload);
+            }
+            else if (ev.message_type == xaudioSeekStreamAtom) {
+              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              logger.setContext({ intent: 'xaudio.SeekStream' });
+              await xaudioNode.seekStream(payload);
+            }
+            else if (ev.message_type == xblobBroadcastAtom) {
+              const frame = xintent.parseXBlobBroadcastFrame(X, xintent.routerWin, ev);
+              logger.setContext({ event: 'XBLOB_BROADCAST', blob: xintent.widString(frame.blob) });
+              await pickFiles.xblobBroadcast(frame);
+            }
+            else if (ev.message_type == xblobDestructorAtom) {
+              const frame = xintent.parseXBlobDestructorFrame(X, xintent.routerWin, ev);
+              logger.setContext({ event: 'XBLOB_DESTRUCTOR', blob: xintent.widString(frame.blob) });
+              await pickFiles.xblobDestructor(frame);
+            }
+            else {
+              logger.error(`got unknown message type atom ${ev.message_type}`);
+            }
+          } catch (err) {
+            logger.error(`Error processing ClientMessage event:`, err);
+          }
         }
-        else if (intentName === "fs.PickFilePath") {
-          pickFiles.pickFilePath(xintentIntent);
-        }
-        else if (intentName === "fs.PickFile") {
-          pickFiles.pickFile(xintentIntent);
-        }
-        else if (["xaudio.PlaySoundBlob", "XAudioPlaySoundBlob", "XAudioPlaySoundBlobV0"].includes(intentName)) {
-          xaudioNode.playSoundBlob(payload);
-        }
-        else if (["xaudio.PrefetchSoundBlob", "XAudioPrefetchSoundBlob", "XAudioPrefetchSoundBlobV0"].includes(intentName)) {
-          xaudioNode.prefetchSoundBlob(payload);
-        }
-        else if (["xaudio.PlayStream", "PlayStream", "XAudioPlayStreamV0"].includes(intentName)) {
-          xaudioNode.playStream(payload);
-        }
-        else if (["xaudio.ControlStream", "ControlStream", "XAudioControlStreamV0"].includes(intentName)) {
-          xaudioNode.controlStream(payload);
-        }
-        else if (["xaudio.SeekStream", "SeekStream", "XAudioSeekStreamV0"].includes(intentName)) {
-          xaudioNode.seekStream(payload);
-        }
-        else {
-          logger.warn("unknown intent", intentName);
-          return;
-        }
-      }
-      else if (ev.message_type == xaudioPlaySoundBlobAtom) {
-        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        xaudioNode.playSoundBlob(payload);
-      }
-      else if (ev.message_type == xaudioPrefetchSoundBlobAtom) {
-        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        xaudioNode.prefetchSoundBlob(payload);
-      }
-      else if (ev.message_type == xaudioPlayStreamAtom) {
-        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        xaudioNode.playStream(payload);
-      }
-      else if (ev.message_type == xaudioControlStreamAtom) {
-        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        xaudioNode.controlStream(payload);
-      }
-      else if (ev.message_type == xaudioSeekStreamAtom) {
-        const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        xaudioNode.seekStream(payload);
-      }
-      else if (ev.message_type == xblobBroadcastAtom) {
-        const frame = xintent.parseXBlobBroadcastFrame(X, xintent.routerWin, ev);
-        pickFiles.xblobBroadcast(frame);
-      }
-      else if (ev.message_type == xblobDestructorAtom) {
-        const frame = xintent.parseXBlobDestructorFrame(X, xintent.routerWin, ev);
-        pickFiles.xblobDestructor(frame);
-      }
-      else {
-        logger.error(`got unknown message type atom ${ev.message_type}`);
-        return;
-      }
+      );
     }
   });
 

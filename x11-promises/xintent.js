@@ -1,7 +1,30 @@
-// xintent.js
 const crypto = require("crypto");
 const os = require("os");
 const x11 = require("./x11-promises");
+let Logger, alStorage;
+try {
+  const serverTools = require("../server-tools");
+  Logger = serverTools.Logger;
+  alStorage = serverTools.alStorage;
+} catch (_) {}
+
+const createConsoleLogger = (moduleName = "xintent") => ({
+  info: (...args) => console.log(`[${moduleName} info]`, ...args),
+  warn: (...args) => console.warn(`[${moduleName} warn]`, ...args),
+  error: (...args) => console.error(`[${moduleName} error]`, ...args),
+  debug: (...args) => (console.debug ? console.debug(`[${moduleName} debug]`, ...args) : console.log(`[${moduleName} debug]`, ...args)),
+  log: (...args) => console.log(`[${moduleName}]`, ...args),
+  setContext: () => {}
+});
+
+let logger = Logger ? new Logger({ module: "xintent" }) : createConsoleLogger("xintent");
+
+function init(options = {}) {
+  if (options.logger) {
+    logger = options.logger;
+  }
+  return { logger };
+}
 
 const atoms = {};
 const widString = (wid) => "0x" + wid.toString(16);
@@ -12,7 +35,7 @@ async function connectToRouter(X, root) {
     requiredAtoms.map(async (atomName) => {
       const atom = await X.InternAtom(true, atomName);
       if (!atom) {
-        console.log(`[xintent] required atom ${atomName} not on server`);
+        logger.warn(`required atom ${atomName} not on server`);
       }
       atoms[atomName] = atom;
       return atom;
@@ -143,14 +166,16 @@ async function XBlobCreate(
   ]);
   const responseEv = await X.seekResponsePacket(
     (ev) =>
+      ev &&
       ev.type === 33 &&
       ev.message_type === atoms.XBLOB_CREATE_RESPONSE_V0 &&
+      ev.data &&
       ev.data[2] === cookie,
     timeoutMs
   ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
 
   const blobAtom = responseEv.data[1];
-  XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, os.hostname(), null);
+  await XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, os.hostname(), null);
 
   return blobAtom;
 }
@@ -164,7 +189,7 @@ async function XBlobGrant(X, routerWin, senderWin, blobAtom, granteeWin) {
 }
 
 async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
-  console.log(`[xintent] x11-promises/xintent:XBlobUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  logger.debug(`XBlobUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [
     senderWin,
     blobAtom,
@@ -172,7 +197,7 @@ async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
 }
 
 async function XBlobSoftLink(X, routerWin, senderWin, blobAtom) {
-  console.log(`[xintent] x11-promises/xintent:XBlobSoftLink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  logger.debug(`XBlobSoftLink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_LINK_V0, [
     senderWin,
     blobAtom,
@@ -180,7 +205,7 @@ async function XBlobSoftLink(X, routerWin, senderWin, blobAtom) {
 }
 
 async function XBlobSoftUnlink(X, routerWin, senderWin, blobAtom) {
-  console.log(`[xintent] x11-promises/xintent:XBlobSoftUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  logger.debug(`XBlobSoftUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_UNLINK_V0, [
     senderWin,
     blobAtom,
@@ -188,7 +213,7 @@ async function XBlobSoftUnlink(X, routerWin, senderWin, blobAtom) {
 }
 
 async function XBlobBroadcast(X, routerWin, senderWin, blobAtom, host, version) {
-  console.log(`[xintent] x11-promises/xintent:XBlobBroadcast(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+  logger.debug(`XBlobBroadcast(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_BROADCAST_V0, [
     senderWin,
     blobAtom,
@@ -203,7 +228,7 @@ async function XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, host, ver
   }
   const hostname = os.hostname();
   const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
-  const xblobHost = await X.GetSelectionOwner(hostAtom);
+  const xblobHost = (await X.GetSelectionOwner(hostAtom)) || routerWin;
   const payloadString = Buffer.from(JSON.stringify(blobData, null, 2));
   const buffer = Buffer.from(payloadString, 'utf8');
   // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
@@ -255,38 +280,37 @@ const sendXIV0 = async (
   // 2. Transfer or Grant blob rights BEFORE dispatching intent message
   if (targetWin !== senderWin) {
     if (unlinkPayloadBlob) {
-      XBlobTransfer(X, routerWin, senderWin, payloadBlob, targetWin);
+      await XBlobTransfer(X, routerWin, senderWin, payloadBlob, targetWin);
     } else {
-      XBlobGrant(X, routerWin, senderWin, payloadBlob, targetWin);
+      await XBlobGrant(X, routerWin, senderWin, payloadBlob, targetWin);
     }
   }
 
   if(txId !== undefined && txId > 16777215){
-    console.error("[xintent] error: txId above 16777216", {txId, channel});
+    logger.error("txId above 16777216", {txId, channel});
   }
   if(channel !== undefined && (channel != 0 && channel < 16777216)){
-    console.error("[xintent] error: channel under 16777216", {txId, channel});
+    logger.error("channel under 16777216", {txId, channel});
   }
   if(txId !== undefined && channel !== undefined){
-    console.error("[xintent] error: only allowed to specify one of txId, channel", {txId, channel});
+    logger.error("only allowed to specify one of txId, channel", {txId, channel});
   }
 
   // 3. Dispatch the intent frame
-  XClientMessage(X, targetWin, messageTypeAtom, [
+  await XClientMessage(X, targetWin, messageTypeAtom, [
     senderWin,
     payloadBlob,
     txId ?? channel ?? 0,
     dataBlob ?? 0,
   ]);
 
-  console.log(
-    `[xintent] Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)}${dataBlob ? ` (data blob ${widString(dataBlob)})` : ''})`
+  logger.info(
+    `Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)}${dataBlob ? ` (data blob ${widString(dataBlob)})` : ''})`
   );
   return payloadBlob;
 }
 
 async function XBlobRead(X, routerWin, blobAtom, host, version) {
-  // ...so yeah we need to connec to host if specified, then get at least the version specified
   let hostWin = await X.GetSelectionOwner(blobAtom);
   if (!hostWin) {
     hostWin = routerWin;
@@ -301,8 +325,29 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
     4_000_000_000
   );
   if (prop && prop.data) {
-    return JSON.parse(prop.data.toString());
+    const rawStr = prop.data.toString();
+    try {
+      return JSON.parse(rawStr);
+    } catch (parseErr) {
+      const snippet = rawStr.length > 200 ? rawStr.slice(0, 200) + '...' : rawStr;
+      logger.setContext({
+        blobAtom: widString(blobAtom),
+        hostWin: widString(hostWin),
+        rawLength: rawStr.length,
+        rawSnippet: snippet
+      });
+      const err = new SyntaxError(
+        `XBlobRead JSON Parse error at blobAtom ${widString(blobAtom)} on window ${widString(hostWin)} (raw length: ${rawStr.length} bytes, snippet: ${JSON.stringify(snippet)}): ${parseErr.message}`
+      );
+      err.rawString = rawStr;
+      err.blobAtom = blobAtom;
+      throw err;
+    }
   } else {
+    logger.setContext({
+      blobAtom: widString(blobAtom),
+      hostWin: widString(hostWin)
+    });
     throw new Error(
       `XBlobRead: no data found at ${widString(blobAtom)} on window ${widString(hostWin)}`
     );
@@ -311,7 +356,17 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
 
 async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {
   const [senderWin, payloadBlob] = ev.data;
+  logger.setContext({
+    sender: widString(senderWin),
+    payloadBlob: widString(payloadBlob)
+  });
   const payload = await XBlobRead(X, routerWin, payloadBlob);
+  if (payload) {
+    const cmd = payload.intent || payload.event || payload.action;
+    if (cmd) {
+      logger.setContext({ command: cmd });
+    }
+  }
   if(unlinkPayloadBlob){
     XBlobUnlink(X, routerWin, ev.wid, payloadBlob);
   }
@@ -346,6 +401,7 @@ function parseXBlobDestructorFrame(X, routerWin, ev) {
 
 
 module.exports = {
+  init,
   connectToRouter,
   createClientWindow,
   atoms,

@@ -27,6 +27,9 @@ class XIntentServer:
         self.app_id = app_id
         self.toml_path = toml_path or self._find_matchbox_toml()
         self.handlers: Dict[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = {}
+        self.x11_client = None
+
+        self._try_register_x11_window()
 
     def _find_matchbox_toml(self) -> Optional[str]:
         candidates = [
@@ -38,11 +41,31 @@ class XIntentServer:
                 return path
         return None
 
+    def _try_register_x11_window(self):
+        if not os.environ.get("DISPLAY"):
+            return
+        try:
+            x11_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../x11-promises"))
+            if x11_path not in sys.path:
+                sys.path.insert(0, x11_path)
+
+            from xintent_xlib import XIntentXlibClient
+            self.x11_client = XIntentXlibClient(app_id=self.app_id)
+            if self.toml_path and os.path.exists(self.toml_path):
+                with open(self.toml_path, "r", encoding="utf-8") as f:
+                    toml_content = f.read()
+                self.x11_client.register_matchbox_toml(toml_content)
+                sys.stderr.write(f"[xintent] Registered MATCHBOX_TOML on X11 window {hex(self.x11_client.client_win.id)} for '{self.app_id}'\n")
+                sys.stderr.flush()
+        except Exception as e:
+            sys.stderr.write(f"[xintent] Could not register X11 MATCHBOX_TOML: {e}\n")
+            sys.stderr.flush()
+
     def on_intent(self, intent_name: str):
         """Decorator to register a handler function for an intent (e.g. 'ui.TextToSpeech')."""
 
         def decorator(func: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]):
-            self.handlers[intent_name] = func
+            self.register_handler(intent_name, func)
             return func
 
         return decorator
@@ -54,6 +77,8 @@ class XIntentServer:
     ):
         """Registers a handler function for an intent."""
         self.handlers[intent_name] = handler
+        if self.x11_client:
+            self.x11_client.on_intent(intent_name)(handler)
 
     def send_event(
         self,
@@ -154,27 +179,33 @@ class XIntentServer:
 
     def run(self):
         """
-        Main loop reading NNJSON (double-newline separated JSON) frames from stdin.
+        Main loop reading NNJSON (double-newline separated JSON) frames from stdin and X11 ClientMessages.
         """
-        sys.stderr.write(f"[xintent] Service '{self.app_id}' listening on stdin...\n")
+        import select
+        sys.stderr.write(f"[xintent] Service '{self.app_id}' listening on stdin and X11 IPC...\n")
         sys.stderr.flush()
         buffer = ""
         while True:
             try:
-                chunk = sys.stdin.read(1)
-                if not chunk:
-                    break
-                buffer += chunk
-                while "\n\n" in buffer:
-                    frame_str, buffer = buffer.split("\n\n", 1)
-                    frame_str = frame_str.strip()
-                    if frame_str:
-                        try:
-                            frame = json.loads(frame_str)
-                            self.process_frame(frame)
-                        except json.JSONDecodeError as e:
-                            sys.stderr.write(f"[xintent] Invalid JSON frame: {e} in '{frame_str}'\n")
-                            sys.stderr.flush()
+                if self.x11_client:
+                    self.x11_client.process_events_once()
+
+                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if r:
+                    chunk = sys.stdin.read(1)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    while "\n\n" in buffer:
+                        frame_str, buffer = buffer.split("\n\n", 1)
+                        frame_str = frame_str.strip()
+                        if frame_str:
+                            try:
+                                frame = json.loads(frame_str)
+                                self.process_frame(frame)
+                            except json.JSONDecodeError as e:
+                                sys.stderr.write(f"[xintent] Invalid JSON frame: {e} in '{frame_str}'\n")
+                                sys.stderr.flush()
             except KeyboardInterrupt:
                 break
             except Exception as e:

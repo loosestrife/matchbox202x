@@ -188,9 +188,9 @@ const xblobCreate = async (senderWin) => {
   if (!blobAtom) {
     blobAtom = await X.InternAtom(false, `XBLOB_BLOB_SLOT_${blobIdx}`);
     xblobAtoms[blobIdx] = blobAtom;
-    // initially claim ownership for this XAudioNode
-    X.SetSelectionOwner(routerWin, blobAtom, 0);
   }
+  X.SetSelectionOwner(routerWin, blobAtom, 0);
+
   xblobAtomAssignments[blobIdx] = blobTrackingData;
   xblobRegistry[blobAtom] = blobTrackingData;
 
@@ -231,7 +231,17 @@ const xblobUnlink = async (blobId, unlinkWin) => {
 const checkForDeletion = async (blobId, regEntry) => {
   if (regEntry.links.length == 0 && regEntry.softLinks.length == 0) {
     logger.info(`deleting unlinked blob ${widString(blobId)}`);
-    await X.DeleteProperty(routerWin, blobId);
+    try {
+      const hostname = os.hostname();
+      const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
+      const xblobHost = await X.GetSelectionOwner(hostAtom);
+      if (xblobHost) {
+        await X.DeleteProperty(xblobHost, blobId);
+      }
+    } catch (_) {}
+    try {
+      await X.DeleteProperty(routerWin, blobId);
+    } catch (_) {}
     delete xblobRegistry[blobId];
 
     const blobIdx = xblobAtoms.indexOf(blobId);

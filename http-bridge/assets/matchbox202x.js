@@ -1,6 +1,7 @@
 (function(window) {
   'use strict';
 
+  // --- window.xintent ---
   window.xintent = window.xintent || {
     /**
      * Dispatch an intent to the matchbox202x platform
@@ -44,4 +45,163 @@
       return res.json();
     }
   };
+
+  // --- window.xblob ---
+  window.xblob = window.xblob || {
+    /**
+     * Create an XBlob on the bridge
+     * @param {Object} blobData - Content payload
+     * @returns {Promise<{ status: string, blobId: number, blob: number }>}
+     */
+    XBlobCreate: async function(blobData = {}) {
+      const res = await fetch('/xblob/XBlobCreate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(blobData)
+      });
+      if (!res.ok) throw new Error(`XBlobCreate failed: HTTP ${res.status}`);
+      return res.json();
+    },
+
+    /**
+     * Transfer an XBlob to a grantee
+     * @param {number|string} blobId
+     * @param {number|string|null} [grantee=null]
+     * @returns {Promise<{ status: string, blobId: number }>}
+     */
+    XBlobTransfer: async function(blobId, grantee = null) {
+      const res = await fetch('/xblob/XBlobTransfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
+      });
+      if (!res.ok) throw new Error(`XBlobTransfer failed: HTTP ${res.status}`);
+      return res.json();
+    },
+
+    /**
+     * Grant rights to an XBlob
+     * @param {number|string} blobId
+     * @param {number|string|null} [grantee=null]
+     * @returns {Promise<{ status: string, blobId: number }>}
+     */
+    XBlobGrant: async function(blobId, grantee = null) {
+      const res = await fetch('/xblob/XBlobGrant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
+      });
+      if (!res.ok) throw new Error(`XBlobGrant failed: HTTP ${res.status}`);
+      return res.json();
+    },
+
+    /**
+     * Unlink an XBlob
+     * @param {number|string} blobId
+     * @returns {Promise<{ status: string, blobId: number }>}
+     */
+    XBlobUnlink: async function(blobId) {
+      const res = await fetch('/xblob/XBlobUnlink', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blobId: blobId, blob: blobId })
+      });
+      if (!res.ok) throw new Error(`XBlobUnlink failed: HTTP ${res.status}`);
+      return res.json();
+    },
+
+    /**
+     * Broadcast an XBlob update
+     * @param {number|string} blobId
+     * @param {string|null} [host=null]
+     * @param {number|null} [version=null]
+     * @returns {Promise<{ status: string, blobId: number }>}
+     */
+    XBlobBroadcast: async function(blobId, host = null, version = null) {
+      const res = await fetch('/xblob/XBlobBroadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blobId: blobId, blob: blobId, host: host, version: version })
+      });
+      if (!res.ok) throw new Error(`XBlobBroadcast failed: HTTP ${res.status}`);
+      return res.json();
+    }
+  };
+
+  // Method aliases
+  window.xblob.create = window.xblob.XBlobCreate;
+  window.xblob.transfer = window.xblob.XBlobTransfer;
+  window.xblob.grant = window.xblob.XBlobGrant;
+  window.xblob.unlink = window.xblob.XBlobUnlink;
+  window.xblob.broadcast = window.xblob.XBlobBroadcast;
+
+  // --- window.xaudio ---
+  window.xaudio = window.xaudio || {
+    /**
+     * Play a sound sample/blob on XAudioSink with sequential ordering & automatic transfer
+     * @param {Object|string|number} cookieOrOptions - Options object or cookie string
+     * @param {number} [seqnum=0] - Sequence number
+     * @param {number|string} [sample=null] - XBlob ID
+     * @returns {Promise<Response>}
+     */
+    XAudioPlay: async function(cookieOrOptions = {}, seqnum = 0, sample = null) {
+      let options = {};
+      if (typeof cookieOrOptions === 'object' && cookieOrOptions !== null) {
+        options = cookieOrOptions;
+      } else {
+        options = {
+          cookie: cookieOrOptions,
+          seqnum: seqnum,
+          sample: sample || seqnum,
+        };
+      }
+
+      const cookie = options.cookie || options.Cookie || options.OutputId || 'default';
+      const seq = options.seqnum ?? options.seq ?? 0;
+      const blobId = options.sample || options.blob || options.blobId || options.BlobId;
+      const app = options.app || 'localhost';
+
+      if (options.transferBlob !== false && blobId) {
+        try {
+          await window.xblob.XBlobTransfer(blobId);
+        } catch (err) {
+          console.warn('[xaudio] Automatic XBlobTransfer warning:', err);
+        }
+      }
+
+      return window.xintent.intent('xaudio.PlaySoundBlob', {
+        intent: 'xaudio.PlaySoundBlob',
+        app: app,
+        cookie: cookie,
+        seqnum: seq,
+        sample: blobId,
+        blobId: blobId,
+        BlobId: blobId,
+        volume: options.volume ?? 1.0,
+        loop: !!options.loop,
+        ...options
+      }, app);
+    },
+
+    /**
+     * Send control commands to XAudio (stop, pause, etc.)
+     * @param {Object|string} options
+     * @returns {Promise<Response>}
+     */
+    controlStream: async function(options = {}) {
+      const command = typeof options === 'string' ? options : (options.command || 'stop');
+      const cookie = (typeof options === 'object') ? (options.cookie || options.OutputId || 'default') : 'default';
+      const app = (typeof options === 'object' && options.app) ? options.app : 'localhost';
+      return window.xintent.intent('xaudio.ControlStream', {
+        intent: 'xaudio.ControlStream',
+        command: command,
+        cookie: cookie,
+        app: app,
+        ...(typeof options === 'object' ? options : {})
+      }, app);
+    }
+  };
+
+  window.xaudio.playSoundBlob = window.xaudio.XAudioPlay;
+
 })(window);

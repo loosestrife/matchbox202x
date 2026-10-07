@@ -1,9 +1,10 @@
 // xintent-router/index.js
-const {Logger} = require('../server-tools');
+const {Logger, alStorage} = require('../server-tools');
 const logger = new Logger({module: 'server.js'});
 
 const {x11, X, rawX, root, routerWin} = require('.');
-const {atoms, widString, connectToRouter} = require('../x11-promises/xintent');
+const {atoms, widString, connectToRouter, init: xintentInit} = require('../x11-promises/xintent');
+xintentInit({logger: new Logger({module: 'libxintent'})});
 const {handleXIntentIntentV0, handleXIntentEventV0, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
 const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0} = require('./xblob');
 const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0, xaudioUnregisterWindow} = require('./xaudio');
@@ -81,12 +82,32 @@ async function startRouter() {
   // Per-client queue to enforce sequential message processing per sender window
   const clientQueues = new Map();
 
-  function enqueueClientTask(clientId, taskFn) {
+  function enqueueClientTask(clientId, taskFn, contextValues = {}) {
     const previous = clientQueues.get(clientId) || Promise.resolve();
     const current = previous
-      .then(taskFn)
-      .catch(err => {
-        logger.error(`Error processing message for client ${clientId}:`, err);
+      .then(() => {
+        return new Promise((resolve) => {
+          alStorage.run(
+            {
+              values: {
+                client: widString(clientId),
+                ...contextValues,
+              },
+              timers: {
+                start: new Date(),
+              },
+            },
+            async () => {
+              try {
+                const res = await taskFn();
+                resolve(res);
+              } catch (err) {
+                logger.error(`Error processing message for client ${widString(clientId)}:`, err);
+                resolve();
+              }
+            }
+          );
+        });
       })
       .then(() => {
         if (clientQueues.get(clientId) === current) {
@@ -99,37 +120,68 @@ async function startRouter() {
 
   rawX.on('event', async (ev) => {
     if (ev.name === 'ClientMessage' && ev.wid === routerWin) {
-      logger.info(`got ClientMessage type ${
-        Object.keys(atoms).find(name => atoms[name] === ev.message_type) ?? ev.message_type
-      } sequence number ${ev.seq}`);
-      if (ev.message_type in dispatchTable){
+      const msgTypeName =
+        Object.keys(atoms).find((name) => atoms[name] === ev.message_type) ??
+        ev.message_type;
+      logger.info(
+        `got ClientMessage type ${msgTypeName} sequence number ${ev.seq}`
+      );
+      if (ev.message_type in dispatchTable) {
         const clientId = ev.data[0];
-        enqueueClientTask(clientId, async () => {
-          const handler = dispatchTable[ev.message_type];
-          const parsed = await handler.parse(ev);
-          logger.info(`parsed ${handler.name}`, parsed);
-          const securityContext = await handler.securityContext(parsed);
-          const securityPolicy = await checkXSecurePolicy(securityContext, parsed, ev);
-          if(securityPolicy == 'accept'){
-            handler.accept(parsed);
+        const payloadBlob = ev.data[1];
+        const txOrChannel = ev.data[2];
+        const dataBlob = ev.data[3];
+
+        enqueueClientTask(
+          clientId,
+          async () => {
+            const handler = dispatchTable[ev.message_type];
+            const parsed = await handler.parse(ev);
+
+            // Attach parsed message to alStorage context
+            logger.setContext({
+              parsedMessage: parsed,
+              intent: parsed.payload?.intent || parsed.payload?.event || parsed.payload?.action
+            });
+
+            logger.info(`parsed ${handler.name}`, parsed);
+            const securityContext = await handler.securityContext(parsed);
+            const securityPolicy = await checkXSecurePolicy(
+              securityContext,
+              parsed,
+              ev
+            );
+            if (securityPolicy == 'accept') {
+              handler.accept(parsed);
+            }
+            if (securityPolicy == '401') {
+              // explicit deny response
+              handler['401'](parsed);
+            }
+            if (securityPolicy == '404') {
+              // pretend not to know what the sender was talking about
+              handler['404'](parsed);
+            }
+            if (securityPolicy == 'drop') {
+              // do nothing
+            }
+            if (securityPolicy == 'disconnect') {
+              logger.info(
+                'disconnecting misbehaving client',
+                widString(parsed.sender)
+              );
+            }
+          },
+          {
+            messageType: msgTypeName,
+            sender: widString(clientId),
+            target: widString(ev.wid),
+            payloadBlob: widString(payloadBlob),
+            ...(dataBlob ? { dataBlob: widString(dataBlob) } : {}),
           }
-          if(securityPolicy == '401'){
-            // explicit deny response
-            handler['401'](parsed);
-          }
-          if(securityPolicy == '404'){
-            // pretend not to know what the sender was talking about
-            handler['404'](parsed);
-          }
-          if(securityPolicy == 'drop'){
-            // do nothing
-          }
-          if(securityPolicy == 'disconnect'){
-            logger.info('disconnecting misbehaving client', widString(parsed.sender));
-          }
-        });
+        );
       } else {
-        logger.warn("unknown message type", ev);
+        logger.warn('unknown message type', ev);
       }
     }
 
@@ -139,7 +191,7 @@ async function startRouter() {
       await parseWindowLighterToml(ev.wid);
     }
 
-    if (ev.name === 'PropertyNotify' && ev.atom === atoms.XINTENT_MATCHBOX_TOML) {
+    if (ev.name === 'PropertyNotify' && ev.atom === atoms.MATCHBOX_TOML) {
       await parseWindowToml(ev.wid);
     }
 

@@ -100,17 +100,15 @@ The XAUDIO server probably does something like dump audio into ffmpeg on demand.
 [XAudioSink]
 name = "my-speakers"
 ```
-thereby registering itself to recieve XAudio commands
-## XAudioPlaySoundBlob
-an XIntentJsonFrame with message type `XAudioPlaySoundBlobV0` and payload `{BlobId, OutputId, volume, loop}`
+thereby registering itself to recieve XAudio commands.  Every XAudio command with a blob attached would require an XBlobGrant of that blob to the XAudioSink, the XAudioSink then unlinks blobs when its done using them.
+## XAudioPlay
+an XIntentJsonFrame with message type `XAudioPlayV0` and payload `{BlobId, OutputId, volume, loop, streamId, seqnum}`.  Once the XAudioSink has finished playing, it replies with XAudioPlayCompleteV0 with payload `{streamId, seqnum}`.  If `streamId > 0`, the user has opted in to using streams and can queue multiple blobs on a nonzero streamId to be played in seqnum order, but, stream 0 blobs will be played when recieved as possible, evicting old sounds if necessary.  If `loop` is specified, the client that sent the XAudioPlay will have to cancel the loop at some point with an `XAudioControlStream({command: stop, streamId})`
 ## XAudioPrefetchSoundBlob
 an XIntentJsonFrame with message type `XAudioPrefetchSoundBlobV0` and payload `{BlobId, OutputId}`.  XAudioSink's SHOULD download the blob data and be ready to play it.
-## PlayStream
-an XIntentJsonFrame with message type `XAudioPlayStreamV0` and payload `{BlobId, OutputId, volume}`
 ## ControlStream
-an XIntentJsonFrame with message type `XAudioControlStreamV0` and payload `{command, ...}`
+an XIntentJsonFrame with message type `XAudioControlStreamV0` and payload `{command, BlobId, streamId}`.  If BlobId is unspecified, the user is accessing the user's StreamId's from XAudioPlay, otherwise, the user is accessing the StreamId's from the BlobId MediaStream.
 ## SeekStream
-an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{seekTo}`
+an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{BlobId, streamId, seekTo}`
 
 # Rationale
 ## Why XINTENT V0 is based on XBLOB V0

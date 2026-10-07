@@ -33,6 +33,9 @@ class XIntentServer:
         self.app_id = app_id
         self.toml_path = toml_path or self._find_matchbox_toml()
         self.handlers: Dict[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = {}
+        self.x11_client = None
+
+        self._try_register_x11_window()
 
     def _find_matchbox_toml(self) -> Optional[str]:
         candidates = [
@@ -43,6 +46,33 @@ class XIntentServer:
             if os.path.exists(path):
                 return path
         return None
+
+    def _try_register_x11_window(self):
+        if not os.environ.get("DISPLAY"):
+            return
+        try:
+            x11_path = os.path.abspath(os.path.dirname(__file__))
+            if x11_path not in sys.path:
+                sys.path.insert(0, x11_path)
+
+            from x11_promises import X11PromisesClient, HAS_XLIB
+            if not HAS_XLIB:
+                return
+
+            x11 = X11PromisesClient()
+            client_win = x11.create_client_window(name=self.app_id)
+            atom_toml = x11.intern_atom("MATCHBOX_TOML")
+
+            if self.toml_path and os.path.exists(self.toml_path):
+                with open(self.toml_path, "r", encoding="utf-8") as f:
+                    toml_content = f.read()
+                x11.set_window_property_string(client_win.id, atom_toml, toml_content)
+                self.x11_client = x11
+                sys.stderr.write(f"[xintent] Registered MATCHBOX_TOML on X11 window {hex(client_win.id)} for '{self.app_id}'\n")
+                sys.stderr.flush()
+        except Exception as e:
+            sys.stderr.write(f"[xintent] Could not register X11 MATCHBOX_TOML: {e}\n")
+            sys.stderr.flush()
 
     def on_intent(self, intent_name: str):
         """Decorator to register a handler function for an intent (e.g. 'ui.TextToSpeech')."""
@@ -162,7 +192,7 @@ class XIntentServer:
         """
         Main loop reading NNJSON (double-newline separated JSON) frames from stdin.
         """
-        sys.stderr.write(f"[xintent] Service '{self.app_id}' listening on stdin...\n")
+        sys.stderr.write(f"[xintent-pipe] Service '{self.app_id}' listening on stdin...\n")
         sys.stderr.flush()
         buffer = ""
         while True:

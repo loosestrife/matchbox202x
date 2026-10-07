@@ -7,6 +7,7 @@ dependencies = [
     "soundfile>=0.13.0",
     "numpy>=1.26.0",
     "piper-tts>=1.7.0",
+    "python-xlib>=0.33",
     #"torch>=2.15.0.dev20260824",
     #"torchvision>=0.30.0.dev20260825",
     #"torchaudio>=2.11.0.dev20260825",

@@ -3,16 +3,25 @@ const express = require('express');
 const {serializeError} = require('serialize-error');
 const {HttpError, Logger, loggerMiddleware, alStorage, nnjsonStream, teeOutStream} = require('../server-tools');
 const { createClientWithPromises } = require('../x11-promises/x11-promises');
-const { connectToRouter, createClientWindow } = require('../x11-promises/xintent');
+const xintent = require('../x11-promises/xintent');
+
 
 (async () => {
+xintent.init({logger: new Logger({module: 'libxintent'})});
 const logger = new Logger({module: 'index.js'});
 logger.setProjectName('http-bridge');
 const { X, root } = await createClientWithPromises();
-const routerWin = await connectToRouter(X, root);
-const clientWin = await createClientWindow(X, root, 'http-intent-bridge');
-const { routeIntent, aggregateTomlAsObject } = require('./route-intent')({ routerWin, X, root, clientWin });
+await xintent.connectToRouter(X, root);
+const clientWin = await xintent.createClientWindow(X, root, 'http-intent-bridge');
+const { routeIntent, aggregateTomlAsObject } = require('./route-intent')({ X, root, clientWin });
 const { routeApp, getApps } = require('./route-app');
+const {
+  routeXBlobCreate,
+  routeXBlobTransfer,
+  routeXBlobGrant,
+  routeXBlobUnlink,
+  routeXBlobBroadcast,
+} = require('./route-xblob')({ X, clientWin });
 
 const app = express();
 app.set("json spaces", 2);
@@ -24,11 +33,19 @@ app.use((req, res, next) => {
   next();
 });
 app.post('/intent/:namespace/:action', routeIntent);
+app.post('/xblob/XBlobCreate', routeXBlobCreate);
+app.post('/xblob/XBlobTransfer', routeXBlobTransfer);
+app.post('/xblob/XBlobGrant', routeXBlobGrant);
+app.post('/xblob/XBlobUnlink', routeXBlobUnlink);
+app.post('/xblob/XBlobBroadcast', routeXBlobBroadcast);
+const serveFavicon = (req, res) => {
+  res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
+};
+
+app.get('/favicon.ico', serveFavicon);
+app.get('/apps/favicon.ico', serveFavicon);
 app.get('/matchbox202x.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'assets', 'matchbox202x.js'));
-});
-app.get('/favicon.ico', (req, res) => {
-  res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
 });
 app.get('/apps/:app{/:card}', routeApp);
 app.get('/api/tags', async (req, res) => {

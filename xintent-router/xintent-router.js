@@ -82,12 +82,10 @@ const tryToForwardTheIntent = async (xintentIntent) => {
   }
 
   if (xintentIntent.payload.Accept) {
-    if(getChannel(senderWin, channel)){
-      // throw new Error(400, 'txId cookie already in use');
-      logger.info(`duplicate cookie ${xintentIntent.payload.txId}`);
-      return;
+    channelObj = getChannel(senderWin, channel);
+    if (!channelObj) {
+      channelObj = newChannel(senderWin, channel, xintentIntent);
     }
-    channelObj = newChannel(senderWin, channel, xintentIntent);
   }
 
   // (4) find a handler and send the intent

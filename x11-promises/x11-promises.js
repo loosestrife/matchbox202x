@@ -27,21 +27,21 @@ function wrapPromiseXClient(client) {
 
   // Advances the internal sequence clock and resolves/rejects pending promises
   function processIncomingPacket(pktType, pkt, pktSeq) {
-    if (pktSeq === undefined && pkt && pkt.seq !== undefined) {
-      pktSeq = pkt.seq;
+    if (pktSeq === undefined && pkt) {
+      pktSeq = pkt.seq !== undefined ? pkt.seq : pkt.sequence;
     }
-    if (pktSeq === undefined) return;
-
-    const pktSeq16 = pktSeq % 65536;
 
     // 1. Handle Protocol Error
     if (pktType === 'error') {
-      for (const [seqKey, entry] of pendingRequests.entries()) {
-        if (entry.seq16 === pktSeq16) {
-          entry.reject(pkt);
-          pendingRequests.delete(seqKey);
-          if (client.replies) delete client.replies[seqKey];
-          break;
+      if (pktSeq !== undefined) {
+        const pktSeq16 = pktSeq % 65536;
+        for (const [seqKey, entry] of pendingRequests.entries()) {
+          if (entry.seq16 === pktSeq16) {
+            entry.reject(pkt);
+            pendingRequests.delete(seqKey);
+            if (client.replies) delete client.replies[seqKey];
+            break;
+          }
         }
       }
       return;
@@ -52,7 +52,7 @@ function wrapPromiseXClient(client) {
       // A) Check explicit packet predicate match (seekResponsePacket)
       if (entry.seekPredicate) {
         try {
-          if (entry.seekPredicate(pkt)) {
+          if (pkt && entry.seekPredicate(pkt)) {
             if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer);
             entry.resolve(pkt);
             pendingRequests.delete(seqKey);
@@ -69,7 +69,8 @@ function wrapPromiseXClient(client) {
       }
 
       // B) Passive Auto-Resolution for Void / Past Requests
-      if (!entry.seekPredicate && !entry.isReplyMethod) {
+      if (!entry.seekPredicate && !entry.isReplyMethod && pktSeq !== undefined) {
+        const pktSeq16 = pktSeq % 65536;
         if (seqDiff16(entry.seq16, pktSeq16) <= 0) {
           entry.resolve();
           pendingRequests.delete(seqKey);
