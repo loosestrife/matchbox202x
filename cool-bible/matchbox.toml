@@ -1,3 +1,4 @@
+# demonstrates bridging android context menu PROCESS_TEXT to xintent
 [app]
 id = "cool-bible"
 

@@ -1,3 +1,4 @@
+# unlike the other cool-apps, cool-tts is intended to be a full featured tts service
 [app]
 id = "cool-tts"
 version = "0.1.0"
