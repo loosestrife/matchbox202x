@@ -26,6 +26,9 @@ id = "matchbox-service-lighter"
 
 [XBlobHost]
 host = "${hostname}"
+
+[XAudioSink]
+name = "${hostname}-speakers"
 `;
 
 async function startLighter() {
@@ -42,7 +45,7 @@ async function startLighter() {
   pickFiles.init({X, lighterWin});
 
   const xintentServicesManifestAtom = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
-  const xintentMatchboxTomlAtom = await X.InternAtom(false, 'XINTENT_MATCHBOX_TOML');
+  const xintentMatchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
 
   const xintentAtom = await X.InternAtom(false, 'XINTENT');
   const xintentIntentV0Atom = await X.InternAtom(false, 'XINTENT_INTENT_V0');

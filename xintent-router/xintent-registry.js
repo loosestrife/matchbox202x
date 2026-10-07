@@ -72,7 +72,7 @@ async function parseWindowToml(wid) {
     const prop = await X.GetProperty(
       0,
       wid,
-      atoms.XINTENT_MATCHBOX_TOML,
+      atoms.MATCHBOX_TOML,
       0,
       0,
       1000000,

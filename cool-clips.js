@@ -94,7 +94,7 @@ function buildSelectionNotifyBuffer(time, requestor, selection, target, property
  */
 async function fetchRemoteX11Clipboard(X, daemonWin, targetAtom) {
   return new Promise((resolve) => {
-    const propAtom = atoms.XINTENT_MATCHBOX_TOML; // Reuse existing known atom for property buffer
+    const propAtom = atoms.MATCHBOX_TOML;
     let timeoutId = null;
 
     const selectionHandler = async (ev) => {
@@ -164,7 +164,7 @@ async function startDaemon() {
   const daemonWin = await createClientWindow(X, root, 'ui.Copy-daemon');
 
   const atomList = [
-    'XINTENT_MATCHBOX_TOML',
+    'MATCHBOX_TOML',
     'CLIPBOARD',
     'TARGETS',
     'ATOM',
@@ -209,7 +209,7 @@ invocation = "X11"
   X.ChangeProperty(
     0,
     daemonWin,
-    atoms.XINTENT_MATCHBOX_TOML,
+    atoms.MATCHBOX_TOML,
     atoms.STRING,
     8,
     Buffer.from(matchboxToml)

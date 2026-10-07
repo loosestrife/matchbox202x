@@ -28,7 +28,7 @@ async function startDaemon() {
 
   // Register required X11 atoms
   const atomList = [
-    'XINTENT_MATCHBOX_TOML',
+    'MATCHBOX_TOML',
     'STRING',
     'UTF8_STRING',
     'text/plain',
@@ -46,7 +46,7 @@ async function startDaemon() {
   X.ChangeProperty(
     0,
     serviceWin,
-    atoms.XINTENT_MATCHBOX_TOML,
+    atoms.MATCHBOX_TOML,
     atoms.STRING,
     8,
     Buffer.from(matchboxToml)
@@ -61,7 +61,7 @@ async function startDaemon() {
         const { senderWin, payload, channel } = await parseXIntentIntentV0(X, xintent.routerWin, ev);
 
         if (payload.intent === 'ui.TextProcess') {
-          console.log(`\n[cool-bible] Received ui.TextProcess intent from ${widString(senderWin)} on channel ${channel} for ref: "${payload.ref}"`);
+          console.log(`\n[cool-bible] Received ui.TextProcess intent from ${widString(senderWin)} on channel ${channel} for ref: "${payload.text}"`);
 
           const resultText = bible.lookupReferenceFormatted(payload.text);
 
