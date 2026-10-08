@@ -344,140 +344,138 @@ function parseMultipartResponse(responseText) {
   return parts;
 }
 
-  const ttsAppSelect = document.getElementById('tts-app-select');
-  const xaudioNodeSelect = document.getElementById('xaudio-node-select');
+const ttsAppSelect = document.getElementById('tts-app-select');
+const xaudioNodeSelect = document.getElementById('xaudio-node-select');
 
-  // Populate TTS & XAudio options dynamically from /api/tags
-  async function populateTagsOptions() {
-    try {
-      const tags = await fetch('/api/tags').then(r => r.json());
-      if (tags) {
-        // 1. Populate TTS options
-        const ttsProviders = tags.intents?.['ui.TextToSpeech'] || ['cool-tts'];
-        if (ttsProviders.length > 0 && ttsAppSelect) {
-          const currentVal = ttsAppSelect.value;
-          ttsAppSelect.innerHTML = '';
-          ttsProviders.forEach(p => {
-            const opt = document.createElement('option');
-            opt.value = p;
-            opt.textContent = `${p} ${p === 'cool-tts' ? '(Desktop Engine)' : (p === 'flammenwerfer-phone' ? '(Android Speech)' : '')}`;
-            ttsAppSelect.appendChild(opt);
-          });
-          if (ttsProviders.includes(currentVal)) {
-            ttsAppSelect.value = currentVal;
-          }
-        }
-
-        // 2. Populate XAudioSink / XAudioNode options
-        const sinks = Object.keys(tags.XAudioSink || tags.XAudioNode || {});
-        if (sinks.length > 0 && xaudioNodeSelect) {
-          const currentSink = xaudioNodeSelect.value;
-          xaudioNodeSelect.innerHTML = '';
-          sinks.forEach(s => {
-            const opt = document.createElement('option');
-            opt.value = s;
-            opt.textContent = `${s} ${s.includes('phone') ? '(Phone Speaker)' : '(Desktop Speaker)'}`;
-            xaudioNodeSelect.appendChild(opt);
-          });
-          if (sinks.includes(currentSink)) {
-            xaudioNodeSelect.value = currentSink;
-          }
+// Populate TTS & XAudio options dynamically from /api/tags
+async function populateTagsOptions() {
+  try {
+    const tags = await fetch('/api/tags').then(r => r.json());
+    if (tags) {
+      // 1. Populate TTS options
+      const ttsProviders = tags.intents?.['ui.TextToSpeech'] || ['cool-tts'];
+      if (ttsProviders.length > 0 && ttsAppSelect) {
+        const currentVal = ttsAppSelect.value;
+        ttsAppSelect.innerHTML = '';
+        ttsProviders.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p;
+          opt.textContent = `${p} ${p === 'cool-tts' ? '(Desktop Engine)' : (p === 'flammenwerfer-phone' ? '(Android Speech)' : '')}`;
+          ttsAppSelect.appendChild(opt);
+        });
+        if (ttsProviders.includes(currentVal)) {
+          ttsAppSelect.value = currentVal;
         }
       }
-    } catch (e) {
-      console.warn('[cool-ebooks] Could not fetch /api/tags for dynamic selector population:', e);
+
+      // 2. Populate XAudioSink / XAudioNode options
+      const sinks = Object.keys(tags.XAudioSink || tags.XAudioNode || {});
+      if (sinks.length > 0 && xaudioNodeSelect) {
+        const currentSink = xaudioNodeSelect.value;
+        xaudioNodeSelect.innerHTML = '';
+        sinks.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s;
+          opt.textContent = `${s} ${s.includes('phone') ? '(Phone Speaker)' : '(Desktop Speaker)'}`;
+          xaudioNodeSelect.appendChild(opt);
+        });
+        if (sinks.includes(currentSink)) {
+          xaudioNodeSelect.value = currentSink;
+        }
+      }
     }
+  } catch (e) {
+    console.warn('[cool-ebooks] Could not fetch /api/tags for dynamic selector population:', e);
   }
+}
 
-  // Dispatch a single chunk to ui.TextToSpeech and stream audio to XAudioSink
-  async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
-    const targetTtsApp = ttsAppSelect ? ttsAppSelect.value || 'cool-tts' : 'cool-tts';
-    const targetXAudioNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'user-desktop-speakers' : 'user-desktop-speakers';
+// Dispatch a single chunk to ui.TextToSpeech and stream audio to XAudioSink
+async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
+  const targetTtsApp = ttsAppSelect ? ttsAppSelect.value || 'cool-tts' : 'cool-tts';
+  const targetXAudioNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'user-desktop-speakers' : 'user-desktop-speakers';
 
-    const wordCount = (text || '').trim().split(/\s+/).filter(Boolean).length;
-    const startTime = performance.now();
+  const wordCount = (text || '').trim().split(/\s+/).filter(Boolean).length;
+  const startTime = performance.now();
 
-    updatePipelineCounters(+1, 0);
-    logDebug(`[ui.TextToSpeech] Dispatching Chunk #${seqnum + 1} (${wordCount} words) to ${targetTtsApp}...`);
+  updatePipelineCounters(+1, 0);
+  logDebug(`[ui.TextToSpeech] Dispatching Chunk #${seqnum + 1} (${wordCount} words) to ${targetTtsApp}...`);
 
-    const xintent = await ensureXIntent();
-    if (xintent && typeof xintent.intent === 'function') {
-      try {
-        const response = await xintent.intent('ui.TextToSpeech', {
-          intent: 'ui.TextToSpeech',
-          app: targetTtsApp,
-          text: text,
-          speed: 1.0,
-          reply: true,
-          controlWord: xintent.SYN,
-          Accept: 'audio/wav'
-        }, targetTtsApp);
+  const xintent = await ensureXIntent();
+  if (xintent && typeof xintent.intent === 'function') {
+    try {
+      const response = await xintent.intent('ui.TextToSpeech', {
+        intent: 'ui.TextToSpeech',
+        app: targetTtsApp,
+        text: text,
+        speed: 1.0,
+        reply: true,
+        controlWord: xintent.SYN,
+        Accept: 'audio/wav'
+      }, targetTtsApp);
 
-        const endTime = performance.now();
-        const rttMs = Math.round(endTime - startTime);
+      const endTime = performance.now();
+      const rttMs = Math.round(endTime - startTime);
 
-        let wavByteLength = 0;
-        let blobId = null;
+      let wavByteLength = 0;
+      let blobId = null;
 
-        if (response && response.ok) {
-          try {
-            const rawText = await response.text();
-            const parts = parseMultipartResponse(rawText);
+      if (response && response.ok) {
+        try {
+          const rawText = await response.text();
+          const parts = parseMultipartResponse(rawText);
 
-            for (const part of parts) {
-              if (part.headers['xintent-attached-data-blob']) {
-                blobId = part.headers['xintent-attached-data-blob'];
+          for (const part of parts) {
+            if (part.headers['xintent-attached-data-blob']) {
+              blobId = part.headers['xintent-attached-data-blob'];
+            }
+            if (part.json) {
+              if (part.json.data_blob || part.json.blobId || part.json.blob) {
+                blobId = part.json.data_blob || part.json.blobId || part.json.blob;
               }
-              if (part.json) {
-                if (part.json.data_blob || part.json.blobId || part.json.blob) {
-                  blobId = part.json.data_blob || part.json.blobId || part.json.blob;
-                }
-                if (part.json.data && part.json.type === 'audio/wav') {
-                  const buf = base64ToBuffer(part.json.data);
-                  wavByteLength = buf ? buf.byteLength : 0;
-                }
+              if (part.json.data && part.json.type === 'audio/wav') {
+                const buf = base64ToBuffer(part.json.data);
+                wavByteLength = buf ? buf.byteLength : 0;
               }
             }
-          } catch (e) {
-            console.warn('[cool-ebooks] error parsing multipart TTS response:', e);
           }
+        } catch (e) {
+          console.warn('[cool-ebooks] error parsing multipart TTS response:', e);
         }
-
-        updatePipelineCounters(-1, 0);
-        updateDebugMetrics(wordCount, wavByteLength, rttMs);
-        logDebug(`[ui.TextToSpeechResponse] Chunk #${seqnum + 1}: Received ${formatBytes(wavByteLength)} WAV (XBlob ${blobId || 'none'}) in ${rttMs}ms`);
-
-        if (window.xblob && window.xaudio && blobId) {
-          updatePipelineCounters(0, +1);
-          logDebug(`[XAudioPlay] Streaming XBlob ${blobId} (seq #${seqnum + 1}, ctrl: SYN) to ${targetXAudioNode}...`);
-
-          const playStartTime = performance.now();
-          const playRes = await window.xaudio.XAudioPlay({
-            app: targetXAudioNode,
-            cookie: cookie,
-            streamId: 1,
-            seqnum: seqnum,
-            sample: blobId,
-            blob: blobId,
-            controlWord: window.xintent ? window.xintent.SYN : 1,
-            transferBlob: true
-          });
-
-          const playRttMs = Math.round(performance.now() - playStartTime);
-          updatePipelineCounters(0, -1);
-          logDebug(`[XAudioPlayResponse] ${targetXAudioNode} confirmed playback for seq #${seqnum + 1} in ${playRttMs}ms`);
-        }
-        return true;
-      } catch (err) {
-        updatePipelineCounters(-1, 0);
-        logDebug(`[TTS ERROR] Chunk #${seqnum + 1} failed: ${err.message || err}`);
-        console.warn('[cool-ebooks] xintent dispatch failed, falling back to Web Speech:', err);
       }
-    }
 
+      updatePipelineCounters(-1, 0);
+      updateDebugMetrics(wordCount, wavByteLength, rttMs);
+      logDebug(`[ui.TextToSpeechResponse] Chunk #${seqnum + 1}: Received ${formatBytes(wavByteLength)} WAV (XBlob ${blobId || 'none'}) in ${rttMs}ms`);
+
+      if (window.xblob && window.xaudio && blobId) {
+        updatePipelineCounters(0, +1);
+        logDebug(`[XAudioPlay] Streaming XBlob ${blobId} (seq #${seqnum + 1}, ctrl: SYN) to ${targetXAudioNode}...`);
+
+        const playStartTime = performance.now();
+        const playRes = await window.xaudio.XAudioPlay({
+          app: targetXAudioNode,
+          cookie: cookie,
+          streamId: 1,
+          seqnum: seqnum,
+          sample: blobId,
+          blob: blobId,
+          controlWord: window.xintent ? window.xintent.SYN : 1,
+          transferBlob: true
+        });
+
+        const playRttMs = Math.round(performance.now() - playStartTime);
+        updatePipelineCounters(0, -1);
+        logDebug(`[XAudioPlayResponse] ${targetXAudioNode} confirmed playback for seq #${seqnum + 1} in ${playRttMs}ms`);
+      }
+      return true;
+    } catch (err) {
+      updatePipelineCounters(-1, 0);
+      logDebug(`[TTS ERROR] Chunk #${seqnum + 1} failed: ${err.message || err}`);
+      console.warn('[cool-ebooks] xintent dispatch failed, falling back to Web Speech:', err);
     }
   }
 }
+
 
 
 // Double-Buffered TTS Execution Loop
