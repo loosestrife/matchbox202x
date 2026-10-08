@@ -19,27 +19,31 @@ function getAudioPlayerCmd() {
 }
 
 async function resolveBlobToFilePath(blobAtom) {
-  if (prefetchedBlobs.has(blobAtom)) {
-    return prefetchedBlobs.get(blobAtom);
+  const numericBlobAtom = Number(blobAtom);
+  if (prefetchedBlobs.has(numericBlobAtom)) {
+    return prefetchedBlobs.get(numericBlobAtom);
   }
 
-  const data = await xintent.XBlobRead(X, xintent.routerWin, blobAtom);
+  const data = await xintent.XBlobRead(X, xintent.routerWin, numericBlobAtom);
+  if (!data) {
+    throw new Error(`XBlobRead returned null/empty for blobAtom ${numericBlobAtom}`);
+  }
   let buf;
   if (data._dataType === 'text') {
     buf = Buffer.from(data.data, 'utf-8');
   } else if (data._dataType === 'base64') {
     buf = Buffer.from(data.data, 'base64');
   } else if (data.data) {
-    buf = Buffer.from(data.data);
+    buf = typeof data.data === 'string' ? Buffer.from(data.data, 'base64') : Buffer.from(data.data);
   } else {
     throw new Error('Invalid blob data format for audio playback');
   }
 
   const ext = data.type && data.type.includes('mp3') ? '.mp3' : '.wav';
-  const fileId = `xaudio_${blobAtom}_${Date.now()}${ext}`;
+  const fileId = `xaudio_${numericBlobAtom}_${Date.now()}${ext}`;
   const filePath = path.join(os.tmpdir(), fileId);
   fs.writeFileSync(filePath, buf);
-  prefetchedBlobs.set(blobAtom, filePath);
+  prefetchedBlobs.set(numericBlobAtom, filePath);
   return filePath;
 }
 
@@ -133,9 +137,10 @@ async function processQueue(cookie) {
   }
 }
 
-async function playSoundBlob(payload, senderWin) {
+async function playSoundBlob(payload, senderWin, dataBlob) {
   const cookie = payload.cookie || payload.Cookie || payload.OutputId || 'default';
-  const blobAtom = payload.sample || payload.BlobId || payload.blobId || payload.blob;
+  const rawBlob = dataBlob || payload.dataBlob || payload.sample || payload.BlobId || payload.blobId || payload.blob;
+  const blobAtom = Number(rawBlob);
   const seqnum = payload.seqnum !== undefined ? Number(payload.seqnum) : (payload.seq !== undefined ? Number(payload.seq) : null);
 
   logger.setContext({ cookie, seqnum, blob: xintent.widString(blobAtom) });

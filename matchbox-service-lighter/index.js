@@ -209,7 +209,7 @@ async function startLighter() {
         async () => {
           try {
             if (ev.message_type == xintentIntentV0Atom) {
-              const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               const payload = xintentIntent.payload;
               const intentName = payload.intent || payload.action || payload.event;
               logger.setContext({
@@ -238,13 +238,13 @@ async function startLighter() {
                 await pickFiles.pickFile(xintentIntent);
               }
               else if (["xaudio.PlaySoundBlob", "XAudioPlaySoundBlob", "XAudioPlaySoundBlobV0", "XAudioPlayV0", "XAudioPlay", "xaudio.Play"].includes(intentName)) {
-                await xaudioNode.playSoundBlob(payload, xintentIntent.senderWin);
+                await xaudioNode.playSoundBlob(payload, xintentIntent.senderWin, xintentIntent.dataBlob);
               }
               else if (["xaudio.PrefetchSoundBlob", "XAudioPrefetchSoundBlob", "XAudioPrefetchSoundBlobV0", "XAudioPrefetch"].includes(intentName)) {
-                await xaudioNode.prefetchSoundBlob(payload);
+                await xaudioNode.prefetchSoundBlob(payload, xintentIntent.dataBlob);
               }
               else if (["xaudio.PlayStream", "PlayStream", "XAudioPlayStreamV0"].includes(intentName)) {
-                await xaudioNode.playStream(payload, xintentIntent.senderWin);
+                await xaudioNode.playStream(payload, xintentIntent.senderWin, xintentIntent.dataBlob);
               }
               else if (["xaudio.ControlStream", "ControlStream", "XAudioControlStreamV0", "XAudioControlV0", "XAudioControl", "xaudio.Control"].includes(intentName)) {
                 await xaudioNode.controlStream(payload);
@@ -258,27 +258,27 @@ async function startLighter() {
               }
             }
             else if (ev.message_type == xaudioPlaySoundBlobAtom) {
-              const { payload, senderWin } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              const { payload, senderWin, dataBlob } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               logger.setContext({ intent: 'xaudio.Play' });
-              await xaudioNode.playSoundBlob(payload, senderWin);
+              await xaudioNode.playSoundBlob(payload, senderWin, dataBlob);
             }
             else if (ev.message_type == xaudioPrefetchSoundBlobAtom) {
-              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               logger.setContext({ intent: 'xaudio.PrefetchSoundBlob' });
               await xaudioNode.prefetchSoundBlob(payload);
             }
             else if (ev.message_type == xaudioPlayStreamAtom) {
-              const { payload, senderWin } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              const { payload, senderWin } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               logger.setContext({ intent: 'xaudio.PlayStream' });
               await xaudioNode.playStream(payload, senderWin);
             }
             else if (ev.message_type == xaudioControlStreamAtom) {
-              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               logger.setContext({ intent: 'xaudio.ControlStream' });
               await xaudioNode.controlStream(payload);
             }
             else if (ev.message_type == xaudioSeekStreamAtom) {
-              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+              const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               logger.setContext({ intent: 'xaudio.SeekStream' });
               await xaudioNode.seekStream(payload);
             }

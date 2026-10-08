@@ -177,8 +177,6 @@ const routeIntent = async (req, res) => {
               if (blobAtom) {
                 try {
                   const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
-                  xintent.XBlobUnlink(X, routerWin, clientWin, blobAtom);
-
                   if (blob) {
                     writeJsonFrame(res, blob, { 'X-Blob-Id': blobAtom });
                   }
@@ -214,6 +212,7 @@ const routeIntent = async (req, res) => {
         X.on('event', responseHandler);
       });
 
+      const reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
       const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
       const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
       const dispatchFn = isXAudioPlay
@@ -226,12 +225,14 @@ const routeIntent = async (req, res) => {
         payload,
         txId,
         controlWord: reqControlWord,
+        dataBlob: reqDataBlob ? Number(reqDataBlob) : 0,
       });
 
       return await responsePromise;
     }
 
     // --- 2. Fire-and-Forget / Standard Response Path ---
+    const reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
     const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
     const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
     const dispatchFn = isXAudioPlay
@@ -243,6 +244,7 @@ const routeIntent = async (req, res) => {
       payload,
       txId,
       controlWord: reqControlWord,
+      dataBlob: reqDataBlob ? Number(reqDataBlob) : 0,
     });
 
     res.setHeader('Matchbox-Bridge', '1.0');
