@@ -13,7 +13,18 @@ logger.setProjectName('http-bridge');
 const { X, root } = await createClientWithPromises();
 await xintent.connectToRouter(X, root);
 const clientWin = await xintent.createClientWindow(X, root, 'http-intent-bridge');
-const { routeIntent, aggregateTomlAsObject } = require('./route-intent')({ X, root, clientWin });
+const wsClients = new Set();
+const broadcastWsFrame = (data) => {
+  if (!data) return;
+  const jsonStr = typeof data === 'string' ? data : JSON.stringify(data);
+  for (const ws of wsClients) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(jsonStr); } catch (_) {}
+    }
+  }
+};
+
+const { routeIntent, aggregateTomlAsObject, getActiveAudioStreams } = require('./route-intent')({ X, root, clientWin, broadcastWsFrame });
 const { routeApp, getApps } = require('./route-app');
 const {
   routeXBlobCreate,
@@ -56,6 +67,9 @@ const serveFavicon = (req, res) => {
 app.get('/favicon.ico', serveFavicon);
 app.get('/apps/favicon.ico', serveFavicon);
 app.get('/matchbox202x.js', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, 'assets', 'matchbox202x.js'));
 });
 app.get('/apps/:app{/:card}', routeApp);
@@ -63,6 +77,11 @@ app.get('/api/tags', async (req, res) => {
   res.json({
     ...await aggregateTomlAsObject(),
     apps: getApps(),
+  });
+});
+app.get('/api/debug/xaudio', (req, res) => {
+  res.json({
+    activeStreams: getActiveAudioStreams(),
   });
 });
 
@@ -90,7 +109,6 @@ const WebSocket = require('ws');
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
-const wsClients = new Set();
 
 wss.on('connection', (ws) => {
   logger.info('[http-bridge] Remote WebSocket client connected (e.g. Flammenwerfer)');
@@ -137,7 +155,7 @@ wss.on('connection', (ws) => {
 server.on('upgrade', (request, socket, head) => {
   try {
     const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
-    if (pathname === '/ws' || pathname === '/remote-intents') {
+    if (pathname === '/ws' || pathname === '/remote-intents' || pathname === '/xaudio') {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });

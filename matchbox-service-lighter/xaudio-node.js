@@ -65,46 +65,19 @@ async function processQueue(cookie) {
   if (!queue || queue.isPlaying) return;
 
   let item = queue.pending.get(queue.nextSeqnum);
-
-  // Fallback: If expected seqnum is missing but higher seqnums are queued, acknowledge skipped chunks and advance
-  if (!item && queue.pending.size > 0) {
-    const pendingSeqnums = Array.from(queue.pending.keys()).sort((a, b) => a - b);
-    const lowestPending = pendingSeqnums[0];
-    if (lowestPending > queue.nextSeqnum) {
-      logger.warn(`[XAudioSink] Missing seqnum(s) ${queue.nextSeqnum}..${lowestPending - 1}, advancing playback to seqnum ${lowestPending}`);
-
-      for (let skippedSeq = queue.nextSeqnum; skippedSeq < lowestPending; skippedSeq++) {
-        if (queue.pending.has(skippedSeq)) {
-          const skippedItem = queue.pending.get(skippedSeq);
-          queue.pending.delete(skippedSeq);
-          if (skippedItem && skippedItem.senderWin) {
-            const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
-            sendResponseFn(X, xintent.routerWin, {
-              targetWin: skippedItem.senderWin,
-              senderWin: lighterWin,
-              channel: skippedItem.channel || 0,
-              controlWord: 1,
-              payload: {
-                event: 'XAudioPlayResponseV0',
-                intent: 'XAudioPlayResponseV0',
-                OutputId: cookie,
-                cookie: cookie,
-                streamId: skippedItem.payload?.streamId !== undefined ? Number(skippedItem.payload.streamId) : 1,
-                seqnum: skippedSeq,
-                status: 410,
-                message: 'Skipped'
-              }
-            }).catch(e => logger.warn(`Failed to acknowledge skipped seqnum ${skippedSeq}:`, e.message));
-          }
-        }
+  if (!item) {
+    if (queue.pending.size > 0) {
+      const availableSeqnums = Array.from(queue.pending.keys()).sort((a, b) => a - b);
+      const lowestAvailable = availableSeqnums[0];
+      if (lowestAvailable > queue.nextSeqnum) {
+        logger.warn(`[XAudioSink] Missing seqnum ${queue.nextSeqnum} in queue, skipping gap to seqnum ${lowestAvailable}`);
+        queue.nextSeqnum = lowestAvailable;
+        item = queue.pending.get(queue.nextSeqnum);
       }
-
-      queue.nextSeqnum = lowestPending;
-      item = queue.pending.get(lowestPending);
     }
   }
 
-  if (!item) return;
+  if (!item) return; // Wait strictly for next sequential item to arrive
 
   queue.isPlaying = true;
   queue.pending.delete(queue.nextSeqnum);

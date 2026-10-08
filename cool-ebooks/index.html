@@ -228,11 +228,11 @@ function updateTtsStatus(msg) {
 
 // Ensure window.xintent client library is available
 async function ensureXIntent() {
-  if (window.xintent) return window.xintent;
+  if (window.xintent && typeof window.xintent.readMultipartStream === 'function') return window.xintent;
 
   return new Promise((resolve) => {
     const script = document.createElement('script');
-    script.src = '/matchbox202x.js';
+    script.src = '/matchbox202x.js?t=' + Date.now();
     script.onload = () => resolve(window.xintent);
     script.onerror = () => resolve(window.xintent);
     document.head.appendChild(script);
@@ -353,6 +353,70 @@ async function populateTagsOptions() {
   }
 }
 
+const chunkPlaybackResolvers = new Map(); // seqnum -> resolveFn
+let sessionMasterStream = null;
+const receivedStreamFrames = [];
+
+function handleXAudioFrame(frameData, source = 'ws') {
+  if (!frameData) return;
+  const json = frameData.json || frameData;
+  if (!json) return;
+
+  const evt = json.event || json.intent;
+  if (evt === 'XAudioPlayResponseV0' || evt === 'xaudio.PlaySoundBlobResponse' || json.seqnum !== undefined) {
+    const seqnum = json.seqnum;
+    if (seqnum !== undefined && chunkPlaybackResolvers.has(seqnum)) {
+      const targetNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'user-desktop-speakers' : 'user-desktop-speakers';
+      logDebug(`[XAudioPlayResponse (${source})] ${targetNode} confirmed playback for seq #${seqnum + 1}`);
+      const resolveFn = chunkPlaybackResolvers.get(seqnum);
+      chunkPlaybackResolvers.delete(seqnum);
+      resolveFn(json);
+    }
+  }
+}
+
+async function listenToSessionMasterStream(response, targetXAudioNode) {
+  if (!response || typeof response.readMultipartStream !== 'function') return;
+
+  try {
+    await response.readMultipartStream((frame) => {
+      if (frame) {
+        receivedStreamFrames.push({
+          time: new Date().toLocaleTimeString('en-US', { hour12: false }),
+          frame: frame
+        });
+      }
+      console.log('[cool-ebooks] Master stream frame received:', frame);
+      handleXAudioFrame(frame, 'HTTP-Stream');
+    });
+  } catch (err) {
+    console.warn('[cool-ebooks] Master stream reader closed:', err);
+  }
+}
+
+// Global console inspection object for cool-ebooks
+window.coolEbooks = {
+  getReceivedStreamFrames: () => receivedStreamFrames,
+  getPendingResolvers: () => Array.from(chunkPlaybackResolvers.keys()),
+  getTtsQueue: () => ttsQueue,
+  getTtsIndex: () => ttsIndex,
+  getMasterStreamBytesReceived: () => sessionMasterStream && typeof sessionMasterStream.getBytesReceived === 'function' ? sessionMasterStream.getBytesReceived() : 0,
+  getDebugState: () => ({
+    isTtsActive,
+    currentTtsCookie,
+    pendingTtsCount,
+    bufferedPlayCount,
+    totalWordsSent,
+    totalTtsWavBytesReceived: totalBytesReceived,
+    masterStreamBytesReceived: sessionMasterStream && typeof sessionMasterStream.getBytesReceived === 'function' ? sessionMasterStream.getBytesReceived() : 0,
+    masterStreamChunksCount: sessionMasterStream && typeof sessionMasterStream.getChunkCount === 'function' ? sessionMasterStream.getChunkCount() : 0,
+    receivedFramesCount: receivedStreamFrames.length,
+    pendingResolvers: Array.from(chunkPlaybackResolvers.keys()),
+    queueLength: ttsQueue.length,
+    receivedStreamFrames,
+  })
+};
+
 // Dispatch a single chunk to ui.TextToSpeech and stream audio to XAudioSink
 async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
   const targetTtsApp = ttsAppSelect ? ttsAppSelect.value || 'cool-tts' : 'cool-tts';
@@ -419,7 +483,10 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
         updatePipelineCounters(0, +1);
         logDebug(`[XAudioPlay] Streaming XBlob ${blobId} (seq #${seqnum + 1}, ctrl: SYN) to ${targetXAudioNode}...`);
 
-        const playStartTime = performance.now();
+        const playbackConfirmedPromise = new Promise((resolve) => {
+          chunkPlaybackResolvers.set(seqnum, resolve);
+        });
+
         const playRes = await window.xaudio.XAudioPlay({
           app: targetXAudioNode,
           streamId: 1,
@@ -429,9 +496,13 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
           transferBlob: true
         });
 
-        const playRttMs = Math.round(performance.now() - playStartTime);
+        if (playRes && typeof playRes.readMultipartStream === 'function' && !sessionMasterStream) {
+          sessionMasterStream = playRes;
+          listenToSessionMasterStream(playRes, targetXAudioNode);
+        }
+
+        await playbackConfirmedPromise;
         updatePipelineCounters(0, -1);
-        logDebug(`[XAudioPlayResponse] ${targetXAudioNode} confirmed playback for seq #${seqnum + 1} in ${playRttMs}ms`);
       }
       return true;
     } catch (err) {
@@ -529,6 +600,8 @@ async function stopTts() {
   isTtsActive = false;
   ttsQueue = [];
   ttsIndex = 0;
+  sessionMasterStream = null;
+  chunkPlaybackResolvers.clear();
   currentTtsPromise = null;
   nextTtsPromise = null;
   ttsPlayBtn.disabled = false;
@@ -757,8 +830,21 @@ document.addEventListener('keyup', (e) => {
   }
 });
 
-// Pre-load xintent and restore saved state
-ensureXIntent();
+// Pre-load xintent, connect real-time /xaudio WebSocket, and restore saved state
+ensureXIntent().then(() => {
+  if (window.xaudio && typeof window.xaudio.connectXAudioWs === 'function') {
+    window.xaudio.connectXAudioWs((frame) => {
+      if (frame) {
+        receivedStreamFrames.push({
+          time: new Date().toLocaleTimeString('en-US', { hour12: false }),
+          frame: frame
+        });
+      }
+      console.log('[cool-ebooks] WebSocket frame received:', frame);
+      handleXAudioFrame(frame, 'WebSocket');
+    });
+  }
+});
 restoreSavedState();
 
 </script>

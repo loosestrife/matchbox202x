@@ -6,6 +6,7 @@ const xintent = require('../x11-promises/xintent');
 const logger = new Logger({ module: 'route-intent' });
 let clientWin, X, root;
 let globalTransactionIdCounter = 1;
+const activeHttpAudioStreams = new Map(); // cookie -> { res, txId }
 
 /**
  * Reads the aggregated TOML property off routerWin
@@ -126,9 +127,13 @@ const routeIntent = async (req, res) => {
       const writeJsonFrame = (res, data, customHeaders = {}) => {
         if (!headersSent) {
           res.writeHead(200, {
-            'Content-Type': `multipart/mixed; boundary=${BOUNDARY}`,
-            'Cache-Control': 'no-cache, no-transform',
+            // firefox bug: firefox doesnt stream response data of type multipart/mixed to apps.  so we claim to be application/x-matchbox-stream instead
+            'Content-Type': `application/x-matchbox-stream; boundary=${BOUNDARY}`,
+            'Cache-Control': 'no-cache, no-store, must-revalidate, no-transform, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
             'Connection': 'keep-alive',
+            'X-Content-Type-Options': 'nosniff',
             'Matchbox-Bridge': '1.0',
           });
           headersSent = true;
@@ -142,6 +147,9 @@ const routeIntent = async (req, res) => {
         ];
 
         res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${jsonBody}\r\n\r\n`);
+        if (typeof res.flush === 'function') {
+          try { res.flush(); } catch (_) {}
+        }
       };
 
       const responsePromise = new Promise((resolve, reject) => {
@@ -168,6 +176,10 @@ const routeIntent = async (req, res) => {
                 txId,
                 controlWord: ev.data[2],
               });
+
+              if (typeof broadcastWsFrame === 'function' && eventData) {
+                broadcastWsFrame(eventData);
+              }
 
               const blobAtom = ev.data[4] || eventData?.data_blob || eventData?.blobId || eventData?.blob;
               const controlWord = ev.data[2];
@@ -205,6 +217,10 @@ const routeIntent = async (req, res) => {
                   res.write(`--${BOUNDARY}--\r\n`);
                   res.end();
                 }
+                const cookieKey = eventData?.cookie || eventData?.OutputId;
+                if (cookieKey) {
+                  activeHttpAudioStreams.delete(cookieKey);
+                }
                 X.removeListener('event', responseHandler);
                 resolve();
               }
@@ -227,9 +243,36 @@ const routeIntent = async (req, res) => {
       const reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
       const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
       const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
+      const cookie = payload.cookie || payload.Cookie || payload.OutputId || 'default';
+      const streamId = payload.streamId !== undefined ? Number(payload.streamId) : 0;
+      const isAudioStream = (streamId > 0 || payload.streamId) && isXAudioPlay;
+
       const dispatchFn = isXAudioPlay
         ? (xintent.sendXAudioPlayV0 || xintent.sendXIntentIntentV0)
         : (isXAudioControl ? (xintent.sendXAudioControlV0 || xintent.sendXIntentIntentV0) : xintent.sendXIntentIntentV0);
+
+      // Fast-path for subsequent audio stream chunk requests: queue on X11 bus, return 202 Accepted, and close connection
+      if (isAudioStream && activeHttpAudioStreams.has(cookie)) {
+        const primarySession = activeHttpAudioStreams.get(cookie);
+        logger.info(`route-intent: [XAUDIO STREAM] Active primary stream connection exists for cookie '${cookie}'. Forwarding seqnum ${payload.seqnum} on primary txId ${primarySession.txId} and returning 202 Accepted.`);
+
+        const routerWin = await xintent.getValidRouterWin(X, root);
+        await dispatchFn(X, routerWin, {
+          senderWin: clientWin,
+          payload,
+          txId: primarySession.txId,
+          controlWord: reqControlWord,
+          dataBlob: reqDataBlob ? Number(reqDataBlob) : 0,
+        });
+
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 202, message: 'Queued for playback', cookie, seqnum: payload.seqnum }));
+        return;
+      }
+
+      if (isAudioStream) {
+        activeHttpAudioStreams.set(cookie, { res, txId });
+      }
 
       const routerWin = await xintent.getValidRouterWin(X, root);
       await dispatchFn(X, routerWin, {
@@ -271,15 +314,27 @@ const routeIntent = async (req, res) => {
   }
 };
 
-module.exports = ({ X: xClient, root: xRoot, clientWin: theClientWin }) => {
+const getActiveAudioStreams = () => {
+  const streams = [];
+  for (const [cookie, session] of activeHttpAudioStreams.entries()) {
+    streams.push({ cookie, txId: session.txId });
+  }
+  return streams;
+};
+
+let broadcastWsFrame = null;
+
+module.exports = ({ X: xClient, root: xRoot, clientWin: theClientWin, broadcastWsFrame: theBroadcastWsFrame }) => {
   X = xClient;
   root = xRoot;
   clientWin = theClientWin;
+  broadcastWsFrame = theBroadcastWsFrame;
 
   return {
     routeIntent,
     getAggregateToml,
     fetchAggregateToml,
     aggregateTomlAsObject,
+    getActiveAudioStreams,
   };
 };

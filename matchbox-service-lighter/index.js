@@ -175,6 +175,7 @@ async function startLighter() {
 
   const xblobDestructorAtom = await X.InternAtom(false, 'XBLOB_DESTRUCTOR_V0');
   const xblobBroadcastAtom = await X.InternAtom(false, 'XBLOB_BROADCAST_V0');
+  const xblobCreateResponseAtom = await X.InternAtom(false, 'XBLOB_CREATE_RESPONSE_V0');
 
   const xaudioPlaySoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PLAY_V0');
   const xaudioPrefetchSoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PREFETCH_SOUND_BLOB_V0');
@@ -292,6 +293,10 @@ async function startLighter() {
               const frame = xintent.parseXBlobDestructorFrame(X, xintent.routerWin, ev);
               logger.setContext({ event: 'XBLOB_DESTRUCTOR', blob: xintent.widString(frame.blob) });
               await pickFiles.xblobDestructor(frame);
+            }
+            else if (ev.message_type == xblobCreateResponseAtom || ev.message_type == xintentDataAtom) {
+              // Response confirmation and data notification atoms handled by x11 response listeners
+              return;
             }
             else {
               logger.error(`got unknown message type atom ${ev.message_type}`);

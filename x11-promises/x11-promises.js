@@ -26,7 +26,8 @@ function wrapPromiseXClient(client) {
   if (typeof client.setMaxListeners === 'function') {
     client.setMaxListeners(100);
   }
-  const pendingRequests = new Map(); // seq -> PendingEntry
+  let requestIdCounter = 0;
+  const pendingRequests = new Map(); // reqKey -> PendingEntry
 
   // Advances the internal sequence clock and resolves/rejects pending promises
   function processIncomingPacket(pktType, pkt, pktSeq) {
@@ -99,11 +100,14 @@ function wrapPromiseXClient(client) {
 
     const orig = client[prop];
 
+    reqSeq = client.seq_num;
+    const reqKey = `${reqSeq}_${++requestIdCounter}`;
+
     if (isReply) {
       orig.call(client, ...args, (err, ...results) => {
         if (reqSeq !== undefined) {
           processIncomingPacket('reply', results[0], reqSeq);
-          pendingRequests.delete(reqSeq);
+          pendingRequests.delete(reqKey);
         }
         if (err) return rejectPromise(err);
         resolvePromise(results.length > 1 ? results : results[0]);
@@ -119,6 +123,7 @@ function wrapPromiseXClient(client) {
     promise.seq = reqSeq;
 
     const pendingEntry = {
+      key: reqKey,
       seq: reqSeq,
       seq16: reqSeq !== undefined ? reqSeq % 65536 : 0,
       isReplyMethod: isReply,
@@ -129,20 +134,20 @@ function wrapPromiseXClient(client) {
     };
 
     if (reqSeq !== undefined && (isReply || preconfiguredSeek)) {
-      pendingRequests.set(reqSeq, pendingEntry);
+      pendingRequests.set(reqKey, pendingEntry);
     }
 
     // Attach .seekResponsePacket(...) builder method to returned Promise
     promise.seekResponsePacket = function(predicate, timeoutMs = 5000) {
       pendingEntry.seekPredicate = predicate;
       if (reqSeq !== undefined) {
-        pendingRequests.set(reqSeq, pendingEntry);
+        pendingRequests.set(reqKey, pendingEntry);
       }
 
       if (timeoutMs > 0) {
         pendingEntry.timeoutTimer = setTimeout(() => {
-          if (pendingRequests.has(reqSeq)) {
-            pendingRequests.delete(reqSeq);
+          if (pendingRequests.has(reqKey)) {
+            pendingRequests.delete(reqKey);
             rejectPromise(new Error(`seekResponsePacket: timed out after ${timeoutMs}ms (seq ${reqSeq})`));
           }
         }, timeoutMs);

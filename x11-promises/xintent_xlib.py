@@ -111,6 +111,7 @@ class XIntentXlibClient:
         self.router_win_id: int = 0
         self.client_win = None
         self.handlers: Dict[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = {}
+        self.pending_events_queue = []
 
         self._intern_all_atoms()
         self.connect_to_router()
@@ -179,13 +180,24 @@ class XIntentXlibClient:
         atom_resp = int(self.atoms["XBLOB_CREATE_RESPONSE_V0"])
 
         while time.time() - start_time < timeout_sec:
-            if self.x11.disp.pending_events():
-                event = self.x11.disp.next_event()
+            events_to_check = list(self.pending_events_queue)
+            self.pending_events_queue.clear()
+
+            while self.x11.disp.pending_events():
+                events_to_check.append(self.x11.disp.next_event())
+
+            for event in events_to_check:
                 if event.type == X.ClientMessage and int(event.client_type) == atom_resp:
                     data32 = _extract_event_data(event)
                     if data32 and len(data32) >= 3 and (int(data32[2]) & 0xFFFFFFFF) == (cookie & 0xFFFFFFFF):
                         blob_atom = data32[1]
                         break
+
+                # Preserve non-matching events so they are processed in order by the main event loop
+                self.pending_events_queue.append(event)
+
+            if blob_atom:
+                break
             time.sleep(0.01)
 
         if not blob_atom:
@@ -361,8 +373,13 @@ class XIntentXlibClient:
         except Exception:
             pass
 
+        events = list(getattr(self, 'pending_events_queue', []))
+        self.pending_events_queue = []
+
         while self.x11.disp.pending_events():
-            event = self.x11.disp.next_event()
+            events.append(self.x11.disp.next_event())
+
+        for event in events:
             if event.type == X.PropertyNotify and hasattr(event, 'window') and event.window.id == self.x11.root.id:
                 if event.atom == self.atoms.get("XINTENT"):
                     self.connect_to_router()
@@ -373,6 +390,7 @@ class XIntentXlibClient:
         msg_type = int(event.client_type)
         atom_name = next((name for name, atom_id in self.atoms.items() if int(atom_id) == msg_type), str(msg_type))
         win_hex = hex(self.client_win.id) if self.client_win else "0x0"
+        logger.info(f"[xintent_xlib] Received ClientMessage '{atom_name}' ({msg_type}) on window {win_hex}")
         sys.stderr.write(f"[libxintent.py] Received ClientMessage type '{atom_name}' ({msg_type}) on window {win_hex}\n")
         sys.stderr.flush()
 
@@ -383,6 +401,7 @@ class XIntentXlibClient:
         if msg_type in valid_atoms:
             data32 = _extract_event_data(event)
             if not data32 or len(data32) < 3:
+                logger.error(f"[xintent_xlib] Invalid ClientMessage data array length ({len(data32) if data32 else 0}) on window {win_hex}")
                 sys.stderr.write(f"[libxintent.py error] Invalid ClientMessage data array length ({len(data32) if data32 else 0}) on window {win_hex}\n")
                 sys.stderr.flush()
                 return
@@ -393,6 +412,7 @@ class XIntentXlibClient:
             payload_blob  = data32[3] if len(data32) > 3 else data32[1]
             data_blob     = data32[4] if len(data32) > 4 else 0
 
+            logger.info(f"[xintent_xlib] ClientMessage details: atom={atom_name}, sender={hex(sender_win_id)}, channel={channel}, ctrl={control_word}, payload_blob={hex(payload_blob)}, data_blob={hex(data_blob)}")
             sys.stderr.write(f"[libxintent.py] ClientMessage details: sender={hex(sender_win_id)}, channel={channel}, ctrl={control_word}, payload_blob={hex(payload_blob)}, data_blob={hex(data_blob)}\n")
             sys.stderr.flush()
 
@@ -408,6 +428,7 @@ class XIntentXlibClient:
                 or payload.get("event")
                 or payload.get("action")
             )
+            logger.info(f"[xintent_xlib] Received message for intent '{intent_name}' on channel {channel} (payload_blob={hex(payload_blob)}, data_blob={hex(data_blob)}) on window {win_hex}")
             if intent_name in self.handlers:
                 logger.info(f"[xintent_xlib] Handling intent '{intent_name}' on window {win_hex}")
                 handler = self.handlers[intent_name]

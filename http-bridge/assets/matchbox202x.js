@@ -39,16 +39,132 @@
         const response = await fetch(endpoint, {
           method: 'POST',
           headers: headers,
+          cache: 'no-store',
           body: JSON.stringify(payload)
         });
         response.parseMultipart = async function() {
           const text = await this.text();
           return window.xintent.parseMultipartResponse(text);
         };
+        response.readMultipartStream = async function(onFrame) {
+          return window.xintent.readMultipartStream(this, onFrame);
+        };
         return response;
       } catch (err) {
         console.warn('[xintent] Intent dispatch warning:', err);
         throw err;
+      }
+    },
+
+    /**
+     * Reads and yields multipart frames in real-time from an active Fetch Response stream.
+     * @param {Response} response
+     * @param {function(frame: { headers: Record<string, string>, json?: any, body?: string }): void} onFrame
+     * @returns {Promise<void>}
+     */
+    readMultipartStream: async function(response, onFrame) {
+      if (!response || !response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let boundary = null;
+      let totalBytesReceived = 0;
+      let chunkCount = 0;
+
+      response.getBytesReceived = () => totalBytesReceived;
+      response.getChunkCount = () => chunkCount;
+      window.xintent.lastStreamMetrics = {
+        getBytesReceived: () => totalBytesReceived,
+        getChunkCount: () => chunkCount,
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) {
+          totalBytesReceived += value.byteLength;
+          chunkCount++;
+          buffer += decoder.decode(value, { stream: true });
+        }
+
+        if (!boundary && buffer.includes('MatchboxFrameBoundary')) {
+          const lines = buffer.split(/\r?\n/);
+          for (const line of lines) {
+            if (line.includes('MatchboxFrameBoundary')) {
+              let b = line.trim();
+              if (b.startsWith('--')) b = b.slice(2);
+              if (b.endsWith('--')) b = b.slice(0, -2);
+              boundary = b;
+              break;
+            }
+          }
+        }
+
+        if (boundary) {
+          const delimiter = '--' + boundary;
+          let parts = buffer.split(delimiter);
+
+          // We will retain the last part in buffer only if it is incomplete
+          let remainingBuffer = parts.pop() || '';
+
+          for (const part of parts) {
+            const trimmed = part.trim();
+            if (!trimmed || trimmed === '--' || trimmed.startsWith('--')) continue;
+
+            const headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
+            if (headerEnd === -1) continue;
+
+            const headerText = part.slice(0, headerEnd);
+            const bodyText = part.slice(headerEnd).trim();
+
+            const headers = {};
+            headerText.split(/\r?\n/).forEach(line => {
+              const colon = line.indexOf(':');
+              if (colon !== -1) {
+                headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+              }
+            });
+
+            let json = null;
+            try {
+              json = JSON.parse(bodyText);
+            } catch (_) {}
+
+            if (typeof onFrame === 'function') {
+              onFrame({ headers, json, body: bodyText });
+            }
+          }
+
+          // Check if remainingBuffer itself contains a complete, valid frame
+          const remainingTrimmed = remainingBuffer.trim();
+          if (remainingTrimmed && remainingTrimmed !== '--' && !remainingTrimmed.startsWith('--')) {
+            const headerEnd = remainingBuffer.indexOf('\r\n\r\n') !== -1 ? remainingBuffer.indexOf('\r\n\r\n') : remainingBuffer.indexOf('\n\n');
+            if (headerEnd !== -1) {
+              const headerText = remainingBuffer.slice(0, headerEnd);
+              const bodyText = remainingBuffer.slice(headerEnd).trim();
+              let json = null;
+              try {
+                json = JSON.parse(bodyText);
+                if (json) {
+                  const headers = {};
+                  headerText.split(/\r?\n/).forEach(line => {
+                    const colon = line.indexOf(':');
+                    if (colon !== -1) {
+                      headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+                    }
+                  });
+                  if (typeof onFrame === 'function') {
+                    onFrame({ headers, json, body: bodyText });
+                  }
+                  remainingBuffer = '';
+                }
+              } catch (_) {}
+            }
+          }
+
+          buffer = remainingBuffer;
+        }
+
+        if (done) break;
       }
     },
 
@@ -205,6 +321,52 @@
 
   // --- window.xaudio ---
   window.xaudio = window.xaudio || {
+    /**
+     * Connect a dedicated WebSocket for real-time XAudio response events
+     * @param {function(frame: any): void} [onFrameHandler=null]
+     * @returns {WebSocket}
+     */
+    connectXAudioWs: function(onFrameHandler = null) {
+      this._wsListeners = this._wsListeners || new Set();
+      if (typeof onFrameHandler === 'function') {
+        this._wsListeners.add(onFrameHandler);
+      }
+
+      if (this._ws && (this._ws.readyState === WebSocket.OPEN || this._ws.readyState === WebSocket.CONNECTING)) {
+        return this._ws;
+      }
+
+      const wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProtocol}//${window.location.host}/xaudio`;
+
+      try {
+        const ws = new WebSocket(wsUrl);
+        this._ws = ws;
+
+        ws.onopen = () => {
+          console.log('[xaudio] Real-time WebSocket connected to /xaudio');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const frame = JSON.parse(event.data);
+            for (const listener of this._wsListeners) {
+              try { listener(frame); } catch (_) {}
+            }
+          } catch (_) {}
+        };
+
+        ws.onclose = () => {
+          this._ws = null;
+        };
+
+        return ws;
+      } catch (err) {
+        console.warn('[xaudio] Could not establish /xaudio WebSocket:', err);
+        return null;
+      }
+    },
+
     /**
      * Play a sound sample/blob on XAudioSink with sequential ordering & automatic transfer
      * @param {Object|string|number} cookieOrOptions - Options object or cookie string
