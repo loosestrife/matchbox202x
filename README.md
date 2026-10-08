@@ -166,10 +166,10 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 | message_type: Atom("XINTENT_INTENT_V0")                               |
 | format      : 32                                                      |
 | data.l[0]   : Sender Window XID                                       |
-| data.l[1]   : Blob atom holding the json payload                      |
-| data.l[2]   : Transaction id / channel id                             |
-| data.l[3]   : Blob atom holding intent data (fs.SaveAs)               |
-| data.l[4]   : unused                                                  |
+| data.l[1]   : Transaction id / channel id                             |
+| data.l[4]   : Channel Control Word (bit 0 to open, bit 1 to close)    |
+| data.l[3]   : Blob id holding the json payload                        |
+| data.l[4]   : Blob id holding intent data (fs.SaveAs)                 |
 +-----------------------------------------------------------------------+
 ```
 
@@ -265,7 +265,7 @@ Applications not installed in `/wherever/matchbox/` are simply `my-cool-app.toml
 
 ```toml
 #!/usr/bin/matchbox202x
-[package]
+[app]
 id = "org.unix.editor"
 version = "1.0.0"
 name = "Simple Text Editor"
@@ -287,7 +287,7 @@ execDir = "."
 args = []
 env = {}
 
-[app]
+[app.main]
 type = "html"
 card = "main"
 

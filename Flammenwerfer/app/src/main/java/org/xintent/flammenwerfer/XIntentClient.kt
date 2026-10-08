@@ -76,6 +76,8 @@ id = "flammenwerfer-phone"
 [intents]
 "ui.Copy" = true
 "ui.Paste" = true
+"fs.PickFile" = true
+"fs.SaveAs" = true
 
 [XAudioSink]
 name = "flammenwerfer-phone"
@@ -89,7 +91,7 @@ name = "flammenwerfer-phone"
                 put("manifest", FLAMMENWERFER_MANIFEST)
             }
             webSocket.send(advertiseJson.toString())
-            addLog("[sys.Advertise] Advertised flammenwerfer-phone capabilities (ui.Copy, ui.Paste, XAudioNode)")
+            addLog("[sys.Advertise] Advertised flammenwerfer-phone capabilities (ui.Copy, ui.Paste, fs.PickFile, fs.SaveAs, XAudioNode)")
             Log.i(TAG, "Sent sys.Advertise over WebSocket")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending sys.Advertise", e)
