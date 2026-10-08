@@ -22,7 +22,7 @@ const {
   xblobUnlink,
 } = require("./xblob");
 
-const {activeChannels, txidToChannel, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage} = require('./xintent-channels');
+const {activeChannels, txidToChannel, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage} = require('./xchannel');
 const {
   intentRegistry,
   lighterRegistry,
