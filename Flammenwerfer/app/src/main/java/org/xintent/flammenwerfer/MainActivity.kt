@@ -382,7 +382,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                                 ) {
                                     appCard.cards.forEach { cardName ->
                                         Button(
-                                            onClick = { launchWebCard(appCard.appName, cardName) },
+                                            onClick = { launchWebCard(appCard.appId, cardName) },
                                         ) {
                                             Text("Launch '$cardName'")
                                         }

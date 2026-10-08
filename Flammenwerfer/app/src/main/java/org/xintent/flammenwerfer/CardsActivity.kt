@@ -120,12 +120,18 @@ class CardsActivity : ComponentActivity() {
 
       var headers = {
         'Content-Type': 'application/json',
-        'Accept': (payload && payload.Accept) ? payload.Accept : '*/*'
+        'Accept': (payload && payload.Accept) ? payload.Accept : '*/*',
+        'X-Forwarded-By': 'flammenwerfer-web-card'
       };
-      if (payload && payload.controlWord !== undefined) {
+
+      if (bodyData.controlWord === undefined && bodyData.Accept) {
+        bodyData.controlWord = 1;
+      }
+
+      if (bodyData.controlWord !== undefined) {
         var ctrlStrings = [];
-        if (payload.controlWord & 1) ctrlStrings.push('SYN');
-        if (payload.controlWord & 2) ctrlStrings.push('FIN');
+        if (bodyData.controlWord & 1) ctrlStrings.push('SYN');
+        if (bodyData.controlWord & 2) ctrlStrings.push('FIN');
         if (ctrlStrings.length > 0) {
           headers['X-Channel-Control'] = ctrlStrings.join(',');
         }

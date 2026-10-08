@@ -515,38 +515,76 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
 
 
 
+// Extract text starting from top of visible page
+function getVisiblePageText() {
+  if (!rendition) return "";
+
+  try {
+    const contents = rendition.getContents()[0];
+    if (!contents || !contents.document) return "";
+
+    const doc = contents.document;
+    const iframeWin = doc.defaultView || window;
+
+    const viewportHeight = iframeWin.innerHeight || doc.documentElement.clientHeight;
+    const viewportWidth = iframeWin.innerWidth || doc.documentElement.clientWidth;
+
+    // Extract text from text elements visible in current viewport, starting from top
+    const elements = doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
+    const visibleTexts = [];
+
+    elements.forEach(el => {
+      const rect = el.getBoundingClientRect();
+      const isVisible = (
+        rect.top >= -30 &&
+        rect.left >= -30 &&
+        rect.top <= (viewportHeight + 30) &&
+        rect.left <= (viewportWidth + 30) &&
+        rect.width > 0 && rect.height > 0
+      );
+
+      if (isVisible) {
+        const text = (el.innerText || el.textContent || "").replace(/\s+/g, ' ').trim();
+        if (text && !visibleTexts.some(t => t === text || t.includes(text))) {
+          visibleTexts.push(text);
+        }
+      }
+    });
+
+    if (visibleTexts.length > 0) {
+      return visibleTexts.join(' ');
+    }
+
+    // Fallback: epub.js range extraction
+    const location = rendition.currentLocation();
+    if (location && location.start && location.start.cfi) {
+      let range = null;
+      if (location.end && location.end.cfi) {
+        try { range = contents.range(location.start.cfi, location.end.cfi); } catch (e) {}
+      }
+      if (!range || !range.toString().trim()) {
+        try { range = contents.range(location.start.cfi); } catch (e) {}
+      }
+      if (range) {
+        const rangeText = range.toString().replace(/\s+/g, ' ').trim();
+        if (rangeText) return rangeText;
+      }
+    }
+
+    if (doc.body) {
+      return (doc.body.innerText || doc.body.textContent || "").replace(/\s+/g, ' ').trim();
+    }
+  } catch (err) {
+    console.warn('[cool-ebooks] getVisiblePageText error:', err);
+  }
+  return "";
+}
+
 // Double-Buffered TTS Execution Loop
 async function startDoubleBufferedTts() {
   if (isTtsActive) return;
 
-  let rawText = "";
-  if (rendition) {
-    try {
-      const contents = rendition.getContents()[0];
-      const location = rendition.currentLocation();
-      if (contents && location && location.start && location.start.cfi) {
-        let range = null;
-        if (location.end && location.end.cfi) {
-          try {
-            range = contents.range(location.start.cfi, location.end.cfi);
-          } catch (err) {}
-        }
-        if (!range || !range.toString().trim()) {
-          try {
-            range = contents.range(location.start.cfi);
-          } catch (err) {}
-        }
-        if (range) {
-          rawText = range.toString().trim();
-        }
-      }
-      if (!rawText && contents && contents.content) {
-        rawText = contents.content.innerText || contents.content.textContent || "";
-      }
-    } catch (e) {
-      console.warn('[cool-ebooks] Location text extraction warning:', e);
-    }
-  }
+  let rawText = getVisiblePageText();
 
   if (!rawText) {
     rawText = "In the beginning God created the heavens and the earth. And the earth was formless and void; and darkness was upon the face of the deep. And the Spirit of God moved upon the face of the waters. And God said, Let there be light: and there was light.";
@@ -591,9 +629,14 @@ async function startDoubleBufferedTts() {
   await Promise.all(activePromises);
 
   if (isTtsActive) {
-    updateTtsStatus("Finished reading section.");
+    updateTtsStatus("Finished page. Advancing to next page...");
+    // Auto-advance to next page and continue reading continuously!
+    if (rendition) {
+      await handlePageFlip('next');
+    }
+  } else {
+    stopTts();
   }
-  stopTts();
 }
 
 async function stopTts() {
@@ -628,19 +671,33 @@ async function stopTts() {
 
 // Handle Page Flip (drops buffers, flips page, and restarts TTS if playing)
 async function handlePageFlip(direction) {
+  console.log('[cool-ebooks] handlePageFlip direction:', direction, 'rendition:', Boolean(rendition));
+  if (!rendition) {
+    updateTtsStatus("Please select or upload an EPUB book file to navigate pages.");
+    logDebug("[Navigation] No EPUB book loaded into viewer.");
+    return;
+  }
+
   const wasPlaying = isTtsActive;
   await stopTts();
 
-  if (rendition) {
+  try {
     if (direction === 'next') {
-      await rendition.next();
+      logDebug("[Navigation] Flipping to Next Page...");
+      const res = await rendition.next();
+      console.log('[cool-ebooks] rendition.next() resolved:', res);
     } else if (direction === 'prev') {
-      await rendition.prev();
+      logDebug("[Navigation] Flipping to Previous Page...");
+      const res = await rendition.prev();
+      console.log('[cool-ebooks] rendition.prev() resolved:', res);
     }
+  } catch (err) {
+    console.warn('[cool-ebooks] Page flip warning:', err);
+    logDebug(`[Navigation Warning] ${err.message || err}`);
   }
 
   // Wait for rendition iframe content to settle on the new page
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  await new Promise((resolve) => setTimeout(resolve, 300));
 
   if (wasPlaying) {
     startDoubleBufferedTts();
@@ -651,22 +708,36 @@ async function handlePageFlip(direction) {
 async function handlePageJump() {
   const pageInput = document.getElementById('page-input');
   const pageNum = parseInt(pageInput.value, 10);
-  if (!pageNum || !book || !rendition) return;
+  console.log('[cool-ebooks] handlePageJump pageNum:', pageNum, 'book:', Boolean(book), 'rendition:', Boolean(rendition));
+  if (!book || !rendition) {
+    updateTtsStatus("Please select or upload an EPUB book file to navigate pages.");
+    logDebug("[Navigation] No EPUB book loaded into viewer.");
+    return;
+  }
+  if (!pageNum) return;
 
   const wasPlaying = isTtsActive;
   await stopTts();
 
-  if (book.locations && book.locations.total > 0) {
-    const targetPage = Math.max(1, Math.min(pageNum, book.locations.total));
-    const cfi = book.locations.cfiFromLocation(targetPage - 1);
-    if (cfi) {
-      await rendition.display(cfi);
+  try {
+    logDebug(`[Navigation] Jumping to Page #${pageNum}...`);
+    if (book.locations && book.locations.total > 0) {
+      const targetPage = Math.max(1, Math.min(pageNum, book.locations.total));
+      const cfi = book.locations.cfiFromLocation(targetPage - 1);
+      if (cfi) {
+        await rendition.display(cfi);
+      } else {
+        await rendition.display(targetPage - 1);
+      }
+    } else {
+      await rendition.display(pageNum - 1);
     }
-  } else {
-    await rendition.display(pageNum - 1);
+  } catch (err) {
+    console.warn('[cool-ebooks] Page jump error:', err);
+    logDebug(`[Navigation Error] ${err.message || err}`);
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  await new Promise((resolve) => setTimeout(resolve, 300));
 
   if (wasPlaying) {
     startDoubleBufferedTts();
@@ -699,14 +770,15 @@ function base64ToBuffer(base64Str) {
 
 // Load EPUB Data into epub.js rendition and bind location tracking
 function loadBookFromData(data, fileName, initialLocation = null) {
-  if (rendition) rendition.destroy();
+  if (rendition) {
+    try { rendition.destroy(); } catch (e) {}
+  }
 
   const bookBuffer = (typeof data === 'string') ? base64ToBuffer(data) : data;
   book = ePub(bookBuffer);
   rendition = book.renderTo("viewer", {
     width: "100%",
-    height: "100%",
-    spread: "always"
+    height: "100%"
   });
 
   if (initialLocation) {
@@ -717,6 +789,8 @@ function loadBookFromData(data, fileName, initialLocation = null) {
 
   // Track location changes: update UI and persist to localStorage
   rendition.on('relocated', (location) => {
+    console.log('[cool-ebooks] Relocated to:', location);
+    logDebug(`[Navigation] Displaying location CFI: ${location?.start?.cfi || 'unknown'}`);
     if (location && location.start) {
       try {
         localStorage.setItem('cool_ebooks_location', location.start.cfi);

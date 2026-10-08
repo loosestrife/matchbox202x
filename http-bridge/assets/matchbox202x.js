@@ -1,6 +1,20 @@
 (function(window) {
   'use strict';
 
+  function getForwardedByHeader(existingHeader = null) {
+    let forwardedBy = 'matchbox202x.js';
+    try {
+      if (window.location.pathname.startsWith('/apps/')) {
+        const appName = window.location.pathname.split('/')[2];
+        if (appName) forwardedBy += ` (${appName})`;
+      }
+    } catch (e) {}
+    if (existingHeader) {
+      forwardedBy = existingHeader + ', ' + forwardedBy;
+    }
+    return forwardedBy;
+  }
+
   // --- window.xintent ---
   window.xintent = window.xintent || {
     SYN: 1,
@@ -23,6 +37,12 @@
       const endpoint = `/intent/${namespace}/${action}?app=${encodeURIComponent(app)}`;
 
       const headers = { 'Content-Type': 'application/json' };
+
+      // Auto-infer SYN control word if expecting a stream (has Accept header) but not specified
+      if (payload.controlWord === undefined && payload.Accept) {
+        payload.controlWord = 1;
+      }
+
       if (payload.controlWord !== undefined) {
         const ctrlStrings = [];
         if (payload.controlWord & 1) ctrlStrings.push('SYN');
@@ -34,6 +54,7 @@
       if (payload.Accept) {
         headers['Accept'] = payload.Accept;
       }
+      headers['X-Forwarded-By'] = getForwardedByHeader(payload['X-Forwarded-By']);
 
       try {
         const response = await fetch(endpoint, {
@@ -222,7 +243,9 @@
      * @returns {Promise<{intents: Record<string, string[]>, apps: Record<string, any>}>}
      */
     getTags: async function() {
-      const res = await fetch('/api/tags');
+      const res = await fetch('/api/tags', {
+        headers: { 'X-Forwarded-By': getForwardedByHeader() }
+      });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status} ${res.statusText}`);
       }
@@ -240,7 +263,7 @@
     XBlobCreate: async function(blobData = {}) {
       const res = await fetch('/xblob/XBlobCreate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
         body: JSON.stringify(blobData)
       });
       if (!res.ok) throw new Error(`XBlobCreate failed: HTTP ${res.status}`);
@@ -256,7 +279,7 @@
     XBlobTransfer: async function(blobId, grantee = null) {
       const res = await fetch('/xblob/XBlobTransfer', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
         body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
       });
       if (!res.ok) throw new Error(`XBlobTransfer failed: HTTP ${res.status}`);
@@ -272,7 +295,7 @@
     XBlobGrant: async function(blobId, grantee = null) {
       const res = await fetch('/xblob/XBlobGrant', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
         body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
       });
       if (!res.ok) throw new Error(`XBlobGrant failed: HTTP ${res.status}`);
@@ -287,7 +310,7 @@
     XBlobUnlink: async function(blobId) {
       const res = await fetch('/xblob/XBlobUnlink', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
         body: JSON.stringify({ blobId: blobId, blob: blobId })
       });
       if (!res.ok) throw new Error(`XBlobUnlink failed: HTTP ${res.status}`);
@@ -304,7 +327,7 @@
     XBlobBroadcast: async function(blobId, host = null, version = null) {
       const res = await fetch('/xblob/XBlobBroadcast', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
         body: JSON.stringify({ blobId: blobId, blob: blobId, host: host, version: version })
       });
       if (!res.ok) throw new Error(`XBlobBroadcast failed: HTTP ${res.status}`);

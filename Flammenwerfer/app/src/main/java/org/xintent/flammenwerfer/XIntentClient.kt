@@ -263,6 +263,7 @@ name = "flammenwerfer-phone"
     }
 
     data class AppCardModel(
+        val appId: String,
         val appName: String,
         val description: String = "",
         val mainCard: String = "index",
@@ -298,6 +299,7 @@ name = "flammenwerfer-phone"
 
                 appCards.add(
                     AppCardModel(
+                        appId = appKey,
                         appName = name,
                         description = description,
                         mainCard = mainCard,
@@ -385,6 +387,7 @@ name = "flammenwerfer-phone"
                 connectTimeout = 8000
                 readTimeout = 15000
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
             }
 
             val responseCode = connection.responseCode
@@ -446,8 +449,8 @@ name = "flammenwerfer-phone"
                 put("text", text)
                 put("voice", voice)
                 put("speed", speed)
-                put("reply", true)
                 put("Accept", "*")
+                put("controlWord", 1)
             }
 
             val url = URL(fullUrl)
@@ -458,6 +461,8 @@ name = "flammenwerfer-phone"
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "audio/wav, application/json, */*")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+                setRequestProperty("X-Channel-Control", "SYN")
             }
 
             OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
@@ -520,8 +525,8 @@ name = "flammenwerfer-phone"
                 put("intent", "fs.PickFile")
                 put("app", targetApp)
                 put("holdOpenForWrite", holdOpenForWrite)
-                put("reply", true)
                 put("Accept", "*")
+                put("controlWord", 1)
             }
 
             val url = URL(fullUrl)
@@ -532,6 +537,8 @@ name = "flammenwerfer-phone"
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "*/*")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+                setRequestProperty("X-Channel-Control", "SYN")
             }
 
             OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
@@ -618,6 +625,7 @@ name = "flammenwerfer-phone"
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
             }
 
             OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
@@ -702,6 +710,7 @@ name = "flammenwerfer-phone"
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
             }
 
             OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
@@ -785,8 +794,8 @@ name = "flammenwerfer-phone"
                 put("text", text)
                 if (canReplace) {
                     put("replace", true)
-                    put("reply", true)
                     put("Accept", "*")
+                    put("controlWord", 1)
                 }
             }
 
@@ -797,8 +806,10 @@ name = "flammenwerfer-phone"
                 readTimeout = 15000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
                 if (canReplace) {
                     setRequestProperty("Accept", "*/*")
+                    setRequestProperty("X-Channel-Control", "SYN")
                 } else {
                     setRequestProperty("Accept", "application/json")
                 }

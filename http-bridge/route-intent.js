@@ -93,6 +93,14 @@ const routeIntent = async (req, res) => {
 
   const targetApp = payload.app;
 
+  const channelControlHeader = req.headers['x-channel-control'];
+  const channelHeader = req.headers['x-channel'];
+  const forwardedByHeader = req.headers['x-forwarded-by'];
+  const logPayload = { ...payload };
+  if (channelHeader) logPayload['X-Channel'] = channelHeader;
+  if (channelControlHeader) logPayload['X-Channel-Control'] = channelControlHeader;
+  if (forwardedByHeader) logPayload['X-Forwarded-By'] = forwardedByHeader;
+
   // Store intent context in AsyncLocalStorage so all error logs include the intent JSON
   logger.setContext({
     intent,
@@ -100,10 +108,8 @@ const routeIntent = async (req, res) => {
     intentJson: payload
   });
 
-  logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, payload);
+  logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, logPayload);
   const txId = globalTransactionIdCounter++;
-
-  const channelControlHeader = req.headers['x-channel-control'];
   let reqControlWord = payload.controlWord;
   if (channelControlHeader) {
     let cw = 0;
@@ -116,7 +122,7 @@ const routeIntent = async (req, res) => {
   }
 
   const hasChannelControl = Boolean(channelControlHeader) || reqControlWord !== undefined;
-  const isStreamedResponse = hasChannelControl || payload.Accept || req.headers['accept'] || payload.reply;
+  const isStreamedResponse = hasChannelControl || payload.Accept || req.headers['accept'];
 
   try {
     // --- 1. Streamed Multipart Response Path ---
