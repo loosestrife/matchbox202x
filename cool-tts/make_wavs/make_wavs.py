@@ -91,7 +91,7 @@ def intent_server():
                 res_payload["_dataType"] = "base64"
             return res_payload
         except Exception as e:
-            logger.info(f"[cool-tts] TTS generation failed: {e}")
+            logger.error(f"[cool-tts] TTS generation failed: {e}", exc_info=True)
             return {
                 "status": "error",
                 "message": str(e),

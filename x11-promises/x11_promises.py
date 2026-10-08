@@ -77,15 +77,13 @@ class X11PromisesClient:
         """
         Constructs and dispatches a 32-byte X11 ClientMessage event.
         """
-        import array
         target_win = self.disp.create_resource_object("window", target_win_id)
-        data_5 = (list(data)[:5] + [0] * (5 - len(list(data))))[:5]
-        arr = array.array('I', [int(x) & 0xFFFFFFFF for x in data_5])
+        data_5 = [int(x) & 0xFFFFFFFF for x in (list(data)[:5] + [0] * (5 - len(list(data))))[:5]]
 
         event = protocol.event.ClientMessage(
             window=target_win,
             client_type=message_type_atom,
-            data=(32, arr),
+            data=(32, data_5),
         )
         target_win.send_event(event, event_mask=X.NoEventMask)
         self.disp.flush()
@@ -96,15 +94,21 @@ class X11PromisesClient:
         """
         Reads string window property across 32KB chunks.
         """
-        win = self.disp.create_resource_object("window", win_id)
-        prop = win.get_full_property(property_atom, X.AnyPropertyType)
-        if prop and prop.value:
-            if isinstance(prop.value, bytes):
-                return prop.value.decode("utf-8", errors="replace")
-            elif isinstance(prop.value, str):
-                return prop.value
-            else:
-                return bytes(prop.value).decode("utf-8", errors="replace")
+        try:
+            win = self.disp.create_resource_object("window", win_id)
+            prop = win.get_full_property(property_atom, Xatom.STRING)
+            if not prop or not prop.value:
+                prop = win.get_full_property(property_atom, X.AnyPropertyType)
+            if prop and prop.value:
+                if isinstance(prop.value, bytes):
+                    return prop.value.decode("utf-8", errors="replace")
+                elif isinstance(prop.value, str):
+                    return prop.value
+                else:
+                    return bytes(prop.value).decode("utf-8", errors="replace")
+        except Exception as e:
+            sys.stderr.write(f"[x11_promises.py] get_window_property_string error on win {hex(win_id)} atom {hex(property_atom)}: {e}\n")
+            sys.stderr.flush()
         return None
 
     def set_window_property_string(

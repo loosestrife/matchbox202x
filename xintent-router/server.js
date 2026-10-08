@@ -72,6 +72,9 @@ async function startRouter() {
   }
 
   X.ChangeProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 8, 'XINTENT_ROUTER');
+  const pidBuf = Buffer.alloc(4);
+  pidBuf.writeUInt32LE(process.pid, 0);
+  X.ChangeProperty(0, routerWin, atoms._NET_WM_PID, atoms.CARDINAL, 32, pidBuf);
 
   logger.info('atoms are', atoms);
   X.ChangeWindowAttributes(root, { eventMask: x11.eventMask.SubstructureNotify });

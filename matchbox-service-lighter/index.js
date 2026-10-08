@@ -257,9 +257,9 @@ async function startLighter() {
                 return;
               }
             }
-            else if (ev.message_type == xaudioPlayAtom) {
+            else if (ev.message_type == xaudioPlaySoundBlobAtom) {
               const { payload, senderWin } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-              logger.setContext({ intent: 'xaudio.PlaySoundBlob' });
+              logger.setContext({ intent: 'xaudio.Play' });
               await xaudioNode.playSoundBlob(payload, senderWin);
             }
             else if (ev.message_type == xaudioPrefetchSoundBlobAtom) {

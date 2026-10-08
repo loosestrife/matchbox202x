@@ -15,15 +15,21 @@ const rules = [
 
 const checkXSecurePolicy = async (context, parsed, ev) => {
   let user;
-  if(context.source.window){
+  if (context.source.window) {
     user = 'window';
     // TODO: make the x11 npm module return the BadWindow to the await here
     const prop = await X.GetProperty(0, context.source.window, atoms._NET_WM_PID, atoms.CARDINAL, 0, 100000000);
-    if(prop && prop.data){
+    if (prop && prop.data && prop.data.length >= 4) {
       context.source.pid = prop.data.readUInt32LE(0);
-      context.source.cli = fs.readFileSync(`/proc/${context.source.pid}/cmdline`);
-      // todo: determine if quack.exe sent the request and give it authentication 'quack.exe'
-      user = authentication[context.source.cli] || user;
+      try {
+        context.source.cli = fs.readFileSync(`/proc/${context.source.pid}/cmdline`).toString('utf8');
+        user = authentication[context.source.cli] || user;
+      } catch (err) {
+        logger.warn(`Window ${widString(context.source.window)} has PID ${context.source.pid} but /proc/cmdline unreadable: ${err.message}`);
+      }
+    } else {
+      const actionName = context.action || parsed?.payload?.intent || parsed?.payload?.event || parsed?.payload?.action || 'unknown';
+      logger.warn(`Window ${widString(context.source.window)} sent request '${actionName}' without valid _NET_WM_PID property`);
     }
   } else {
     user = 'rando';

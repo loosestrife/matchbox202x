@@ -7,11 +7,12 @@ const { activeChannels, newChannel, closeChannel, getChannel, getChannelToSend, 
 const { lighterAudioRegistry, windowRegistry } = require('./xintent-registry');
 
 function findXAudioSinkWindow() {
-  const lighterEntry = Object.values(lighterAudioRegistry)[0];
+  const lighterEntries = lighterAudioRegistry ? Object.values(lighterAudioRegistry) : [];
+  const lighterEntry = lighterEntries[0];
   if (lighterEntry && lighterEntry.wid) {
     return lighterEntry.wid;
   }
-  for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
+  for (const [widStr, matchboxToml] of Object.entries(windowRegistry || {})) {
     if (matchboxToml && matchboxToml.XAudioSink) {
       return parseInt(widStr, 10);
     }

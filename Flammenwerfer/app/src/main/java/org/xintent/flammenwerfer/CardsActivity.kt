@@ -131,11 +131,63 @@ class CardsActivity : ComponentActivity() {
         }
       }
 
-      return await fetch(url, {
+      var response = await fetch(url, {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(bodyData)
       });
+      response.parseMultipart = async function() {
+        var text = await this.text();
+        return window.xintent.parseMultipartResponse(text);
+      };
+      return response;
+    },
+
+    parseMultipartResponse: function(responseText) {
+      var parts = [];
+      if (!responseText || typeof responseText !== 'string') return parts;
+
+      if (!responseText.includes('MatchboxFrameBoundary')) {
+        try {
+          parts.push({ headers: {}, json: JSON.parse(responseText) });
+        } catch (_) {
+          parts.push({ headers: {}, body: responseText });
+        }
+        return parts;
+      }
+
+      var lines = responseText.split(/\r?\n/);
+      var boundary = lines[0].trim();
+      var rawParts = responseText.split(boundary).filter(function(p) {
+        return p.trim() && !p.includes('--\r') && !p.includes('--\n');
+      });
+
+      for (var i = 0; i < rawParts.length; i++) {
+        var part = rawParts[i];
+        var headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
+        if (headerEnd === -1) continue;
+
+        var headerText = part.slice(0, headerEnd);
+        var bodyText = part.slice(headerEnd).trim();
+
+        var headers = {};
+        headerText.split(/\r?\n/).forEach(function(line) {
+          var colon = line.indexOf(':');
+          if (colon !== -1) {
+            var k = line.slice(0, colon).trim().toLowerCase();
+            var v = line.slice(colon + 1).trim();
+            headers[k] = v;
+          }
+        });
+
+        try {
+          var json = JSON.parse(bodyText);
+          parts.push({ headers: headers, json: json, body: bodyText });
+        } catch (_) {
+          parts.push({ headers: headers, body: bodyText });
+        }
+      }
+      return parts;
     }
   };
 

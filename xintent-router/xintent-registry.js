@@ -264,6 +264,7 @@ module.exports = {
   intentRegistry,
   lighterRegistry,
   windowRegistry,
+  lighterAudioRegistry,
   getAllMatchboxToml,
   parseWindowToml,
   parseWindowLighterToml,

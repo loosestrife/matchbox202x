@@ -306,43 +306,7 @@ function updateDebugMetrics(words, bytes, rttMs) {
   document.getElementById('debug-rtt').textContent = `${rttMs} ms`;
 }
 
-function parseMultipartResponse(responseText) {
-  const parts = [];
-  if (!responseText || !responseText.includes('MatchboxFrameBoundary')) {
-    try {
-      parts.push({ headers: {}, json: JSON.parse(responseText) });
-    } catch (_) {}
-    return parts;
-  }
 
-  const lines = responseText.split(/\r?\n/);
-  const boundary = lines[0].trim();
-  const rawParts = responseText.split(boundary).filter(p => p.trim() && !p.includes('--\r') && !p.includes('--\n'));
-
-  for (const part of rawParts) {
-    const headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
-    if (headerEnd === -1) continue;
-
-    const headerText = part.slice(0, headerEnd);
-    const bodyText = part.slice(headerEnd).trim();
-
-    const headers = {};
-    headerText.split(/\r?\n/).forEach(line => {
-      const colon = line.indexOf(':');
-      if (colon !== -1) {
-        const k = line.slice(0, colon).trim().toLowerCase();
-        const v = line.slice(colon + 1).trim();
-        headers[k] = v;
-      }
-    });
-
-    try {
-      const json = JSON.parse(bodyText);
-      parts.push({ headers, json });
-    } catch (_) {}
-  }
-  return parts;
-}
 
 const ttsAppSelect = document.getElementById('tts-app-select');
 const xaudioNodeSelect = document.getElementById('xaudio-node-select');
@@ -421,12 +385,16 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
 
       if (response && response.ok) {
         try {
-          const rawText = await response.text();
-          const parts = parseMultipartResponse(rawText);
+          const parts = typeof response.parseMultipart === 'function'
+            ? await response.parseMultipart()
+            : window.xintent.parseMultipartResponse(await response.text());
 
           for (const part of parts) {
-            if (part.headers['xintent-attached-data-blob']) {
-              blobId = part.headers['xintent-attached-data-blob'];
+            if (part.headers['x-attached-blob-id']) {
+              blobId = part.headers['x-attached-blob-id'];
+            }
+            if (part.headers['x-blob-id']) {
+              blobId = part.headers['x-blob-id'];
             }
             if (part.json) {
               if (part.json.data_blob || part.json.blobId || part.json.blob) {
@@ -484,10 +452,29 @@ async function startDoubleBufferedTts() {
   if (rendition) {
     try {
       const contents = rendition.getContents()[0];
-      if (contents && contents.content) {
+      const location = rendition.currentLocation();
+      if (contents && location && location.start && location.start.cfi) {
+        let range = null;
+        if (location.end && location.end.cfi) {
+          try {
+            range = contents.range(location.start.cfi, location.end.cfi);
+          } catch (err) {}
+        }
+        if (!range || !range.toString().trim()) {
+          try {
+            range = contents.range(location.start.cfi);
+          } catch (err) {}
+        }
+        if (range) {
+          rawText = range.toString().trim();
+        }
+      }
+      if (!rawText && contents && contents.content) {
         rawText = contents.content.innerText || contents.content.textContent || "";
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[cool-ebooks] Location text extraction warning:', e);
+    }
   }
 
   if (!rawText) {

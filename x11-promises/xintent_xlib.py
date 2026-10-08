@@ -11,7 +11,10 @@ import socket
 import sys
 import time
 import traceback
+import logging
 from typing import Dict, Any, Optional, Callable
+
+logger = logging.getLogger("xintent_xlib")
 
 from x11_promises import X11PromisesClient, HAS_XLIB
 
@@ -278,15 +281,17 @@ class XIntentXlibClient:
         payload: Dict[str, Any],
         tx_id: int = 0,
         channel: int = 0,
+        control_word: int = 0,
         data_blob: int = 0,
     ) -> int:
         return self._send_xi_v0(
-            self.atoms["XINTENT_INTENT_V0"],
-            target_win_id,
-            payload,
-            tx_id,
-            channel,
-            data_blob,
+            message_type_atom=self.atoms["XINTENT_INTENT_V0"],
+            target_win_id=target_win_id,
+            payload=payload,
+            tx_id=tx_id,
+            channel=channel,
+            control_word=control_word,
+            data_blob=data_blob,
         )
 
     def send_event(
@@ -295,15 +300,17 @@ class XIntentXlibClient:
         payload: Dict[str, Any],
         tx_id: int = 0,
         channel: int = 0,
+        control_word: int = 0,
         data_blob: int = 0,
     ) -> int:
         return self._send_xi_v0(
-            self.atoms["XINTENT_EVENT_V0"],
-            target_win_id,
-            payload,
-            tx_id,
-            channel,
-            data_blob,
+            message_type_atom=self.atoms["XINTENT_EVENT_V0"],
+            target_win_id=target_win_id,
+            payload=payload,
+            tx_id=tx_id,
+            channel=channel,
+            control_word=control_word,
+            data_blob=data_blob,
         )
 
     def _send_xi_v0(
@@ -348,6 +355,12 @@ class XIntentXlibClient:
 
     def process_events_once(self):
         """Processes pending incoming X11 events."""
+        try:
+            if hasattr(self.x11, 'disp') and hasattr(self.x11.disp, 'fill_raw_data'):
+                self.x11.disp.fill_raw_data()
+        except Exception:
+            pass
+
         while self.x11.disp.pending_events():
             event = self.x11.disp.next_event()
             if event.type == X.PropertyNotify and hasattr(event, 'window') and event.window.id == self.x11.root.id:
@@ -387,8 +400,7 @@ class XIntentXlibClient:
                 payload = self.blob_read(payload_blob)
                 self.blob_unlink(payload_blob)
             except Exception as err:
-                sys.stderr.write(f"[libxintent.py error] Error reading payload blob {hex(payload_blob)}: {err}\n{traceback.format_exc()}\n")
-                sys.stderr.flush()
+                logger.error(f"[xintent_xlib] Error reading payload blob {hex(payload_blob)}: {err}", exc_info=True)
                 return
 
             intent_name = (
@@ -397,8 +409,7 @@ class XIntentXlibClient:
                 or payload.get("action")
             )
             if intent_name in self.handlers:
-                sys.stderr.write(f"[libxintent.py] Handling intent '{intent_name}' on window {win_hex}\n")
-                sys.stderr.flush()
+                logger.info(f"[xintent_xlib] Handling intent '{intent_name}' on window {win_hex}")
                 handler = self.handlers[intent_name]
                 frame = {
                     "intent": intent_name,
@@ -415,15 +426,12 @@ class XIntentXlibClient:
                         if isinstance(res_payload, dict) and "data_blob" in res_payload:
                             data_blob_id = res_payload.pop("data_blob")
                         router_id = self.get_router_win_id()
-                        sys.stderr.write(f"[libxintent.py] Sending event response for '{intent_name}' back to router {hex(router_id)} on channel {channel} with data_blob {hex(data_blob_id)}\n")
-                        sys.stderr.flush()
+                        logger.info(f"[xintent_xlib] Sending event response for '{intent_name}' back to router {hex(router_id)} on channel {channel} with data_blob {hex(data_blob_id)}")
                         self.send_event(router_id, res_payload, channel=channel, data_blob=data_blob_id)
                 except Exception as err:
-                    sys.stderr.write(f"[libxintent.py error] Error executing handler for '{intent_name}': {err}\n{traceback.format_exc()}\n")
-                    sys.stderr.flush()
+                    logger.error(f"[xintent_xlib] Error executing handler for '{intent_name}': {err}", exc_info=True)
             else:
-                sys.stderr.write(f"[libxintent.py warning] No handler registered for intent '{intent_name}' in app '{self.app_id}'\n")
-                sys.stderr.flush()
+                logger.warning(f"[xintent_xlib] No handler registered for intent '{intent_name}' in app '{self.app_id}'")
         else:
             sys.stderr.write(f"[libxintent.py warning] Unhandled ClientMessage type '{atom_name}' ({msg_type}) on window {win_hex}\n")
             sys.stderr.flush()

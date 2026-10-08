@@ -41,11 +41,64 @@
           headers: headers,
           body: JSON.stringify(payload)
         });
+        response.parseMultipart = async function() {
+          const text = await this.text();
+          return window.xintent.parseMultipartResponse(text);
+        };
         return response;
       } catch (err) {
         console.warn('[xintent] Intent dispatch warning:', err);
         throw err;
       }
+    },
+
+    /**
+     * Parses a multipart/mixed response text string into an array of frame objects.
+     * @param {string} responseText
+     * @returns {Array<{ headers: Record<string, string>, json?: any, body?: string }>}
+     */
+    parseMultipartResponse: function(responseText) {
+      const parts = [];
+      if (!responseText || typeof responseText !== 'string') return parts;
+
+      if (!responseText.includes('MatchboxFrameBoundary')) {
+        try {
+          parts.push({ headers: {}, json: JSON.parse(responseText) });
+        } catch (_) {
+          parts.push({ headers: {}, body: responseText });
+        }
+        return parts;
+      }
+
+      const lines = responseText.split(/\r?\n/);
+      const boundary = lines[0].trim();
+      const rawParts = responseText.split(boundary).filter(p => p.trim() && !p.includes('--\r') && !p.includes('--\n'));
+
+      for (const part of rawParts) {
+        const headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
+        if (headerEnd === -1) continue;
+
+        const headerText = part.slice(0, headerEnd);
+        const bodyText = part.slice(headerEnd).trim();
+
+        const headers = {};
+        headerText.split(/\r?\n/).forEach(line => {
+          const colon = line.indexOf(':');
+          if (colon !== -1) {
+            const k = line.slice(0, colon).trim().toLowerCase();
+            const v = line.slice(colon + 1).trim();
+            headers[k] = v;
+          }
+        });
+
+        try {
+          const json = JSON.parse(bodyText);
+          parts.push({ headers, json, body: bodyText });
+        } catch (_) {
+          parts.push({ headers, body: bodyText });
+        }
+      }
+      return parts;
     },
 
     /**

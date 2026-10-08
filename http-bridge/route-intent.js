@@ -161,7 +161,7 @@ const routeIntent = async (req, res) => {
               const controlWord = ev.data[2];
               const customIntentHeaders = {};
               if (blobAtom) {
-                customIntentHeaders['xintent-attached-data-blob'] = blobAtom;
+                customIntentHeaders['X-Attached-Blob-Id'] = blobAtom;
               }
               if (controlWord !== undefined) {
                 const ctrlStrings = [];
@@ -180,7 +180,7 @@ const routeIntent = async (req, res) => {
                   xintent.XBlobUnlink(X, routerWin, clientWin, blobAtom);
 
                   if (blob) {
-                    writeJsonFrame(res, blob, { 'xblob-id': blobAtom });
+                    writeJsonFrame(res, blob, { 'X-Blob-Id': blobAtom });
                   }
                 } catch (err) {
                   logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });

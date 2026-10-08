@@ -12,7 +12,11 @@ import json
 import time
 import os
 import select
+import logging
 from typing import Callable, Dict, Any, Optional
+
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(levelname)s %(name)s] %(message)s")
+logger = logging.getLogger("libxintent")
 
 try:
     from xintent_xlib import XIntentXlibClient, SYN, FIN, SYN_FIN
@@ -176,8 +180,7 @@ class XIntentServer:
                             disposition="final",
                         )
             except Exception as err:
-                sys.stderr.write(f"[libxintent.py] Error executing handler for '{intent_name}': {err}\n")
-                sys.stderr.flush()
+                logger.error(f"[libxintent.py] Error executing handler for '{intent_name}': {err}", exc_info=True)
                 self.send_event(
                     event_name=f"{intent_name}Error",
                     payload={"message": str(err)},
@@ -186,8 +189,7 @@ class XIntentServer:
                     status="error",
                 )
         else:
-            sys.stderr.write(f"[libxintent.py] No handler registered for intent '{intent_name}' in app '{self.app_id}'\n")
-            sys.stderr.flush()
+            logger.warning(f"[libxintent.py] No handler registered for intent '{intent_name}' in app '{self.app_id}'")
 
     def run(self):
         """
@@ -197,14 +199,28 @@ class XIntentServer:
         sys.stderr.flush()
         buffer = ""
         stdin_open = True
+
+        x11_fd = None
+        try:
+            if self.x11_client and hasattr(self.x11_client, 'x11') and hasattr(self.x11_client.x11, 'disp'):
+                x11_fd = self.x11_client.x11.disp.display.socket.fileno()
+        except Exception:
+            x11_fd = None
+
         while True:
             try:
                 if self.x11_client:
                     self.x11_client.process_events_once()
 
+                rfds = []
                 if stdin_open:
-                    r, _, _ = select.select([sys.stdin], [], [], 0.05)
-                    if r:
+                    rfds.append(sys.stdin)
+                if x11_fd is not None:
+                    rfds.append(x11_fd)
+
+                if rfds:
+                    r, _, _ = select.select(rfds, [], [], 0.05)
+                    if sys.stdin in r:
                         chunk = sys.stdin.read(1)
                         if not chunk:
                             stdin_open = False
@@ -220,6 +236,10 @@ class XIntentServer:
                                     except json.JSONDecodeError as e:
                                         sys.stderr.write(f"[libxintent.py] Invalid JSON frame: {e} in '{frame_str}'\n")
                                         sys.stderr.flush()
+
+                    if x11_fd is not None and x11_fd in r:
+                        if self.x11_client:
+                            self.x11_client.process_events_once()
                 else:
                     time.sleep(0.05)
 
