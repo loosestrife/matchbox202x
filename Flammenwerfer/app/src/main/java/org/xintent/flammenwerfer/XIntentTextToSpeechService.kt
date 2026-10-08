@@ -5,6 +5,7 @@ import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
+import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.runBlocking
 
@@ -45,12 +46,25 @@ class XIntentTextToSpeechService : TextToSpeechService() {
         callback.start(sampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
 
         runBlocking {
-            XIntentClient.sendTextToSpeechIntent(
+            val result = XIntentClient.sendTextToSpeechIntent(
                 context = applicationContext,
                 text = text,
                 targetApp = targetApp,
                 speed = speechRate,
             )
+
+            if (result.success && result.replacementText != null) {
+                val wavBytes = Base64.decode(result.replacementText, Base64.DEFAULT)
+                if (wavBytes.isNotEmpty()) {
+                    // Skip 44-byte WAV header to get pure PCM payload
+                    val pcmOffset = 44
+                    val pcmLength = wavBytes.size - pcmOffset
+                    if (pcmLength > 0) {
+                        Log.i(TAG, "Streaming $pcmLength bytes of PCM data to Android TTS engine")
+                        callback.audioAvailable(wavBytes, pcmOffset, pcmLength)
+                    }
+                }
+            }
         }
 
         callback.done()

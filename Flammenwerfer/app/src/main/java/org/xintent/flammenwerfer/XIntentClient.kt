@@ -1,6 +1,7 @@
 package org.xintent.flammenwerfer
 
 import android.content.Context
+import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -481,7 +482,8 @@ name = "flammenwerfer-phone"
             while (reader.read(buffer).also { bytesRead = it } != -1) {
                 responseTextBuilder.appendRange(buffer, 0, bytesRead)
                 val currentText = responseTextBuilder.toString().trim()
-                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+                if (currentText.contains("--MatchboxFrameBoundary_") && 
+                    (currentText.contains("--\r\n") || currentText.contains("--\n"))) break
             }
 
             val responseText = responseTextBuilder.toString()
@@ -492,11 +494,19 @@ name = "flammenwerfer-phone"
                 responseText.ifBlank { "(Audio or stream response)" }
             }
 
-            Log.i(TAG, "Sent ui.TextToSpeech to $targetApp [$responseCode]: $responseText")
+            var audioBytes: ByteArray? = null
+            for (json in jsonObjects) {
+                if (json.has("data") && json.optString("_dataType") == "base64") {
+                    audioBytes = Base64.decode(json.getString("data"), Base64.DEFAULT)
+                    break
+                }
+            }
+
+            Log.i(TAG, "Sent ui.TextToSpeech to $targetApp [$responseCode]: parsed ${jsonObjects.size} JSON blocks. AudioBytes size: ${audioBytes?.size}")
 
             if (responseCode in 200..299) {
                 addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
-                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay, replacementText = audioBytes?.let { Base64.encodeToString(it, Base64.DEFAULT) })
             } else {
                 addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
                 Result(success = false, statusCode = responseCode, responseBody = formattedDisplay, errorMessage = "HTTP $responseCode")

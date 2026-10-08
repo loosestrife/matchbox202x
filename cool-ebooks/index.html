@@ -143,6 +143,7 @@
 
   <div class="controls">
     <input type="file" id="file-input" accept=".epub" />
+    <button id="xintent-pick" style="background-color: #6a1b9a;">XIntent fs.PickFile</button>
     <button id="prev">‹ Previous</button>
     <button id="next">Next ›</button>
 
@@ -850,6 +851,54 @@ function restoreSavedState() {
 }
 
 // EPUB File Loading
+document.getElementById('xintent-pick').addEventListener('click', async () => {
+  if (!window.xintent) {
+    alert("window.xintent not loaded yet");
+    return;
+  }
+  try {
+    const res = await window.xintent.intent('fs.PickFile', {
+      intent: 'fs.PickFile',
+      Accept: 'application/json'
+    });
+    if (res && res.ok) {
+      let parts = [];
+      if (typeof res.parseMultipart === 'function') {
+        parts = await res.parseMultipart();
+      } else {
+        parts = window.xintent.parseMultipartResponse(await res.text());
+      }
+
+      const blobPart = parts.find(p => p.json && p.json.blob);
+      if (blobPart && blobPart.json.blob.data) {
+        let base64Data = blobPart.json.blob.data;
+        let fileName = blobPart.json.blob.name || 'xintent-book.epub';
+
+        const binaryStr = atob(base64Data);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+
+        try {
+          localStorage.setItem('cool_ebooks_book_data', base64Data);
+          localStorage.setItem('cool_ebooks_book_name', fileName);
+          localStorage.removeItem('cool_ebooks_location');
+          localStorage.removeItem('cool_ebooks_page');
+        } catch (err) {
+          console.warn('Could not store EPUB in localStorage:', err);
+        }
+        loadBookFromData(bytes.buffer, fileName);
+      } else {
+         console.log("No file data received (or user cancelled).");
+      }
+    }
+  } catch (err) {
+    console.error("XIntent Pick error", err);
+  }
+});
+
 document.getElementById('file-input').addEventListener('change', function (e) {
   const file = e.target.files[0];
   if (!file) return;

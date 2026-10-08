@@ -42,6 +42,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.xintent.flammenwerfer.ui.theme.FlammenwerferTheme
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 
 class CardsActivity : ComponentActivity() {
 
@@ -380,14 +381,25 @@ class CardsActivity : ComponentActivity() {
 
     fun triggerLocalPickFile(): String {
         var responseString = ""
-        runBlocking {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "*/*"
+        val latch = CountDownLatch(1)
+        
+        runOnUiThread {
+            try {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                }
+                pendingPickCallback = { res -> 
+                    responseString = res
+                    latch.countDown()
+                }
+                localPickLauncher.launch(intent)
+            } catch (e: Exception) {
+                latch.countDown()
             }
-            pendingPickCallback = { res -> responseString = res }
-            localPickLauncher.launch(intent)
         }
+        
+        latch.await()
         return responseString.ifBlank { "{\"status\":\"ok\"}" }
     }
 
@@ -414,8 +426,20 @@ class CardsActivity : ComponentActivity() {
                 type = mimeType
                 putExtra(Intent.EXTRA_TITLE, fileName)
             }
-            pendingSaveCallback = { res -> responseString = res }
-            localSaveLauncher.launch(intent)
+            
+            val latch = CountDownLatch(1)
+            runOnUiThread {
+                try {
+                    pendingSaveCallback = { res -> 
+                        responseString = res
+                        latch.countDown()
+                    }
+                    localSaveLauncher.launch(intent)
+                } catch (e: Exception) {
+                    latch.countDown()
+                }
+            }
+            latch.await()
         } catch (e: Exception) {
             val errObj = JSONObject().apply {
                 put("status", "error")
@@ -660,6 +684,18 @@ fun CardScreen(
         ) {
             OutlinedButton(onClick = onClose) {
                 Text("Close")
+            }
+
+            OutlinedButton(
+                onClick = {
+                    val intent = Intent(context, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    }
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                Text("Settings")
             }
 
             Text(
