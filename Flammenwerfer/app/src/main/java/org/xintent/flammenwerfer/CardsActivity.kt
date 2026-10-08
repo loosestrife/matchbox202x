@@ -431,12 +431,12 @@ class CardsActivity : ComponentActivity() {
                 XIntentClient.addLog("[xaudio.PlaySoundBlob] Playing audio on phone speaker (${audioBytes.size} bytes, seq #$seqnum)")
 
                 JSONObject().apply {
-                    put("event", "xaudio.XAudioPlayCompleteV0")
-                    put("status", "ok")
+                    put("event", "XAudioPlayResponseV0")
+                    put("status", 200)
                     put("cookie", cookie)
+                    put("OutputId", cookie)
                     put("streamId", streamId)
                     put("seqnum", seqnum)
-                    put("disposition", "final")
                 }.toString()
             } else {
                 JSONObject().apply {

@@ -99,6 +99,12 @@ async function connectToRouter(X, root) {
     "XBLOB_SOFT_LINK_V0",
     "XBLOB_SOFT_UNLINK_V0",
     "XBLOB_DESTRUCTOR_V0",
+
+    "XAUDIO_PLAY_V0",
+    "XAUDIO_CONTROL_V0",
+    "XAUDIO_PREFETCH_SOUND_BLOB_V0",
+    "XAUDIO_SEEK_STREAM_V0",
+    "XAUDIO_GET_AUDIO_OUTPUTS_V0",
   ];
 
   await Promise.all(
@@ -331,16 +337,11 @@ async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
   ]);
 }
 
-const sendXIntentIntentV0 = (X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
-  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
-const sendXIntentEventV0 = (X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
-  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
-
-const sendXIV0 = async (
+const sendXChannelJsonFrame = async (
   messageTypeAtom,
   X,
   routerWin,
-  { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}
+  { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true }
 ) => {
   if (!targetWin) {
     targetWin = routerWin;
@@ -351,7 +352,7 @@ const sendXIV0 = async (
     payloadBlob = await XBlobCreate(X, routerWin, senderWin, payload);
   }
 
-  // 2. Transfer or Grant blob rights BEFORE dispatching intent message
+  // 2. Transfer or Grant blob rights BEFORE dispatching message
   if (targetWin !== senderWin) {
     if (unlinkPayloadBlob) {
       await XBlobTransfer(X, routerWin, senderWin, payloadBlob, targetWin);
@@ -366,14 +367,14 @@ const sendXIV0 = async (
     }
   }
 
-  if(txId !== undefined && txId > 16777215){
-    logger.error("txId above 16777216", {txId, channel});
+  if (txId !== undefined && txId > 16777215) {
+    logger.error("txId above 16777216", { txId, channel });
   }
-  if(channel !== undefined && (channel != 0 && channel < 16777216)){
-    logger.error("channel under 16777216", {txId, channel});
+  if (channel !== undefined && (channel != 0 && channel < 16777216)) {
+    logger.error("channel under 16777216", { txId, channel });
   }
-  if(txId !== undefined && channel !== undefined){
-    logger.error("only allowed to specify one of txId, channel", {txId, channel});
+  if (txId !== undefined && channel !== undefined) {
+    logger.error("only allowed to specify one of txId, channel", { txId, channel });
   }
 
   const channelToSend = (channel !== undefined && channel !== 0) ? channel : (txId !== undefined ? txId : 0);
@@ -391,10 +392,23 @@ const sendXIV0 = async (
   ]);
 
   logger.info(
-    `Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (channel ${channelToSend}, ctrl ${ctrlWordToSend}, payload blob ${widString(payloadBlob)}${dataBlob ? `, data blob ${widString(dataBlob)}` : ''})`
+    `Dispatched XChannelJsonFrame (atom ${messageTypeAtom}) to ${widString(targetWin)} (channel ${channelToSend}, ctrl ${ctrlWordToSend}, payload blob ${widString(payloadBlob)}${dataBlob ? `, data blob ${widString(dataBlob)}` : ''})`
   );
   return payloadBlob;
-}
+};
+
+// Protocol-specific wrappers
+const sendXIntentIntentV0 = (X, routerWin, opts) =>
+  sendXChannelJsonFrame(atoms.XINTENT_INTENT_V0, X, routerWin, opts);
+
+const sendXIntentEventV0 = (X, routerWin, opts) =>
+  sendXChannelJsonFrame(atoms.XINTENT_EVENT_V0, X, routerWin, opts);
+
+const sendXAudioPlayV0 = (X, routerWin, opts) =>
+  sendXChannelJsonFrame(atoms.XAUDIO_PLAY_V0 || atoms.XAUDIO_PLAY_V0, X, routerWin, opts);
+
+const sendXAudioControlV0 = (X, routerWin, opts) =>
+  sendXChannelJsonFrame(atoms.XAUDIO_CONTROL_V0 || atoms.XAUDIO_CONTROL_V0, X, routerWin, opts);
 
 async function XBlobRead(X, routerWin, blobAtom, host, version) {
   let hostWin = await X.GetSelectionOwner(blobAtom);
@@ -509,8 +523,11 @@ module.exports = {
   parseXBlobBroadcastFrame,
   parseXBlobDestructorFrame,
   XClientMessage,
+  sendXChannelJsonFrame,
   sendXIntentIntentV0,
   sendXIntentEventV0,
+  sendXAudioPlayV0,
+  sendXAudioControlV0,
   XBlobCreate,
   XBlobGrant,
   XBlobUnlink,

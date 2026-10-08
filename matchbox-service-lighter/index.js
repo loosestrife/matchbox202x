@@ -27,11 +27,6 @@ id = "matchbox-service-lighter"
 "sys.Launch" = true
 "fs.PickFile" = true
 "fs.PickFilePath" = true
-"xaudio.PlaySoundBlob" = true
-"xaudio.PrefetchSoundBlob" = true
-"xaudio.PlayStream" = true
-"xaudio.ControlStream" = true
-"xaudio.SeekStream" = true
 
 [XBlobHost]
 host = "${hostname}"
@@ -180,10 +175,10 @@ async function startLighter() {
   const xblobDestructorAtom = await X.InternAtom(false, 'XBLOB_DESTRUCTOR_V0');
   const xblobBroadcastAtom = await X.InternAtom(false, 'XBLOB_BROADCAST_V0');
 
-  const xaudioPlaySoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PLAY_SOUND_BLOB_V0');
+  const xaudioPlaySoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PLAY_V0');
   const xaudioPrefetchSoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PREFETCH_SOUND_BLOB_V0');
   const xaudioPlayStreamAtom = await X.InternAtom(false, 'XAUDIO_PLAY_STREAM_V0');
-  const xaudioControlStreamAtom = await X.InternAtom(false, 'XAUDIO_CONTROL_STREAM_V0');
+  const xaudioControlStreamAtom = await X.InternAtom(false, 'XAUDIO_CONTROL_V0');
   const xaudioSeekStreamAtom = await X.InternAtom(false, 'XAUDIO_SEEK_STREAM_V0');
 
   X.ChangeProperty(0, lighterWin, X.atoms.WM_NAME, X.atoms.STRING, 8, 'MATCHBOX_SERVICE_LIGHTER');
@@ -242,19 +237,19 @@ async function startLighter() {
               else if (intentName === "fs.PickFile") {
                 await pickFiles.pickFile(xintentIntent);
               }
-              else if (["xaudio.PlaySoundBlob", "XAudioPlaySoundBlob", "XAudioPlaySoundBlobV0"].includes(intentName)) {
+              else if (["xaudio.PlaySoundBlob", "XAudioPlaySoundBlob", "XAudioPlaySoundBlobV0", "XAudioPlayV0", "XAudioPlay", "xaudio.Play"].includes(intentName)) {
                 await xaudioNode.playSoundBlob(payload, xintentIntent.senderWin);
               }
-              else if (["xaudio.PrefetchSoundBlob", "XAudioPrefetchSoundBlob", "XAudioPrefetchSoundBlobV0"].includes(intentName)) {
+              else if (["xaudio.PrefetchSoundBlob", "XAudioPrefetchSoundBlob", "XAudioPrefetchSoundBlobV0", "XAudioPrefetch"].includes(intentName)) {
                 await xaudioNode.prefetchSoundBlob(payload);
               }
               else if (["xaudio.PlayStream", "PlayStream", "XAudioPlayStreamV0"].includes(intentName)) {
                 await xaudioNode.playStream(payload, xintentIntent.senderWin);
               }
-              else if (["xaudio.ControlStream", "ControlStream", "XAudioControlStreamV0"].includes(intentName)) {
+              else if (["xaudio.ControlStream", "ControlStream", "XAudioControlStreamV0", "XAudioControlV0", "XAudioControl", "xaudio.Control"].includes(intentName)) {
                 await xaudioNode.controlStream(payload);
               }
-              else if (["xaudio.SeekStream", "SeekStream", "XAudioSeekStreamV0"].includes(intentName)) {
+              else if (["xaudio.SeekStream", "SeekStream", "XAudioSeekStreamV0", "XAudioSeekV0"].includes(intentName)) {
                 await xaudioNode.seekStream(payload);
               }
               else {
@@ -262,7 +257,7 @@ async function startLighter() {
                 return;
               }
             }
-            else if (ev.message_type == xaudioPlaySoundBlobAtom) {
+            else if (ev.message_type == xaudioPlayAtom) {
               const { payload, senderWin } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
               logger.setContext({ intent: 'xaudio.PlaySoundBlob' });
               await xaudioNode.playSoundBlob(payload, senderWin);

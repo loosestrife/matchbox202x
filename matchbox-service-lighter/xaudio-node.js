@@ -99,25 +99,25 @@ async function processQueue(cookie) {
         logger.warn(`Failed to unlink blob ${blobAtom} after playback:`, err.message);
       }
 
-      // 2. Dispatch XAudioPlayCompleteV0 event back to client with streamId and seqnum
+      // 2. Dispatch XAudioPlayResponseV0 event back to client with streamId and seqnum
       try {
         if (senderWin) {
           await xintent.sendXIntentEventV0(X, xintent.routerWin, {
             targetWin: senderWin,
             senderWin: lighterWin,
             payload: {
-              event: 'xaudio.XAudioPlayCompleteV0',
-              intent: 'xaudio.XAudioPlayCompleteV0',
+              event: 'XAudioPlayResponseV0',
+              intent: 'XAudioPlayResponseV0',
+              OutputId: cookie,
               cookie: cookie,
               streamId: streamId,
               seqnum: seqnum,
-              status: 'ok',
-              disposition: 'final'
+              status: 200
             }
           });
         }
       } catch (err) {
-        logger.warn(`Failed to send XAudioPlayComplete for cookie ${cookie} seq ${seqnum}:`, err.message);
+        logger.warn(`Failed to send XAudioPlayResponse for cookie ${cookie} seq ${seqnum}:`, err.message);
       }
 
       // Advance sequence and process next queued item

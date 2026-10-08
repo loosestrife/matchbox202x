@@ -1,7 +1,7 @@
 // xaudio.js
 const { Logger } = require('../server-tools');
 const logger = new Logger({ module: 'xaudio' });
-const { atoms, widString, parseXIntentIntentV0, sendXIntentIntentV0, sendXIntentEventV0 } = require('../x11-promises/xintent.js');
+const { atoms, widString, parseXIntentIntentV0, sendXIntentIntentV0, sendXIntentEventV0, sendXAudioPlayV0, sendXAudioControlV0 } = require('../x11-promises/xintent.js');
 const { X, root, routerWin } = require('./index.js');
 const { activeChannels, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage } = require('./xchannel');
 const { lighterAudioRegistry, windowRegistry } = require('./xintent-registry');
@@ -82,7 +82,8 @@ const handleXAudioPlayV0 = {
 
     logger.info(`[xaudio] Routing XAudioPlay to sink window ${widString(sinkWin)} (ctrl: ${controlWord}, dataBlob: ${widString(dataBlob)})`);
 
-    await sendXIntentIntentV0(X, routerWin, {
+    const dispatchFn = sendXAudioPlayV0 || sendXIntentIntentV0;
+    await dispatchFn(X, routerWin, {
       targetWin: sinkWin,
       senderWin: routerWin,
       controlWord,
@@ -113,7 +114,8 @@ const handleXAudioControlV0 = {
 
     if (sinkWin) {
       logger.info(`[xaudio] Routing XAudioControl to sink window ${widString(sinkWin)} (ctrl: ${controlWord})`);
-      await sendXIntentIntentV0(X, routerWin, {
+      const dispatchFn = sendXAudioControlV0 || sendXIntentIntentV0;
+      await dispatchFn(X, routerWin, {
         targetWin: sinkWin,
         senderWin: routerWin,
         controlWord,

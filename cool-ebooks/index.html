@@ -454,10 +454,8 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
         const playStartTime = performance.now();
         const playRes = await window.xaudio.XAudioPlay({
           app: targetXAudioNode,
-          cookie: cookie,
           streamId: 1,
           seqnum: seqnum,
-          sample: blobId,
           blob: blobId,
           controlWord: window.xintent ? window.xintent.SYN : 1,
           transferBlob: true

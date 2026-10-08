@@ -339,8 +339,9 @@
 
         if (blobId) {
           await window.xaudio.XAudioPlay({
+            OutputId: currentStreamId,
             cookie: currentStreamId,
-            streamId: currentStreamId,
+            streamId: 1,
             seqnum: seq,
             sample: blobId,
             blob: blobId,
@@ -355,7 +356,7 @@
 
     streamSeqNum++;
     chunkCounter.textContent = `Chunks: ${streamSeqNum}`;
-    log(`[XAudioPlay Chunk #${seq}] Dispatched XBlob (streamId: ${currentStreamId})`);
+    log(`[XAudioPlay Chunk #${seq}] Dispatched XBlob (OutputId: ${currentStreamId}, streamId: 1)`);
   }
 
   // Start Playback & MediaStream Broadcasting
@@ -434,11 +435,9 @@
     log(`Playback paused at ${pauseOffset.toFixed(2)}s.`);
 
     // Send ControlStream pause
-    ensureXIntent().then(xintent => {
-      if (xintent && typeof xintent.intent === 'function') {
-        xintent.intent('xaudio.ControlStream', { command: 'pause', outputId: currentStreamId }, 'matchbox-service-lighter');
-      }
-    });
+    if (window.xaudio && typeof window.xaudio.controlStream === 'function') {
+      window.xaudio.controlStream({ command: 'pause', OutputId: currentStreamId, cookie: currentStreamId, streamId: 1 });
+    }
   }
 
   function stopPlayback() {
@@ -455,11 +454,9 @@
     log(`Playback stopped.`);
 
     // Send ControlStream stop
-    ensureXIntent().then(xintent => {
-      if (xintent && typeof xintent.intent === 'function') {
-        xintent.intent('xaudio.ControlStream', { command: 'stop', outputId: currentStreamId }, 'matchbox-service-lighter');
-      }
-    });
+    if (window.xaudio && typeof window.xaudio.controlStream === 'function') {
+      window.xaudio.controlStream({ command: 'stop', OutputId: currentStreamId, cookie: currentStreamId, streamId: 1 });
+    }
   }
 
   // Event Listeners

@@ -214,8 +214,14 @@ const routeIntent = async (req, res) => {
         X.on('event', responseHandler);
       });
 
+      const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
+      const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
+      const dispatchFn = isXAudioPlay
+        ? (xintent.sendXAudioPlayV0 || xintent.sendXIntentIntentV0)
+        : (isXAudioControl ? (xintent.sendXAudioControlV0 || xintent.sendXIntentIntentV0) : xintent.sendXIntentIntentV0);
+
       const routerWin = await xintent.getValidRouterWin(X, root);
-      await xintent.sendXIntentIntentV0(X, routerWin, {
+      await dispatchFn(X, routerWin, {
         senderWin: clientWin,
         payload,
         txId,
@@ -226,10 +232,17 @@ const routeIntent = async (req, res) => {
     }
 
     // --- 2. Fire-and-Forget / Standard Response Path ---
-    await xintent.sendXIntentIntentV0(X, xintent.routerWin, {
+    const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
+    const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
+    const dispatchFn = isXAudioPlay
+      ? (xintent.sendXAudioPlayV0 || xintent.sendXIntentIntentV0)
+      : (isXAudioControl ? (xintent.sendXAudioControlV0 || xintent.sendXIntentIntentV0) : xintent.sendXIntentIntentV0);
+
+    await dispatchFn(X, xintent.routerWin, {
       senderWin: clientWin,
       payload,
       txId,
+      controlWord: reqControlWord,
     });
 
     res.setHeader('Matchbox-Bridge', '1.0');

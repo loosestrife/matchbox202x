@@ -175,6 +175,10 @@
       const seq = options.seqnum ?? options.seq ?? 0;
       const blobId = options.sample || options.blob || options.blobId || options.BlobId;
       const app = options.app || 'localhost';
+      const streamId = options.streamId ?? options.stream ?? 1;
+      const volume = options.volume ?? 1.0;
+      const loop = !!options.loop;
+      const controlWord = options.controlWord ?? (window.xintent ? window.xintent.SYN : 1);
 
       if (options.transferBlob !== false && blobId) {
         try {
@@ -187,13 +191,44 @@
       return window.xintent.intent('xaudio.PlaySoundBlob', {
         intent: 'xaudio.PlaySoundBlob',
         app: app,
+        OutputId: cookie,
         cookie: cookie,
+        streamId: streamId,
         seqnum: seq,
         sample: blobId,
         blobId: blobId,
         BlobId: blobId,
-        volume: options.volume ?? 1.0,
-        loop: !!options.loop,
+        volume: volume,
+        loop: loop,
+        controlWord: controlWord,
+        ...options
+      }, app);
+    },
+
+    /**
+     * Prefetch a sound blob on XAudioSink
+     * @param {Object} options
+     * @returns {Promise<Response>}
+     */
+    prefetchSoundBlob: async function(options = {}) {
+      const cookie = options.cookie || options.Cookie || options.OutputId || 'default';
+      const blobId = options.sample || options.blob || options.blobId || options.BlobId;
+      const app = options.app || 'localhost';
+      if (options.transferBlob !== false && blobId) {
+        try {
+          await window.xblob.XBlobTransfer(blobId);
+        } catch (err) {
+          console.warn('[xaudio] Automatic XBlobTransfer warning:', err);
+        }
+      }
+      return window.xintent.intent('xaudio.PrefetchSoundBlob', {
+        intent: 'xaudio.PrefetchSoundBlob',
+        app: app,
+        OutputId: cookie,
+        cookie: cookie,
+        sample: blobId,
+        blobId: blobId,
+        BlobId: blobId,
         ...options
       }, app);
     },
@@ -206,13 +241,43 @@
     controlStream: async function(options = {}) {
       const command = typeof options === 'string' ? options : (options.command || 'stop');
       const cookie = (typeof options === 'object') ? (options.cookie || options.OutputId || 'default') : 'default';
+      const streamId = (typeof options === 'object') ? (options.streamId ?? options.stream ?? 1) : 1;
       const app = (typeof options === 'object' && options.app) ? options.app : 'localhost';
       return window.xintent.intent('xaudio.ControlStream', {
         intent: 'xaudio.ControlStream',
         command: command,
         cookie: cookie,
+        OutputId: cookie,
+        streamId: streamId,
         app: app,
         ...(typeof options === 'object' ? options : {})
+      }, app);
+    },
+
+    /**
+     * Seek a stream to a specific position
+     * @param {Object} options
+     * @returns {Promise<Response>}
+     */
+    seekStream: async function(options = {}) {
+      const seekTo = options.seekTo ?? 0;
+      const streamId = options.streamId ?? options.stream ?? 1;
+      const cookie = options.cookie || options.OutputId || 'default';
+      const app = options.app || 'localhost';
+      return window.xintent.intent('xaudio.SeekStream', {
+        intent: 'xaudio.SeekStream',
+        command: 'seek',
+        seekTo: seekTo,
+        streamId: streamId,
+        cookie: cookie,
+        OutputId: cookie,
+        app: app,
+        ...options
+      }, app);
+    }
+  };
+
+  window.xaudio.playSoundBlob = window.xaudio.XAudioPlay;
       }, app);
     }
   };
