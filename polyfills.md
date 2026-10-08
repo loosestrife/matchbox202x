@@ -1,8 +1,8 @@
 # V0
 It takes 0 intelligence to "invent" stuff that everyone already knows exactly how it works and should have existed already.  The hard part is the V0 polyfills, full of insecurity and questionable decisions.
 
-## XIntentJsonFrame
-an XIntentJsonFrame is a special XClientMessage
+## XMessageFrame
+an XClientMessage with
 ```
 |                       XClientMessageEvent                             |
 +-----------------------------------------------------------------------+
@@ -11,11 +11,10 @@ an XIntentJsonFrame is a special XClientMessage
 | message_type: Atom("MESSAGE_TYPE_ATOM")                               |
 | format      : 32                                                      |
 | data.l[0]   : Sender Window XID                                       |
-| data.l[1]   : Payload XBLOB atom                                      |
 ```
 
-## XIntentNonJsonFrame
-an XIntentNonJsonFrame is a special XClientMessage
+## XChannelFrame
+an XMessageFrame with
 ```
 |                       XClientMessageEvent                             |
 +-----------------------------------------------------------------------+
@@ -24,7 +23,45 @@ an XIntentNonJsonFrame is a special XClientMessage
 | message_type: Atom("MESSAGE_TYPE_ATOM")                               |
 | format      : 32                                                      |
 | data.l[0]   : Sender Window XID                                       |
+| data.l[1]   : txId / channelId                                        |
+| data.l[2]   : Channel Control Word (bit 0 for SYN, bit 1 for FIN)     |
 ```
+
+The initial sender's txId has to be under 16777216 and the server promises to only use numbers 16777216 and up to designate channels.  That way the client's txId will never collide with a server channel number.
+
+On an http bridge, the channel control word is represented as `X-Channel-Control: SYN,FIN`
+
+## XJsonFrame
+an XMessageFrame with
+```
+|                       XClientMessageEvent                             |
++-----------------------------------------------------------------------+
+| type        : ClientMessage                                           |
+| window      : Target Window XID                                       |
+| message_type: Atom("MESSAGE_TYPE_ATOM")                               |
+| format      : 32                                                      |
+| data.l[0]   : Sender Window XID                                       |
+| data.l[1]   : JSON payload XBlob id                                   |
+| data.l[2]   : Data XBlob id                                           |
+```
+
+## XChannelJsonFrame
+an XChannelFrame with
+```
+|                       XClientMessageEvent                             |
++-----------------------------------------------------------------------+
+| type        : ClientMessage                                           |
+| window      : Target Window XID                                       |
+| message_type: Atom("MESSAGE_TYPE_ATOM")                               |
+| format      : 32                                                      |
+| data.l[0]   : Sender Window XID                                       |
+| data.l[1]   : txId / channelId                                        |
+| data.l[2]   : Channel Control Word (bit 0 for SYN, bit 1 for FIN)     |
+| data.l[3]   : JSON payload XBlob id                                   |
+| data.l[4]   : Data XBlob id                                           |
+```
+
+True natwork transparency comes from knowing that your message will be bridged and natted 10 times before it gets to its destination and designing the envelope to be natted.
 
 ## Limitations
 It is not possible to send an xintent without registering a window, even for fire and forget intents like `ui.Copy`.  This is because XClientMessage is 20 bytes and in order to create a blob to hold the intent payload we must either coordinate with the XBlob server or do some dance where the XBlob server advertises possible blob atoms and we grab one.  In order to send an xintent, we need to 
@@ -43,10 +80,10 @@ note that
 * the cooperative security model in XSECURE V0 is going to look at the `_NET_WM_PID` on the window to decide security policy
 
 # `XINTENT_INTENT_V0` and `XINTENT_EVENT_V0`
-XIntentJsonFrame with `data[2]=txId` to the sender and `data[2]=channelId` to everyone else.  The sender's txId has to be under 16777216 and the server promises to only use numbers 16777216 and up to designate channels.  That way the client's txId will never collide with a server channel number.  Data blob atom on `data[3]`.
+These are XChannelJsonFrame's.  Whoever sends the event that closes the channel MAY send `{disposition: final/error/cancel}` in the payload.
 
 # XBLOB V0
-an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
+an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  XBlob V1 id's will not be atoms, but they will be nonzero u32 values.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
 ```js
 {xblobType, type, size, name, data, _dataType}
 ```
@@ -59,40 +96,42 @@ an XBlob V0 is an X property on the blob host window, to be deleted when its out
 ```
 since it is a pseudo-rtmp packet, there is no reason for the data field to not be base64 encoded binary data.
 
-When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkRecieved`, but should be reused as soon as possible.
+When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkReceived`, but should be reused as soon as possible.
+
+XBlob requests are always bus local.  When an XBlob is linked across a bridge, both sides of the bridge need XBlob id's for it, the bridge would hold links on both sides and the nat table, and if the bridge dies, the links are automatically unlinked at the same time as the dead bridge loses the nat table.  The XBlobBroadcast is also bus local, but it is propagated across bridges accordingly as there are links.
 
 ## XBlobCreate
-an XIntentNonJsonFrame with message type `XBlobCreateV0` and `data.l[1]` as the client's cookie.  The client cookie won't be needed by the real XBLOB V1 because that would use the seqence number.
+an XMessageFrame with message type `XBlobCreateV0` and `data.l[1]` as the client's cookie.  The client cookie won't be needed by the real XBLOB V1 because that would use the X request seqence number.
 
 ## XBlobCreateResponse
-an XIntentNonJsonFrame with message type `XBlobCreateResponseV0`, `data.l[1]` as the blob atom, `data.l[2]` as the client's cookie.
+an XMessageFrame with message type `XBlobCreateResponseV0`, `data.l[1]` as the blob atom, `data.l[2]` as the client's cookie.
 
 ## XBlobGrant
-an XIntentNonJsonFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
+an XMessageFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
 
 ## XBlobSoftLink
-an XIntentNonJsonFrame with message type `XBlobSoftLinkV0`, `data.l[1]` as the blob atom, `data.l[2]` as the window to get a soft link.
+an XMessageFrame with message type `XBlobSoftLinkV0`, `data.l[1]` as the blob atom, `data.l[2]` as the window to get a soft link.
 
 ## XBlobUnlink
-an XIntentNonJsonFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob atom.
+an XMessageFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob atom.
 
 ## XBlobDestructor
-an XIntentNonJsonFrame with message type `XBlobDestructorV0` and `data.l[1]` as the blob atom.  Informs soft linkers that the blob has reached refcount 0.
+an XMessageFrame with message type `XBlobDestructorV0` and `data.l[1]` as the blob atom.  Informs soft linkers that the blob has reached refcount 0.
 
 ## XBlobSoftUnlink
-an XIntentNonJsonFrame with message type `XBlobSoftUnlinkV0` and `data.l[1]` as the blob atom.  Removes the soft link.
+an XMessageFrame with message type `XBlobSoftUnlinkV0` and `data.l[1]` as the blob atom.  Removes the soft link.
 
 ## XBlobStreamChunkAdvise
-an XIntentNonJsonFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to every consumer.
+an XMessageFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to every consumer.
 
-## XBlobStreamChunkRecieved
-an XIntentNonJsonFrame with message type `XBlobStreamChunkRecievedV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to the producer.
+## XBlobStreamChunkReceived
+an XMessageFrame with message type `XBlobStreamChunkReceivedV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to the producer.
 
-## XAudioNode registation
-an XAudioNode claims an atom for what numa node its on, as `XAUDIO_NODE_${host}`, and progams use XGetSelection() to find their local XAudioNode.  Then `XBlobCreate` returns a globally unique atom, but the XBLOB is actually on the window that owns the atom according to XGetSelection().
+## XBlobHost registration
+an XBlobHost claims an atom for what numa node its on, as `XBLOB_HOST_${host}`, and progams use XGetSelection() to find their local XBlobHost.  Then `XBlobCreate` returns a bus global unique atom, but the XBLOB is actually on the window that owns the atom according to XGetSelection().
 
 ## XBlobBroadcast
-an XIntentNonJsonFrame with message type `XBlobBroadcastV0`, `data.l[1]` as the blob id, `data.l[2]` as the host atom, `data.l[3]` as the version atom.  Broadcasts local modification to other numa nodes.
+an XMessageFrame with message type `XBlobBroadcastV0`, `data.l[1]` as the blob id, `data.l[2]` as the host atom, `data.l[3]` as the version.  Broadcasts local modification to other numa nodes, linkers, soft linkers, so they can read the new contents if they want.  By the way the host atom is bus unique and must be natted, which, of course, everyone already knows.
 
 # XAUDIO V0
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.  It registers itself in its MATCHBOX_TOML as
@@ -102,13 +141,13 @@ name = "my-speakers"
 ```
 thereby registering itself to recieve XAudio commands.  Every XAudio command with a blob attached would require an XBlobGrant of that blob to the XAudioSink, the XAudioSink then unlinks blobs when its done using them.
 ## XAudioPlay
-an XIntentJsonFrame with message type `XAudioPlayV0` and payload `{BlobId, OutputId, volume, loop, streamId, seqnum}`.  Once the XAudioSink has finished playing, it replies with XAudioPlayCompleteV0 with payload `{streamId, seqnum}`.  If `streamId > 0`, the user has opted in to using streams and can queue multiple blobs on a nonzero streamId to be played in seqnum order, but, stream 0 blobs will be played when recieved as possible, evicting old sounds if necessary.  If `loop` is specified, the client that sent the XAudioPlay will have to cancel the loop at some point with an `XAudioControlStream({command: stop, streamId})`
+an XChannelJsonFrame with message type `XAudioPlayV0` and payload `{OutputId, volume, loop, streamId, seqnum}` and an attached data blob.  Once the XAudioSink has finished playing, it replies with `XAudioPlayResponseV0` with payload `{streamId, seqnum, status: 200|500}` if theres a channel open to reply on.  If `streamId > 0`, the user has opted in to using streams and can queue multiple blobs on a nonzero streamId to be played in seqnum order, but, stream 0 blobs will be played when received as possible, evicting old sounds if necessary.  If `loop` is specified, the client that sent the XAudioPlay will have to cancel the loop at some point with an `XAudioControlStream({command: stop, streamId})`, or, when the channel closes.
 ## XAudioPrefetchSoundBlob
-an XIntentJsonFrame with message type `XAudioPrefetchSoundBlobV0` and payload `{BlobId, OutputId}`.  XAudioSink's SHOULD download the blob data and be ready to play it.
+an XChannelJsonFrame with message type `XAudioPrefetchSoundBlobV0`, payload `{OutputId}`, and an attached data blob.  XAudioSink's SHOULD download the blob data and be ready to play it.
 ## ControlStream
-an XIntentJsonFrame with message type `XAudioControlStreamV0` and payload `{command, BlobId, streamId}`.  If BlobId is unspecified, the user is accessing the user's StreamId's from XAudioPlay, otherwise, the user is accessing the StreamId's from the BlobId MediaStream.
+an XChannelJsonFrame with message type `XAudioControlStreamV0` and payload `{command, streamId}`.  If there is no attached data blob, the user is accessing the user's StreamId's from XAudioPlay, if there is an attached data blob, the user is accessing the StreamId's from the BlobId MediaStream.
 ## SeekStream
-an XIntentJsonFrame with message type `XAudioSeekStreamV0` and payload `{BlobId, streamId, seekTo}`
+an XChannelJsonFrame with message type `XAudioSeekStreamV0`, payload `{streamId, seekTo}`, and an attached data blob.
 
 # Rationale
 ## Why XINTENT V0 is based on XBLOB V0
@@ -132,7 +171,7 @@ so with the chatty version
 anyway
 * the server must recieve a `{reply: true}` in order to know to open a channel either way, a `{intent: ui.Copy, reply: true}` can be replied to with `{event: ui.Paste}` only if the server knows what channels exist.  To route the `{event: ui.Paste}` without active channel objects, either
 * * server will still have to issue channels, then keep in memory who is on what channel forever, until the windows on the channel are destroyed
-* * the client will have to know the window and txId from the other client and have to track DestroyNotification from the other client.  The client will only know the other client still existed from the beginning, from, the fact that it recieved a message with `{reply: true}` and then didnt recieve a message with `{disposition: final/error/cancel}` or see the router go down.  However, if the client is told the other client exists and presented this txId, it could watch that window for DestroyNotify and stream `{event: ui.Paste}` to it without any server channels being leaked
+* * the client will have to know the window and txId from the other client and have to track DestroyNotification from the other client.  The client will only know the other client still existed from the beginning, from, the fact that it received a message with `{reply: true}` and then didnt recieve a message with `{disposition: final/error/cancel}` or see the router go down.  However, if the client is told the other client exists and presented this txId, it could watch that window for DestroyNotify and stream `{event: ui.Paste}` to it without any server channels being leaked
 * the existence of an active channels table is essential to the intent redirection feature, because the active channels table tells the intent redirector app what channels are active to have their initial intent redirected
 * so there is a small window for a complex system by which `{event: ui.Paste}` can be streamed back without an active channels table, but depending on clients watching each other for DestroyNotify and knowing each others window id and txId.  Instead of becomplicating the clients, we use an active channel to designate that the client is listening on the channel.
 * however, both sides can be sure of who theyre talking to once they both have the signed senderWin:txId:timestamp:senderPublicKey:recieverPublicKey

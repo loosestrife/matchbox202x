@@ -18,6 +18,10 @@ from x11_promises import X11PromisesClient, HAS_XLIB
 if HAS_XLIB:
     from Xlib import X, Xatom
 
+SYN = 1
+FIN = 2
+SYN_FIN = 3
+
 
 import array
 import struct
@@ -159,31 +163,31 @@ class XIntentXlibClient:
 
     def blob_create(self, blob_data: Any, timeout_sec: float = 5.0) -> int:
         """Creates an XBlob owned by client_win with response cookie tracking."""
-        cookie = random.randint(1, 0xFFFFFFFF)
+        cookie = random.randint(1, 0xFFFFFFFF) & 0xFFFFFFFF
         router_id = self.get_router_win_id()
         self.x11.send_client_message(
             router_id,
-            self.atoms["XBLOB_CREATE_V0"],
+            int(self.atoms["XBLOB_CREATE_V0"]),
             [self.client_win.id, cookie],
         )
 
         start_time = time.time()
         blob_atom = 0
-        atom_resp = self.atoms["XBLOB_CREATE_RESPONSE_V0"]
+        atom_resp = int(self.atoms["XBLOB_CREATE_RESPONSE_V0"])
 
         while time.time() - start_time < timeout_sec:
             if self.x11.disp.pending_events():
                 event = self.x11.disp.next_event()
-                if event.type == X.ClientMessage and event.client_type == atom_resp:
+                if event.type == X.ClientMessage and int(event.client_type) == atom_resp:
                     data32 = _extract_event_data(event)
-                    if data32 and len(data32) >= 3 and data32[2] == cookie:
+                    if data32 and len(data32) >= 3 and (int(data32[2]) & 0xFFFFFFFF) == cookie:
                         blob_atom = data32[1]
                         break
             time.sleep(0.01)
 
         if not blob_atom:
             raise RuntimeError(
-                "XBlobCreate timed out waiting for XBLOB_CREATE_RESPONSE_V0"
+                f"XBlobCreate timed out waiting for XBLOB_CREATE_RESPONSE_V0 (cookie {cookie})"
             )
 
         self.blob_write(blob_atom, blob_data)
@@ -307,9 +311,10 @@ class XIntentXlibClient:
         message_type_atom: int,
         target_win_id: int,
         payload: Dict[str, Any],
-        tx_id: int,
-        channel: int,
-        data_blob: int,
+        tx_id: int = 0,
+        channel: int = 0,
+        control_word: int = 0,
+        data_blob: int = 0,
     ) -> int:
         router_id = self.get_router_win_id()
         if not target_win_id:
@@ -318,12 +323,19 @@ class XIntentXlibClient:
         payload_blob = self.blob_create(payload)
         if target_win_id != self.client_win.id:
             self.blob_transfer(payload_blob, target_win_id)
+            if data_blob:
+                self.blob_transfer(data_blob, target_win_id)
 
         tx_or_channel = channel if (channel and channel != 0) else (tx_id if tx_id else 0)
+        ctrl_word_to_send = control_word if control_word else (
+            (3 if (payload.get("disposition") in ["final", "error"]) else 1) if tx_or_channel else 0
+        )
+
+        # XChannelJsonFrame: data[0]=senderWin, data[1]=channel, data[2]=controlWord, data[3]=payloadBlob, data[4]=dataBlob
         self.x11.send_client_message(
             target_win_id,
             message_type_atom,
-            [self.client_win.id, payload_blob, tx_or_channel, data_blob],
+            [self.client_win.id, tx_or_channel, ctrl_word_to_send, payload_blob, data_blob],
         )
         return payload_blob
 
@@ -363,11 +375,12 @@ class XIntentXlibClient:
                 return
 
             sender_win_id = data32[0]
-            payload_blob = data32[1]
-            channel = data32[2]
-            data_blob = data32[3] if len(data32) > 3 else 0
+            channel       = data32[1]
+            control_word  = data32[2] if len(data32) > 2 else 3
+            payload_blob  = data32[3] if len(data32) > 3 else data32[1]
+            data_blob     = data32[4] if len(data32) > 4 else 0
 
-            sys.stderr.write(f"[libxintent.py] ClientMessage details: sender={hex(sender_win_id)}, payload_blob={hex(payload_blob)}, channel={channel}\n")
+            sys.stderr.write(f"[libxintent.py] ClientMessage details: sender={hex(sender_win_id)}, channel={channel}, ctrl={control_word}, payload_blob={hex(payload_blob)}, data_blob={hex(data_blob)}\n")
             sys.stderr.flush()
 
             try:
@@ -398,9 +411,12 @@ class XIntentXlibClient:
                     res = handler(frame)
                     if res is not None:
                         res_payload = res if isinstance(res, dict) else {"data": res}
-                        sys.stderr.write(f"[libxintent.py] Sending event response for '{intent_name}' back to {hex(sender_win_id)}\n")
+                        data_blob_id = 0
+                        if isinstance(res_payload, dict) and "data_blob" in res_payload:
+                            data_blob_id = res_payload.pop("data_blob")
+                        sys.stderr.write(f"[libxintent.py] Sending event response for '{intent_name}' back to {hex(sender_win_id)} with data_blob {hex(data_blob_id)}\n")
                         sys.stderr.flush()
-                        self.send_event(sender_win_id, res_payload, channel=channel)
+                        self.send_event(sender_win_id, res_payload, channel=channel, data_blob=data_blob_id)
                 except Exception as err:
                     sys.stderr.write(f"[libxintent.py error] Error executing handler for '{intent_name}': {err}\n{traceback.format_exc()}\n")
                     sys.stderr.flush()

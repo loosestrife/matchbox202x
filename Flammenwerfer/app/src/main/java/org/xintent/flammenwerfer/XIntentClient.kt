@@ -4,6 +4,11 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -13,6 +18,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 object XIntentClient {
     private const val TAG = "XIntentClient"
@@ -21,10 +27,142 @@ object XIntentClient {
     private const val KEY_LOCAL_FS = "use_local_fs"
     private const val KEY_LOCAL_CLIPBOARD = "use_local_clipboard"
     private const val KEY_LOCAL_TTS = "use_local_tts"
+    private const val KEY_LOCAL_AUDIO = "use_local_audio"
     const val DEFAULT_SERVER_URL = "http://10.0.2.2:12345"
+
+    enum class WebSocketState {
+        DISCONNECTED,
+        CONNECTING,
+        CONNECTED,
+        ERROR
+    }
+
+    private var okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
+        .build()
+
+    private var activeWebSocket: WebSocket? = null
+    var webSocketState = WebSocketState.DISCONNECTED
+        private set
+
+    private val webSocketStateListeners = mutableSetOf<(WebSocketState) -> Unit>()
+
+    fun addWebSocketStateListener(listener: (WebSocketState) -> Unit) {
+        synchronized(webSocketStateListeners) {
+            webSocketStateListeners.add(listener)
+        }
+        listener(webSocketState)
+    }
+
+    fun removeWebSocketStateListener(listener: (WebSocketState) -> Unit) {
+        synchronized(webSocketStateListeners) {
+            webSocketStateListeners.remove(listener)
+        }
+    }
+
+    private fun updateWebSocketState(newState: WebSocketState) {
+        webSocketState = newState
+        val copy: List<(WebSocketState) -> Unit>
+        synchronized(webSocketStateListeners) {
+            copy = webSocketStateListeners.toList()
+        }
+        copy.forEach { it(newState) }
+    }
+
+    const val FLAMMENWERFER_MANIFEST = """[app]
+id = "flammenwerfer-phone"
+
+[intents]
+"ui.Copy" = true
+"ui.Paste" = true
+
+[XAudioNode]
+name = "flammenwerfer-phone"
+"""
+
+    fun sendSysAdvertise(webSocket: WebSocket) {
+        try {
+            val advertiseJson = JSONObject().apply {
+                put("event", "sys.Advertise")
+                put("app", "flammenwerfer-phone")
+                put("manifest", FLAMMENWERFER_MANIFEST)
+            }
+            webSocket.send(advertiseJson.toString())
+            addLog("[sys.Advertise] Advertised flammenwerfer-phone capabilities (ui.Copy, ui.Paste, XAudioNode)")
+            Log.i(TAG, "Sent sys.Advertise over WebSocket")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending sys.Advertise", e)
+            addLog("[sys.Advertise 🔴] Failed to send advertisement: ${e.message}")
+        }
+    }
+
+    fun connectWebSocket(context: Context) {
+        if (webSocketState == WebSocketState.CONNECTED || webSocketState == WebSocketState.CONNECTING) {
+            return
+        }
+
+        val httpUrl = getServerUrl(context)
+        val wsUrl = httpUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
+
+        addLog("[WebSocket] Connecting to Remote Intents at $wsUrl...")
+        updateWebSocketState(WebSocketState.CONNECTING)
+
+        val request = Request.Builder()
+            .url(wsUrl)
+            .build()
+
+        activeWebSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.i(TAG, "WebSocket connected to $wsUrl")
+                addLog("[WebSocket 🟢] Connected to $wsUrl")
+                updateWebSocketState(WebSocketState.CONNECTED)
+                sendSysAdvertise(webSocket)
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.i(TAG, "WebSocket text message: $text")
+                addLog("[WebSocket 📩] Remote message: $text")
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WebSocket closing $code: $reason")
+                addLog("[WebSocket 🟡] Closing ($code): $reason")
+                updateWebSocketState(WebSocketState.DISCONNECTED)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WebSocket closed $code: $reason")
+                updateWebSocketState(WebSocketState.DISCONNECTED)
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "WebSocket failure: ${t.message}", t)
+                addLog("[WebSocket 🔴] Connection failed: ${t.message ?: "Network error"}")
+                updateWebSocketState(WebSocketState.ERROR)
+            }
+        })
+    }
+
+    fun disconnectWebSocket() {
+        addLog("[WebSocket ⏹] Disconnecting...")
+        activeWebSocket?.close(1000, "User requested disconnect")
+        activeWebSocket = null
+        updateWebSocketState(WebSocketState.DISCONNECTED)
+    }
 
     private val logListeners = mutableSetOf<() -> Unit>()
     private val logEntries = mutableListOf<String>()
+
+    fun isLocalAudioEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_LOCAL_AUDIO, true)
+    }
+
+    fun setLocalAudioEnabled(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_LOCAL_AUDIO, enabled).apply()
+    }
 
     fun isLocalTtsEnabled(context: Context): Boolean {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

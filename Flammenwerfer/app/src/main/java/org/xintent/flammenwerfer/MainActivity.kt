@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -66,6 +67,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var localFsEnabled by remember { mutableStateOf(XIntentClient.isLocalFsEnabled(context)) }
     var localClipboardEnabled by remember { mutableStateOf(XIntentClient.isLocalClipboardEnabled(context)) }
     var localTtsEnabled by remember { mutableStateOf(XIntentClient.isLocalTtsEnabled(context)) }
+    var localAudioEnabled by remember { mutableStateOf(XIntentClient.isLocalAudioEnabled(context)) }
 
     var cardAppInput by remember { mutableStateOf("intent-test-card") }
     var cardNameInput by remember { mutableStateOf("index") }
@@ -77,14 +79,20 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var isFetchingTags by remember { mutableStateOf(false) }
     var logText by remember { mutableStateOf(XIntentClient.getLogHistory()) }
     var isSending by remember { mutableStateOf(false) }
+    var webSocketState by remember { mutableStateOf(XIntentClient.webSocketState) }
 
     DisposableEffect(Unit) {
         val listener = {
             logText = XIntentClient.getLogHistory()
         }
+        val wsListener = { state: XIntentClient.WebSocketState ->
+            webSocketState = state
+        }
         XIntentClient.addLogListener(listener)
+        XIntentClient.addWebSocketStateListener(wsListener)
         onDispose {
             XIntentClient.removeLogListener(listener)
+            XIntentClient.removeWebSocketStateListener(wsListener)
         }
     }
 
@@ -246,6 +254,23 @@ fun MainScreen(modifier: Modifier = Modifier) {
             )
         }
 
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Checkbox(
+                checked = localAudioEnabled,
+                onCheckedChange = {
+                    localAudioEnabled = it
+                    XIntentClient.setLocalAudioEnabled(context, it)
+                },
+            )
+            Text(
+                text = "Play Web Card XAudio (xaudio.PlaySoundBlob) directly through Phone Speaker",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         Button(
             onClick = {
                 XIntentClient.setServerUrl(context, serverUrl)
@@ -255,12 +280,64 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 XIntentClient.setLocalFsEnabled(context, localFsEnabled)
                 XIntentClient.setLocalClipboardEnabled(context, localClipboardEnabled)
                 XIntentClient.setLocalTtsEnabled(context, localTtsEnabled)
+                XIntentClient.setLocalAudioEnabled(context, localAudioEnabled)
                 Toast.makeText(context, "Saved Settings & Target Apps!", Toast.LENGTH_SHORT).show()
                 refreshApiTags()
             },
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Save Configuration & Refresh Tags")
+        }
+
+        // Remote Intents WebSocket Connection Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "⚡ Remote Intents WebSocket Connection",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                val statusText = when (webSocketState) {
+                    XIntentClient.WebSocketState.CONNECTED -> "🟢 Connected to Remote Intents (ws://${XIntentClient.getServerUrl(context).removePrefix("http://").removePrefix("https://")}/ws)"
+                    XIntentClient.WebSocketState.CONNECTING -> "🟡 Connecting to ws://${XIntentClient.getServerUrl(context).removePrefix("http://").removePrefix("https://")}/ws..."
+                    XIntentClient.WebSocketState.ERROR -> "🔴 Connection Error / Re-trying..."
+                    XIntentClient.WebSocketState.DISCONNECTED -> "⚪ Disconnected from Remote Intents"
+                }
+                val btnText = when (webSocketState) {
+                    XIntentClient.WebSocketState.CONNECTED -> "Disconnect WebSocket"
+                    XIntentClient.WebSocketState.CONNECTING -> "Connecting..."
+                    XIntentClient.WebSocketState.ERROR -> "Retry WebSocket Connect"
+                    XIntentClient.WebSocketState.DISCONNECTED -> "Connect Remote Intents (WebSocket)"
+                }
+                val btnColor = when (webSocketState) {
+                    XIntentClient.WebSocketState.CONNECTED -> MaterialTheme.colorScheme.error
+                    XIntentClient.WebSocketState.CONNECTING -> MaterialTheme.colorScheme.secondary
+                    else -> MaterialTheme.colorScheme.primary
+                }
+
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(
+                    onClick = {
+                        if (webSocketState == XIntentClient.WebSocketState.CONNECTED || webSocketState == XIntentClient.WebSocketState.CONNECTING) {
+                            XIntentClient.disconnectWebSocket()
+                        } else {
+                            XIntentClient.connectWebSocket(context)
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = btnColor),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(btnText)
+                }
+            }
         }
 
         // Web Cards Section

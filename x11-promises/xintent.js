@@ -331,16 +331,16 @@ async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
   ]);
 }
 
-const sendXIntentIntentV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
-  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
-const sendXIntentEventV0 = (X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
-  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
+const sendXIntentIntentV0 = (X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
+  sendXIV0(atoms.XINTENT_INTENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
+const sendXIntentEventV0 = (X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}) =>
+  sendXIV0(atoms.XINTENT_EVENT_V0, X, routerWin, { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob });
 
 const sendXIV0 = async (
   messageTypeAtom,
   X,
   routerWin,
-  { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}
+  { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob, unlinkPayloadBlob = true}
 ) => {
   if (!targetWin) {
     targetWin = routerWin;
@@ -355,8 +355,14 @@ const sendXIV0 = async (
   if (targetWin !== senderWin) {
     if (unlinkPayloadBlob) {
       await XBlobTransfer(X, routerWin, senderWin, payloadBlob, targetWin);
+      if (dataBlob) {
+        await XBlobTransfer(X, routerWin, senderWin, dataBlob, targetWin);
+      }
     } else {
       await XBlobGrant(X, routerWin, senderWin, payloadBlob, targetWin);
+      if (dataBlob) {
+        await XBlobGrant(X, routerWin, senderWin, dataBlob, targetWin);
+      }
     }
   }
 
@@ -371,17 +377,21 @@ const sendXIV0 = async (
   }
 
   const channelToSend = (channel !== undefined && channel !== 0) ? channel : (txId !== undefined ? txId : 0);
+  const ctrlWordToSend = controlWord !== undefined
+    ? controlWord
+    : (channelToSend !== 0 || payload?.reply || payload?.Accept ? 3 : 0);
 
-  // 3. Dispatch the intent frame
+  // 3. Dispatch XChannelJsonFrame: data.l[0]=senderWin, data.l[1]=channel, data.l[2]=controlWord, data.l[3]=payloadBlob, data.l[4]=dataBlob
   await XClientMessage(X, targetWin, messageTypeAtom, [
     senderWin,
-    payloadBlob,
     channelToSend,
+    ctrlWordToSend,
+    payloadBlob,
     dataBlob ?? 0,
   ]);
 
   logger.info(
-    `Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)}${dataBlob ? ` (data blob ${widString(dataBlob)})` : ''})`
+    `Dispatched ${payload.intent ?? payload.event} to ${widString(targetWin)} (channel ${channelToSend}, ctrl ${ctrlWordToSend}, payload blob ${widString(payloadBlob)}${dataBlob ? `, data blob ${widString(dataBlob)}` : ''})`
   );
   return payloadBlob;
 }
@@ -431,7 +441,8 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
 }
 
 async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {
-  const [senderWin, payloadBlob] = ev.data;
+  const senderWin = ev.data[0];
+  const payloadBlob = ev.data[3] || ev.data[1]; // data.l[3] for XChannelJsonFrame, fallback data.l[1] for XJsonFrame
   logger.setContext({
     sender: widString(senderWin),
     payloadBlob: widString(payloadBlob)
@@ -456,9 +467,10 @@ async function parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob = true}
     ev,
     {unlinkPayloadBlob}
   );
-  const channel = ev.data[2];
-  const dataBlob = ev.data[3];
-  return { targetWin: ev.wid, senderWin, channel, payload, payloadBlob, dataBlob };
+  const channel = ev.data[1];
+  const controlWord = ev.data[2];
+  const dataBlob = ev.data[4];
+  return { targetWin: ev.wid, senderWin, channel, controlWord, payload, payloadBlob, dataBlob };
 }
 
 function parseXBlobBroadcastFrame(X, routerWin, ev){
@@ -476,7 +488,14 @@ function parseXBlobDestructorFrame(X, routerWin, ev) {
 }
 
 
+const SYN = 1;
+const FIN = 2;
+const SYN_FIN = 3;
+
 module.exports = {
+  SYN,
+  FIN,
+  SYN_FIN,
   init,
   connectToRouter,
   waitForRouterWin,

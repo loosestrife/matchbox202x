@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from collections import defaultdict
 import json
 import numpy as np
@@ -57,12 +58,27 @@ def intent_server():
             with open(out_path, "wb") as fd:
                 generate_audio_data(engine, text, fd)
 
-            logger.info(f"[cool-tts] Audio generated successfully at {out_path}")
+            blob_id = 0
+            if server.x11_client:
+                try:
+                    with open(out_path, "rb") as f:
+                        wav_bytes = f.read()
+                    blob_payload = {
+                        "type": "audio/wav",
+                        "data": base64.b64encode(wav_bytes).decode("ascii"),
+                        "_dataType": "base64",
+                        "xblobType": "Blob"
+                    }
+                    blob_id = server.x11_client.blob_create(blob_payload)
+                except Exception as blob_err:
+                    logger.error(f"[cool-tts] Failed to create WAV XBlob: {blob_err}")
+
+            logger.info(f"[cool-tts] Audio generated successfully at {out_path} (data_blob={blob_id})")
             return {
+                "event": "ui.TextToSpeechResponse",
                 "status": "ok",
-                "file_name": file_id,
-                "file_path": out_path,
                 "disposition": "final",
+                "data_blob": blob_id,
             }
         except Exception as e:
             logger.info(f"[cool-tts] TTS generation failed: {e}")

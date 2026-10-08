@@ -3,6 +3,10 @@
 
   // --- window.xintent ---
   window.xintent = window.xintent || {
+    SYN: 1,
+    FIN: 2,
+    SYN_FIN: 3,
+
     /**
      * Dispatch an intent to the matchbox202x platform
      * @param {string} intent - e.g., 'ui.TextToSpeech'
@@ -18,12 +22,20 @@
       const [namespace, action] = parts;
       const endpoint = `/intent/${namespace}/${action}?app=${encodeURIComponent(app)}`;
 
+      const headers = { 'Content-Type': 'application/json' };
+      if (payload.controlWord !== undefined) {
+        const ctrlStrings = [];
+        if (payload.controlWord & 1) ctrlStrings.push('SYN');
+        if (payload.controlWord & 2) ctrlStrings.push('FIN');
+        if (ctrlStrings.length > 0) {
+          headers['X-Channel-Control'] = ctrlStrings.join(',');
+        }
+      }
+
       try {
         const response = await fetch(endpoint, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: headers,
           body: JSON.stringify(payload)
         });
         return response;

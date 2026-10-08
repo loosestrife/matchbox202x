@@ -136,31 +136,46 @@ const routeIntent = async (req, res) => {
             ev.type == 33 &&
             [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) &&
             ev.data &&
-            ev.data[2] == txId
+            ev.data[1] == txId
           ) {
             try {
               const routerWin = await xintent.getValidRouterWin(X, root);
               const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin, ev);
 
-              writeJsonFrame(res, eventData);
+              const blobAtom = ev.data[4];
+              const controlWord = ev.data[2];
+              const customIntentHeaders = {};
+              if (blobAtom) {
+                customIntentHeaders['xintent-attached-data-blob'] = blobAtom;
+              }
+              if (controlWord !== undefined) {
+                const ctrlStrings = [];
+                if (controlWord & 1) ctrlStrings.push('SYN');
+                if (controlWord & 2) ctrlStrings.push('FIN');
+                if (ctrlStrings.length > 0) {
+                  customIntentHeaders['X-Channel-Control'] = ctrlStrings.join(',');
+                }
+              }
 
-              const blobAtom = ev.data[3];
+              writeJsonFrame(res, eventData, customIntentHeaders);
+
               if (blobAtom) {
                 try {
                   const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
                   xintent.XBlobUnlink(X, routerWin, clientWin, blobAtom);
 
                   if (blob) {
-                    writeJsonFrame(res, blob);
+                    writeJsonFrame(res, blob, { 'xblob-id': blobAtom });
                   }
                 } catch (err) {
                   logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
                 }
               }
 
-              // Finalize stream when disposition is final or error
-              if (eventData.disposition === 'final' || eventData.disposition === 'error') {
-                logger.info("Closing stream", {txId});
+              // Finalize stream when controlWord has FIN bit set (bit 1)
+              const isFin = controlWord !== undefined ? (controlWord & 2) !== 0 : true;
+              if (isFin) {
+                logger.info("Closing stream (FIN control word received)", {txId, controlWord});
                 if (headersSent) {
                   res.write(`--${BOUNDARY}--\r\n`);
                   res.end();

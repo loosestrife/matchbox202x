@@ -25,7 +25,18 @@ const {
 
 const app = express();
 app.set("json spaces", 2);
-app.use(express.json());
+app.use(express.json({ type: ['application/json', 'application/*+json', 'text/*', '*/*'] }));
+app.use(express.text({ type: '*/*' }));
+app.use((req, res, next) => {
+  if (typeof req.body === 'string' && req.body.trim()) {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch (_) {
+      req.body = { text: req.body };
+    }
+  }
+  next();
+});
 app.use(loggerMiddleware);
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -74,8 +85,71 @@ app.use((err, req, res, next) => {
   res.status(status).json(serializeError(err));
 });
 
-// localhost bridge
-app.listen(12345, 'localhost', () => {
-  logger.info('matchbox202x intent server running on http://localhost:12345');
+const http = require('http');
+const WebSocket = require('ws');
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ noServer: true });
+const wsClients = new Set();
+
+wss.on('connection', (ws) => {
+  logger.info('[http-bridge] Remote WebSocket client connected (e.g. Flammenwerfer)');
+  wsClients.add(ws);
+
+  ws.on('message', async (data) => {
+    try {
+      const msg = JSON.parse(data.toString('utf8'));
+      logger.info('[http-bridge] Remote WebSocket message received:', msg);
+
+      if (msg.event === 'sys.Advertise' || msg.intent === 'sys.Advertise') {
+        const appName = msg.app || 'flammenwerfer-phone';
+        logger.info(`[http-bridge] Processing sys.Advertise for app '${appName}'`);
+        if (msg.manifest) {
+          await X.ChangeProperty(
+            0,
+            clientWin,
+            xintent.atoms.MATCHBOX_TOML,
+            xintent.atoms.STRING,
+            8,
+            Buffer.from(msg.manifest, 'utf8')
+          );
+          await xintent.getAllMatchboxToml();
+          logger.info(`[http-bridge] Registered MATCHBOX_TOML manifest for '${appName}' on router`);
+        }
+      } else if (msg.intent) {
+        const routerWin = await xintent.getValidRouterWin(X, root);
+        await xintent.sendXIntentIntentV0(X, routerWin, {
+          senderWin: clientWin,
+          payload: msg,
+        });
+      }
+    } catch (err) {
+      logger.error('[http-bridge] Remote WebSocket message error:', err.message);
+    }
+  });
+
+  ws.on('close', () => {
+    logger.info('[http-bridge] Remote WebSocket client disconnected');
+    wsClients.delete(ws);
+  });
+});
+
+server.on('upgrade', (request, socket, head) => {
+  try {
+    const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+    if (pathname === '/ws' || pathname === '/remote-intents') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  } catch (_) {
+    socket.destroy();
+  }
+});
+
+server.listen(12345, '0.0.0.0', () => {
+  logger.info('matchbox202x intent server running on http://0.0.0.0:12345 (WebSocket: ws://0.0.0.0:12345/ws)');
 });
 })()

@@ -15,11 +15,14 @@ import select
 from typing import Callable, Dict, Any, Optional
 
 try:
-    from xintent_xlib import XIntentXlibClient
+    from xintent_xlib import XIntentXlibClient, SYN, FIN, SYN_FIN
     HAS_XLIB_CLIENT = True
 except ImportError:
     XIntentXlibClient = None
     HAS_XLIB_CLIENT = False
+    SYN = 1
+    FIN = 2
+    SYN_FIN = 3
 
 
 class XIntentServer:

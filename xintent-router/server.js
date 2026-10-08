@@ -128,9 +128,10 @@ async function startRouter() {
       );
       if (ev.message_type in dispatchTable) {
         const clientId = ev.data[0];
-        const payloadBlob = ev.data[1];
-        const txOrChannel = ev.data[2];
-        const dataBlob = ev.data[3];
+        const txOrChannel = ev.data[1];
+        const controlWord = ev.data[2];
+        const payloadBlob = ev.data[3];
+        const dataBlob = ev.data[4];
 
         enqueueClientTask(
           clientId,

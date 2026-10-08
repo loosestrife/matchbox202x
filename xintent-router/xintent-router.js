@@ -81,7 +81,10 @@ const tryToForwardTheIntent = async (xintentIntent) => {
     }
   }
 
-  if (xintentIntent.payload.Accept) {
+  const controlWord = xintentIntent.controlWord ?? 3;
+  const isSyn = (controlWord & 1) !== 0;
+
+  if (isSyn) {
     channelObj = getChannel(senderWin, channel);
     if (!channelObj) {
       channelObj = newChannel(senderWin, channel, xintentIntent);
@@ -164,15 +167,20 @@ const forwardMessageToChannel = async (channelObj, message) => {
         );
         return true;
       }
+      const controlWord = message.controlWord ?? 3;
+      const isFin = (controlWord & 2) !== 0;
+
       await sendXIntentIntentV0(X, routerWin, {
         targetWin: forwardTo,
         senderWin: routerWin,
+        controlWord: controlWord,
         ...getChannelToSend(forwardTo, channelObj),
         payload: message.payload,
         payloadBlob: message.payloadBlob,
         dataBlob: message.dataBlob,
       });
-      if(['final', 'cancel', 'error'].includes(message.payload?.disposition)){
+
+      if (isFin) {
         closeChannel(channelObj);
       }
       return true;

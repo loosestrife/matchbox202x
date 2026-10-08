@@ -5,10 +5,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.speech.tts.TextToSpeech
 import android.util.Base64
+import java.io.File
+import java.io.FileOutputStream
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -63,6 +66,17 @@ class CardsActivity : ComponentActivity() {
     },
 
     intent: async function(intentName, payload, targetApp) {
+      if (window.XIntentNative && typeof window.XIntentNative.isLocalAudioEnabled === 'function' && window.XIntentNative.isLocalAudioEnabled()) {
+        if (intentName === 'xaudio.PlaySoundBlob' || intentName === 'xaudio.PlayStream') {
+          var rawRes = window.XIntentNative.handleLocalAudioPlay(JSON.stringify(payload || {}));
+          return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (intentName === 'xaudio.ControlStream') {
+          var rawRes = window.XIntentNative.handleLocalAudioControl(JSON.stringify(payload || {}));
+          return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+      }
+
       if (window.XIntentNative && typeof window.XIntentNative.isLocalTtsEnabled === 'function' && window.XIntentNative.isLocalTtsEnabled()) {
         if (intentName === 'ui.TextToSpeech') {
           var rawRes = window.XIntentNative.handleLocalTts(JSON.stringify(payload || {}));
@@ -371,8 +385,92 @@ class CardsActivity : ComponentActivity() {
         }
     }
 
+    private var localMediaPlayer: MediaPlayer? = null
+
+    fun triggerLocalAudioPlay(jsonPayload: String): String {
+        return try {
+            val json = JSONObject(jsonPayload)
+            val cookie = json.optString("cookie")
+                .ifBlank { json.optString("Cookie", "default") }
+            val seqnum = json.optInt("seqnum", json.optInt("seq", 0))
+            val streamId = json.optInt("streamId", json.optInt("stream", 1))
+
+            var audioBytes: ByteArray? = null
+            if (json.has("data") && json.optString("_dataType") == "base64") {
+                audioBytes = Base64.decode(json.getString("data"), Base64.DEFAULT)
+            } else if (json.has("blob")) {
+                val blobObj = json.optJSONObject("blob")
+                if (blobObj != null && blobObj.optString("_dataType") == "base64") {
+                    audioBytes = Base64.decode(blobObj.getString("data"), Base64.DEFAULT)
+                }
+            }
+
+            if (audioBytes != null && audioBytes.isNotEmpty()) {
+                val tempAudioFile = File.createTempFile("flammen_audio_", ".wav", cacheDir)
+                FileOutputStream(tempAudioFile).use { fos ->
+                    fos.write(audioBytes)
+                }
+
+                localMediaPlayer?.release()
+                localMediaPlayer = MediaPlayer().apply {
+                    setDataSource(tempAudioFile.absolutePath)
+                    prepare()
+                    start()
+                }
+
+                XIntentClient.addLog("[xaudio.PlaySoundBlob] Playing audio on phone speaker (${audioBytes.size} bytes, seq #$seqnum)")
+
+                JSONObject().apply {
+                    put("event", "xaudio.XAudioPlayCompleteV0")
+                    put("status", "ok")
+                    put("cookie", cookie)
+                    put("streamId", streamId)
+                    put("seqnum", seqnum)
+                    put("disposition", "final")
+                }.toString()
+            } else {
+                JSONObject().apply {
+                    put("status", "ok")
+                    put("message", "XAudioPlay queued")
+                    put("cookie", cookie)
+                    put("seqnum", seqnum)
+                }.toString()
+            }
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("message", e.message ?: "Failed local audio playback")
+            }.toString()
+        }
+    }
+
+    fun triggerLocalAudioControl(jsonPayload: String): String {
+        return try {
+            val json = JSONObject(jsonPayload)
+            val command = json.optString("command", "stop")
+            if (command == "stop" || command == "pause") {
+                localMediaPlayer?.stop()
+                localMediaPlayer?.release()
+                localMediaPlayer = null
+                XIntentClient.addLog("[xaudio.ControlStream] Stopped phone speaker audio playback")
+            }
+            JSONObject().apply {
+                put("status", "ok")
+                put("command", command)
+            }.toString()
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("message", e.message ?: "Failed audio control")
+            }.toString()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        localMediaPlayer?.stop()
+        localMediaPlayer?.release()
+        localMediaPlayer = null
         localTtsEngine?.stop()
         localTtsEngine?.shutdown()
         localTtsEngine = null
@@ -380,6 +478,23 @@ class CardsActivity : ComponentActivity() {
 }
 
 class XIntentJSBridge(private val activity: CardsActivity) {
+    @Suppress("unused")
+    @JavascriptInterface
+    fun isLocalAudioEnabled(): Boolean {
+        return XIntentClient.isLocalAudioEnabled(activity.applicationContext)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun handleLocalAudioPlay(jsonPayload: String): String {
+        return activity.triggerLocalAudioPlay(jsonPayload)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun handleLocalAudioControl(jsonPayload: String): String {
+        return activity.triggerLocalAudioControl(jsonPayload)
+    }
     @Suppress("unused")
     @JavascriptInterface
     fun isLocalTtsEnabled(): Boolean {

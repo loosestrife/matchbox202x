@@ -99,6 +99,41 @@
       min-height: 40px;
       color: var(--accent-green);
     }
+    .debug-box {
+      background: #11111b;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .debug-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.9rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+    .debug-metrics {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: var(--accent-green);
+    }
+    .debug-log {
+      font-family: monospace;
+      background: #09090e;
+      padding: 10px;
+      border-radius: 4px;
+      border: 1px solid #282a36;
+      white-space: pre-wrap;
+      font-size: 0.82rem;
+      max-height: 140px;
+      overflow-y: auto;
+      color: #8be9fd;
+    }
   </style>
 </head>
 <body>
@@ -129,6 +164,24 @@
       <button id="tts-play" class="btn-green">▶ Play TTS</button>
       <button id="tts-stop">⏹ Stop</button>
     </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; width: 100%; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; font-size: 0.9rem;">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <label for="tts-app-select">🗣️ TTS Target:</label>
+        <select id="tts-app-select">
+          <option value="cool-tts" selected>cool-tts (Desktop Engine)</option>
+          <option value="flammenwerfer-phone">flammenwerfer-phone (Android Speech)</option>
+        </select>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <label for="xaudio-node-select">🔊 Audio Sink:</label>
+        <select id="xaudio-node-select">
+          <option value="user-desktop-speakers" selected>user-desktop-speakers (Desktop Speaker)</option>
+          <option value="flammenwerfer-phone">flammenwerfer-phone (Phone Speaker)</option>
+        </select>
+      </div>
+    </div>
   </div>
 
   <div class="tts-box">
@@ -136,440 +189,606 @@
     <div id="tts-status" class="tts-status">Ready. Load an EPUB or click Play TTS to speak visible text.</div>
   </div>
 
+  <div class="debug-box">
+    <div class="debug-header">
+      <strong>🐞 TTS & XAudio IPC Debug Area</strong>
+      <div class="debug-metrics">
+        <span>Pending TTS: <strong id="debug-pending-tts">0</strong></span> |
+        <span>Buffered Play: <strong id="debug-buffered-play">0</strong></span> |
+        <span>Sent: <strong id="debug-words">0</strong> words</span> |
+        <span>Received: <strong id="debug-bytes">0 B</strong> WAV</span> |
+        <span>Last RTT: <strong id="debug-rtt">0 ms</strong></span>
+      </div>
+    </div>
+    <div id="debug-log" class="debug-log">Ready. IPC debug telemetry will appear here...</div>
+  </div>
+
   <!-- Container where epub.js renders the iframe -->
   <div id="viewer"></div>
 </div>
 
 <script>
-  let book;
-  let rendition;
+let book;
+let rendition;
 
-  let ttsQueue = [];
-  let ttsIndex = 0;
-  let isTtsActive = false;
-  let currentTtsPromise = null;
-  let nextTtsPromise = null;
+let ttsQueue = [];
+let ttsIndex = 0;
+let isTtsActive = false;
+let currentTtsPromise = null;
+let nextTtsPromise = null;
 
-  const ttsStatusEl = document.getElementById('tts-status');
-  const ttsPlayBtn = document.getElementById('tts-play');
-  const ttsStopBtn = document.getElementById('tts-stop');
-  const chunkSizeSelect = document.getElementById('chunk-size');
+const ttsStatusEl = document.getElementById('tts-status');
+const ttsPlayBtn = document.getElementById('tts-play');
+const ttsStopBtn = document.getElementById('tts-stop');
+const chunkSizeSelect = document.getElementById('chunk-size');
 
-  function updateTtsStatus(msg) {
-    ttsStatusEl.textContent = msg;
-  }
+function updateTtsStatus(msg) {
+  ttsStatusEl.textContent = msg;
+}
 
-  // Ensure window.xintent client library is available
-  async function ensureXIntent() {
-    if (window.xintent) return window.xintent;
+// Ensure window.xintent client library is available
+async function ensureXIntent() {
+  if (window.xintent) return window.xintent;
 
-    return new Promise((resolve) => {
-      const script = document.createElement('script');
-      script.src = '/matchbox202x.js';
-      script.onload = () => resolve(window.xintent);
-      script.onerror = () => resolve(window.xintent);
-      document.head.appendChild(script);
-    });
-  }
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = '/matchbox202x.js';
+    script.onload = () => resolve(window.xintent);
+    script.onerror = () => resolve(window.xintent);
+    document.head.appendChild(script);
+  });
+}
 
-  // Break raw text into sentence/word chunks
-  function chunkText(rawText, chunkSizeWords = 25) {
-    const cleanText = (rawText || '').replace(/\s+/g, ' ').trim();
-    if (!cleanText) return [];
+// Break raw text into sentence/word chunks
+function chunkText(rawText, chunkSizeWords = 25) {
+  const cleanText = (rawText || '').replace(/\s+/g, ' ').trim();
+  if (!cleanText) return [];
 
-    const sentences = cleanText.split(/(?<=[.!?])\s+/);
-    const chunks = [];
-    let currentChunk = '';
+  const sentences = cleanText.split(/(?<=[.!?])\s+/);
+  const chunks = [];
+  let currentChunk = '';
 
-    for (const sentence of sentences) {
-      const wordCount = (currentChunk + ' ' + sentence).trim().split(/\s+/).length;
-      if (currentChunk && wordCount > chunkSizeWords) {
-        chunks.push(currentChunk.trim());
-        currentChunk = sentence;
-      } else {
-        currentChunk = (currentChunk + ' ' + sentence).trim();
-      }
-    }
-    if (currentChunk.trim()) {
+  for (const sentence of sentences) {
+    const wordCount = (currentChunk + ' ' + sentence).trim().split(/\s+/).length;
+    if (currentChunk && wordCount > chunkSizeWords) {
       chunks.push(currentChunk.trim());
+      currentChunk = sentence;
+    } else {
+      currentChunk = (currentChunk + ' ' + sentence).trim();
     }
-    return chunks;
+  }
+  if (currentChunk.trim()) {
+    chunks.push(currentChunk.trim());
+  }
+  return chunks;
+}
+
+let currentTtsCookie = 'tts_session_' + Date.now();
+
+let totalWordsSent = 0;
+let totalBytesReceived = 0;
+let pendingTtsCount = 0;
+let bufferedPlayCount = 0;
+
+function updatePipelineCounters(pendingDelta, bufferedDelta) {
+  pendingTtsCount = Math.max(0, pendingTtsCount + pendingDelta);
+  bufferedPlayCount = Math.max(0, bufferedPlayCount + bufferedDelta);
+
+  const pendingEl = document.getElementById('debug-pending-tts');
+  const bufferedEl = document.getElementById('debug-buffered-play');
+  if (pendingEl) pendingEl.textContent = pendingTtsCount;
+  if (bufferedEl) bufferedEl.textContent = bufferedPlayCount;
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function logDebug(msg) {
+  const debugLogEl = document.getElementById('debug-log');
+  if (!debugLogEl) return;
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false });
+  const line = `[${timeStr}] ${msg}\n`;
+  debugLogEl.textContent += line;
+  debugLogEl.scrollTop = debugLogEl.scrollHeight;
+}
+
+function updateDebugMetrics(words, bytes, rttMs) {
+  totalWordsSent += words;
+  totalBytesReceived += bytes;
+
+  document.getElementById('debug-words').textContent = totalWordsSent.toLocaleString();
+  document.getElementById('debug-bytes').textContent = formatBytes(totalBytesReceived);
+  document.getElementById('debug-rtt').textContent = `${rttMs} ms`;
+}
+
+function parseMultipartResponse(responseText) {
+  const parts = [];
+  if (!responseText || !responseText.includes('MatchboxFrameBoundary')) {
+    try {
+      parts.push({ headers: {}, json: JSON.parse(responseText) });
+    } catch (_) {}
+    return parts;
   }
 
-  let currentTtsCookie = 'tts_session_' + Date.now();
+  const lines = responseText.split(/\r?\n/);
+  const boundary = lines[0].trim();
+  const rawParts = responseText.split(boundary).filter(p => p.trim() && !p.includes('--\r') && !p.includes('--\n'));
+
+  for (const part of rawParts) {
+    const headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
+    if (headerEnd === -1) continue;
+
+    const headerText = part.slice(0, headerEnd);
+    const bodyText = part.slice(headerEnd).trim();
+
+    const headers = {};
+    headerText.split(/\r?\n/).forEach(line => {
+      const colon = line.indexOf(':');
+      if (colon !== -1) {
+        const k = line.slice(0, colon).trim().toLowerCase();
+        const v = line.slice(colon + 1).trim();
+        headers[k] = v;
+      }
+    });
+
+    try {
+      const json = JSON.parse(bodyText);
+      parts.push({ headers, json });
+    } catch (_) {}
+  }
+  return parts;
+}
+
+  const ttsAppSelect = document.getElementById('tts-app-select');
+  const xaudioNodeSelect = document.getElementById('xaudio-node-select');
+
+  // Populate TTS & XAudio options dynamically from /api/tags
+  async function populateTagsOptions() {
+    try {
+      const tags = await fetch('/api/tags').then(r => r.json());
+      if (tags) {
+        // 1. Populate TTS options
+        const ttsProviders = tags.intents?.['ui.TextToSpeech'] || ['cool-tts'];
+        if (ttsProviders.length > 0 && ttsAppSelect) {
+          const currentVal = ttsAppSelect.value;
+          ttsAppSelect.innerHTML = '';
+          ttsProviders.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = `${p} ${p === 'cool-tts' ? '(Desktop Engine)' : (p === 'flammenwerfer-phone' ? '(Android Speech)' : '')}`;
+            ttsAppSelect.appendChild(opt);
+          });
+          if (ttsProviders.includes(currentVal)) {
+            ttsAppSelect.value = currentVal;
+          }
+        }
+
+        // 2. Populate XAudioSink / XAudioNode options
+        const sinks = Object.keys(tags.XAudioSink || tags.XAudioNode || {});
+        if (sinks.length > 0 && xaudioNodeSelect) {
+          const currentSink = xaudioNodeSelect.value;
+          xaudioNodeSelect.innerHTML = '';
+          sinks.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s;
+            opt.textContent = `${s} ${s.includes('phone') ? '(Phone Speaker)' : '(Desktop Speaker)'}`;
+            xaudioNodeSelect.appendChild(opt);
+          });
+          if (sinks.includes(currentSink)) {
+            xaudioNodeSelect.value = currentSink;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[cool-ebooks] Could not fetch /api/tags for dynamic selector population:', e);
+    }
+  }
 
   // Dispatch a single chunk to ui.TextToSpeech and stream audio to XAudioSink
   async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
+    const targetTtsApp = ttsAppSelect ? ttsAppSelect.value || 'cool-tts' : 'cool-tts';
+    const targetXAudioNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'user-desktop-speakers' : 'user-desktop-speakers';
+
+    const wordCount = (text || '').trim().split(/\s+/).filter(Boolean).length;
+    const startTime = performance.now();
+
+    updatePipelineCounters(+1, 0);
+    logDebug(`[ui.TextToSpeech] Dispatching Chunk #${seqnum + 1} (${wordCount} words) to ${targetTtsApp}...`);
+
     const xintent = await ensureXIntent();
     if (xintent && typeof xintent.intent === 'function') {
       try {
         const response = await xintent.intent('ui.TextToSpeech', {
           intent: 'ui.TextToSpeech',
-          app: 'cool-tts',
+          app: targetTtsApp,
           text: text,
           format: 'audio/wav',
           speed: 1.0,
           reply: true,
           Accept: '*'
-        }, 'cool-tts');
+        }, targetTtsApp);
 
-        let resData = null;
+        const endTime = performance.now();
+        const rttMs = Math.round(endTime - startTime);
+
+        let wavByteLength = 0;
+        let blobId = null;
+
         if (response && response.ok) {
           try {
-            resData = await response.json();
-          } catch (e) {}
+            const rawText = await response.text();
+            const parts = parseMultipartResponse(rawText);
+
+            for (const part of parts) {
+              if (part.headers['xintent-attached-data-blob']) {
+                blobId = part.headers['xintent-attached-data-blob'];
+              }
+              if (part.json) {
+                if (part.json.data_blob || part.json.blobId || part.json.blob) {
+                  blobId = part.json.data_blob || part.json.blobId || part.json.blob;
+                }
+                if (part.json.data && part.json.type === 'audio/wav') {
+                  const buf = base64ToBuffer(part.json.data);
+                  wavByteLength = buf ? buf.byteLength : 0;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('[cool-ebooks] error parsing multipart TTS response:', e);
+          }
         }
 
-        if (window.xblob && window.xaudio) {
-          let blobId = resData?.blobId || resData?.blob;
-          if (!blobId && text) {
-            const created = await window.xblob.XBlobCreate({
-              type: 'audio/wav',
-              data: text,
-              _dataType: 'text',
-              xblobType: 'Blob'
-            });
-            blobId = created.blobId || created.blob;
-          }
+        updatePipelineCounters(-1, 0);
+        updateDebugMetrics(wordCount, wavByteLength, rttMs);
+        logDebug(`[ui.TextToSpeechResponse] Chunk #${seqnum + 1}: Received ${formatBytes(wavByteLength)} WAV (XBlob ${blobId || 'none'}) in ${rttMs}ms`);
 
-          if (blobId) {
-            await window.xaudio.XAudioPlay({
-              cookie: cookie,
-              streamId: 1,
-              seqnum: seqnum,
-              sample: blobId,
-              blob: blobId,
-              transferBlob: true
-            });
-          }
+        if (window.xblob && window.xaudio && blobId) {
+          updatePipelineCounters(0, +1);
+          logDebug(`[XAudioPlay] Streaming XBlob ${blobId} (seq #${seqnum + 1}, ctrl: SYN) to ${targetXAudioNode}...`);
+
+          const playStartTime = performance.now();
+          const playRes = await window.xaudio.XAudioPlay({
+            app: targetXAudioNode,
+            cookie: cookie,
+            streamId: 1,
+            seqnum: seqnum,
+            sample: blobId,
+            blob: blobId,
+            controlWord: window.xintent ? window.xintent.SYN : 1,
+            transferBlob: true
+          });
+
+          const playRttMs = Math.round(performance.now() - playStartTime);
+          updatePipelineCounters(0, -1);
+          logDebug(`[XAudioPlayResponse] ${targetXAudioNode} confirmed playback for seq #${seqnum + 1} in ${playRttMs}ms`);
         }
         return true;
       } catch (err) {
+        updatePipelineCounters(-1, 0);
+        logDebug(`[TTS ERROR] Chunk #${seqnum + 1} failed: ${err.message || err}`);
         console.warn('[cool-ebooks] xintent dispatch failed, falling back to Web Speech:', err);
       }
     }
 
-    // Web Speech API Fallback
-    if ('speechSynthesis' in window) {
-      return new Promise((resolve) => {
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.onend = () => resolve(true);
-        utter.onerror = () => resolve(true);
-        window.speechSynthesis.speak(utter);
-      });
-    }
-
-    return true;
-  }
-
-  // Double-Buffered TTS Execution Loop
-  async function startDoubleBufferedTts() {
-    if (isTtsActive) return;
-
-    let rawText = "";
-    if (rendition) {
-      try {
-        const contents = rendition.getContents()[0];
-        if (contents && contents.content) {
-          rawText = contents.content.innerText || contents.content.textContent || "";
-        }
-      } catch (e) {}
-    }
-
-    if (!rawText) {
-      rawText = "In the beginning God created the heavens and the earth. And the earth was formless and void; and darkness was upon the face of the deep. And the Spirit of God moved upon the face of the waters. And God said, Let there be light: and there was light.";
-    }
-
-    const chunkSize = parseInt(chunkSizeSelect.value, 10) || 25;
-    ttsQueue = chunkText(rawText, chunkSize);
-
-    if (ttsQueue.length === 0) {
-      updateTtsStatus("No text available to speak.");
-      return;
-    }
-
-    isTtsActive = true;
-    ttsIndex = 0;
-    ttsPlayBtn.disabled = true;
-    currentTtsCookie = 'tts_session_' + Date.now();
-
-    updateTtsStatus(`[TTS Double-Buffering Started] ${ttsQueue.length} chunks prepared.`);
-
-    // Prime the double buffer: pre-fetch Chunk 0 AND pre-fetch Chunk 1 in parallel
-    currentTtsPromise = dispatchTtsChunk(ttsQueue[0], 0, currentTtsCookie);
-    if (ttsQueue.length > 1) {
-      nextTtsPromise = dispatchTtsChunk(ttsQueue[1], 1, currentTtsCookie);
-    } else {
-      nextTtsPromise = null;
-    }
-
-    while (isTtsActive && ttsIndex < ttsQueue.length) {
-      const isPrebuffered = (ttsIndex + 1 < ttsQueue.length);
-      const bufferState = isPrebuffered ? `(Chunk ${ttsIndex + 2} pre-buffered in parallel)` : `(Final chunk)`;
-
-      updateTtsStatus(`[Speaking Chunk ${ttsIndex + 1}/${ttsQueue.length}] ${bufferState}:\n"${ttsQueue[ttsIndex]}"`);
-
-      // Await completion of current chunk
-      await currentTtsPromise;
-
-      if (!isTtsActive) break;
-
-      ttsIndex++;
-
-      if (ttsIndex < ttsQueue.length) {
-        // Promote pre-buffered N+1 chunk to current
-        currentTtsPromise = nextTtsPromise;
-
-        // Pre-buffer N+2 chunk in background
-        if (ttsIndex + 1 < ttsQueue.length) {
-          nextTtsPromise = dispatchTtsChunk(ttsQueue[ttsIndex + 1], ttsIndex + 1, currentTtsCookie);
-        } else {
-          nextTtsPromise = null;
-        }
-      }
-    }
-
-    if (isTtsActive) {
-      updateTtsStatus("Finished reading section.");
-    }
-    stopTts();
-  }
-
-  async function stopTts() {
-    isTtsActive = false;
-    ttsQueue = [];
-    ttsIndex = 0;
-    currentTtsPromise = null;
-    nextTtsPromise = null;
-    ttsPlayBtn.disabled = false;
-
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-
-    if (window.xaudio && typeof window.xaudio.controlStream === 'function') {
-      try {
-        await window.xaudio.controlStream({ command: 'stop', cookie: currentTtsCookie, streamId: 1 });
-      } catch (e) {}
-    } else {
-      const xintent = await ensureXIntent();
-      if (xintent && typeof xintent.intent === 'function') {
-        try {
-          xintent.intent('xaudio.ControlStream', { command: 'stop', cookie: currentTtsCookie });
-        } catch (e) {}
-      }
-    }
-
-    updateTtsStatus("TTS Stopped. Buffers dropped.");
-  }
-
-  // Handle Page Flip (drops buffers, flips page, and restarts TTS if playing)
-  async function handlePageFlip(direction) {
-    const wasPlaying = isTtsActive;
-    await stopTts();
-
-    if (rendition) {
-      if (direction === 'next') {
-        await rendition.next();
-      } else if (direction === 'prev') {
-        await rendition.prev();
-      }
-    }
-
-    // Wait for rendition iframe content to settle on the new page
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    if (wasPlaying) {
-      startDoubleBufferedTts();
     }
   }
+}
 
-  // Handle Jump to Specific Page Number
-  async function handlePageJump() {
-    const pageInput = document.getElementById('page-input');
-    const pageNum = parseInt(pageInput.value, 10);
-    if (!pageNum || !book || !rendition) return;
 
-    const wasPlaying = isTtsActive;
-    await stopTts();
+// Double-Buffered TTS Execution Loop
+async function startDoubleBufferedTts() {
+  if (isTtsActive) return;
 
-    if (book.locations && book.locations.total > 0) {
-      const targetPage = Math.max(1, Math.min(pageNum, book.locations.total));
-      const cfi = book.locations.cfiFromLocation(targetPage - 1);
-      if (cfi) {
-        await rendition.display(cfi);
-      }
-    } else {
-      await rendition.display(pageNum - 1);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    if (wasPlaying) {
-      startDoubleBufferedTts();
-    }
-  }
-
-  // Convert ArrayBuffer to Base64
-  function bufferToBase64(arrayBuffer) {
-    let binary = '';
-    const bytes = new Uint8Array(arrayBuffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return window.btoa(binary);
-  }
-
-  // Convert Base64 / Data URL to ArrayBuffer
-  function base64ToBuffer(base64Str) {
-    if (typeof base64Str !== 'string') return base64Str;
-    const cleanBase64 = base64Str.includes(',') ? base64Str.split(',')[1] : base64Str;
-    const binaryString = window.atob(cleanBase64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
-  }
-
-  // Load EPUB Data into epub.js rendition and bind location tracking
-  function loadBookFromData(data, fileName, initialLocation = null) {
-    if (rendition) rendition.destroy();
-
-    const bookBuffer = (typeof data === 'string') ? base64ToBuffer(data) : data;
-    book = ePub(bookBuffer);
-    rendition = book.renderTo("viewer", {
-      width: "100%",
-      height: "100%",
-      spread: "always"
-    });
-
-    if (initialLocation) {
-      rendition.display(initialLocation);
-    } else {
-      rendition.display();
-    }
-
-    // Track location changes: update UI and persist to localStorage
-    rendition.on('relocated', (location) => {
-      if (location && location.start) {
-        try {
-          localStorage.setItem('cool_ebooks_location', location.start.cfi);
-        } catch (e) {}
-      }
-      if (book && book.locations && book.locations.total > 0) {
-        const currentLocation = book.locations.locationFromCfi(location.start.cfi);
-        if (currentLocation !== -1 && currentLocation !== undefined) {
-          const pageNum = currentLocation + 1;
-          document.getElementById('page-input').value = pageNum;
-          try {
-            localStorage.setItem('cool_ebooks_page', pageNum);
-          } catch (e) {}
-        }
-      }
-    });
-
-    stopTts();
-    updateTtsStatus(`Loaded EPUB: ${fileName}. Generating page index...`);
-
-    book.ready.then(() => {
-      return book.locations.generate(1024);
-    }).then(() => {
-      const totalPages = book.locations.total;
-      document.getElementById('page-total').textContent = `/ ${totalPages}`;
-      document.getElementById('page-input').max = totalPages;
-
-      // Sync page input field after locations finish generating
-      const currentLoc = rendition.currentLocation();
-      if (currentLoc && currentLoc.start) {
-        const pNum = book.locations.locationFromCfi(currentLoc.start.cfi);
-        if (pNum !== -1 && pNum !== undefined) {
-          document.getElementById('page-input').value = pNum + 1;
-        }
-      }
-
-      updateTtsStatus(`Loaded EPUB: ${fileName} (${totalPages} pages). Ready for TTS.`);
-    }).catch((err) => {
-      console.warn('Page index generation failed:', err);
-      updateTtsStatus(`Loaded EPUB: ${fileName}. Ready for TTS.`);
-    });
-  }
-
-  // Restore saved EPUB and location from localStorage
-  function restoreSavedState() {
+  let rawText = "";
+  if (rendition) {
     try {
-      const savedData = localStorage.getItem('cool_ebooks_book_data');
-      const savedName = localStorage.getItem('cool_ebooks_book_name') || 'Saved Book.epub';
-      const savedLocation = localStorage.getItem('cool_ebooks_location');
-
-      if (savedData) {
-        loadBookFromData(savedData, savedName, savedLocation);
+      const contents = rendition.getContents()[0];
+      if (contents && contents.content) {
+        rawText = contents.content.innerText || contents.content.textContent || "";
       }
-    } catch (err) {
-      console.warn('Failed to restore saved book state from localStorage:', err);
+    } catch (e) {}
+  }
+
+  if (!rawText) {
+    rawText = "In the beginning God created the heavens and the earth. And the earth was formless and void; and darkness was upon the face of the deep. And the Spirit of God moved upon the face of the waters. And God said, Let there be light: and there was light.";
+  }
+
+  const chunkSize = parseInt(chunkSizeSelect.value, 10) || 25;
+  ttsQueue = chunkText(rawText, chunkSize);
+
+  if (ttsQueue.length === 0) {
+    updateTtsStatus("No text available to speak.");
+    return;
+  }
+
+  isTtsActive = true;
+  ttsIndex = 0;
+  ttsPlayBtn.disabled = true;
+  currentTtsCookie = 'tts_session_' + Date.now();
+
+  updateTtsStatus(`[TTS Double-Buffering Started] ${ttsQueue.length} chunks prepared.`);
+
+  // Prime the double buffer: pre-fetch Chunk 0 AND pre-fetch Chunk 1 in parallel
+  currentTtsPromise = dispatchTtsChunk(ttsQueue[0], 0, currentTtsCookie);
+  if (ttsQueue.length > 1) {
+    nextTtsPromise = dispatchTtsChunk(ttsQueue[1], 1, currentTtsCookie);
+  } else {
+    nextTtsPromise = null;
+  }
+
+  while (isTtsActive && ttsIndex < ttsQueue.length) {
+    const isPrebuffered = (ttsIndex + 1 < ttsQueue.length);
+    const bufferState = isPrebuffered ? `(Chunk ${ttsIndex + 2} pre-buffered in parallel)` : `(Final chunk)`;
+
+    updateTtsStatus(`[Speaking Chunk ${ttsIndex + 1}/${ttsQueue.length}] ${bufferState}:\n"${ttsQueue[ttsIndex]}"`);
+
+    // Await completion of current chunk
+    await currentTtsPromise;
+
+    if (!isTtsActive) break;
+
+    ttsIndex++;
+
+    if (ttsIndex < ttsQueue.length) {
+      // Promote pre-buffered N+1 chunk to current
+      currentTtsPromise = nextTtsPromise;
+
+      // Pre-buffer N+2 chunk in background
+      if (ttsIndex + 1 < ttsQueue.length) {
+        nextTtsPromise = dispatchTtsChunk(ttsQueue[ttsIndex + 1], ttsIndex + 1, currentTtsCookie);
+      } else {
+        nextTtsPromise = null;
+      }
     }
   }
 
-  // EPUB File Loading
-  document.getElementById('file-input').addEventListener('change', function (e) {
-    const file = e.target.files[0];
-    if (!file) return;
+  if (isTtsActive) {
+    updateTtsStatus("Finished reading section.");
+  }
+  stopTts();
+}
 
-    const reader = new FileReader();
+async function stopTts() {
+  isTtsActive = false;
+  ttsQueue = [];
+  ttsIndex = 0;
+  currentTtsPromise = null;
+  nextTtsPromise = null;
+  ttsPlayBtn.disabled = false;
 
-    reader.onload = function (event) {
-      const arrayBuffer = event.target.result;
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+
+  if (window.xaudio && typeof window.xaudio.controlStream === 'function') {
+    try {
+      await window.xaudio.controlStream({ command: 'stop', cookie: currentTtsCookie, streamId: 1 });
+    } catch (e) {}
+  } else {
+    const xintent = await ensureXIntent();
+    if (xintent && typeof xintent.intent === 'function') {
       try {
-        const base64Str = bufferToBase64(arrayBuffer);
-        localStorage.setItem('cool_ebooks_book_data', base64Str);
-        localStorage.setItem('cool_ebooks_book_name', file.name);
-        localStorage.removeItem('cool_ebooks_location');
-        localStorage.removeItem('cool_ebooks_page');
-      } catch (err) {
-        console.warn('Could not store EPUB in localStorage (quota limit):', err);
+        xintent.intent('xaudio.ControlStream', { command: 'stop', cookie: currentTtsCookie });
+      } catch (e) {}
+    }
+  }
+
+  updateTtsStatus("TTS Stopped. Buffers dropped.");
+}
+
+// Handle Page Flip (drops buffers, flips page, and restarts TTS if playing)
+async function handlePageFlip(direction) {
+  const wasPlaying = isTtsActive;
+  await stopTts();
+
+  if (rendition) {
+    if (direction === 'next') {
+      await rendition.next();
+    } else if (direction === 'prev') {
+      await rendition.prev();
+    }
+  }
+
+  // Wait for rendition iframe content to settle on the new page
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  if (wasPlaying) {
+    startDoubleBufferedTts();
+  }
+}
+
+// Handle Jump to Specific Page Number
+async function handlePageJump() {
+  const pageInput = document.getElementById('page-input');
+  const pageNum = parseInt(pageInput.value, 10);
+  if (!pageNum || !book || !rendition) return;
+
+  const wasPlaying = isTtsActive;
+  await stopTts();
+
+  if (book.locations && book.locations.total > 0) {
+    const targetPage = Math.max(1, Math.min(pageNum, book.locations.total));
+    const cfi = book.locations.cfiFromLocation(targetPage - 1);
+    if (cfi) {
+      await rendition.display(cfi);
+    }
+  } else {
+    await rendition.display(pageNum - 1);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  if (wasPlaying) {
+    startDoubleBufferedTts();
+  }
+}
+
+// Convert ArrayBuffer to Base64
+function bufferToBase64(arrayBuffer) {
+  let binary = '';
+  const bytes = new Uint8Array(arrayBuffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
+// Convert Base64 / Data URL to ArrayBuffer
+function base64ToBuffer(base64Str) {
+  if (typeof base64Str !== 'string') return base64Str;
+  const cleanBase64 = base64Str.includes(',') ? base64Str.split(',')[1] : base64Str;
+  const binaryString = window.atob(cleanBase64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+// Load EPUB Data into epub.js rendition and bind location tracking
+function loadBookFromData(data, fileName, initialLocation = null) {
+  if (rendition) rendition.destroy();
+
+  const bookBuffer = (typeof data === 'string') ? base64ToBuffer(data) : data;
+  book = ePub(bookBuffer);
+  rendition = book.renderTo("viewer", {
+    width: "100%",
+    height: "100%",
+    spread: "always"
+  });
+
+  if (initialLocation) {
+    rendition.display(initialLocation);
+  } else {
+    rendition.display();
+  }
+
+  // Track location changes: update UI and persist to localStorage
+  rendition.on('relocated', (location) => {
+    if (location && location.start) {
+      try {
+        localStorage.setItem('cool_ebooks_location', location.start.cfi);
+      } catch (e) {}
+    }
+    if (book && book.locations && book.locations.total > 0) {
+      const currentLocation = book.locations.locationFromCfi(location.start.cfi);
+      if (currentLocation !== -1 && currentLocation !== undefined) {
+        const pageNum = currentLocation + 1;
+        document.getElementById('page-input').value = pageNum;
+        try {
+          localStorage.setItem('cool_ebooks_page', pageNum);
+        } catch (e) {}
       }
-      loadBookFromData(arrayBuffer, file.name);
-    };
-
-    reader.readAsArrayBuffer(file);
+    }
   });
 
-  // Event Listeners
-  document.getElementById('next').addEventListener('click', () => {
+  stopTts();
+  updateTtsStatus(`Loaded EPUB: ${fileName}. Generating page index...`);
+
+  book.ready.then(() => {
+    return book.locations.generate(1024);
+  }).then(() => {
+    const totalPages = book.locations.total;
+    document.getElementById('page-total').textContent = `/ ${totalPages}`;
+    document.getElementById('page-input').max = totalPages;
+
+    // Sync page input field after locations finish generating
+    const currentLoc = rendition.currentLocation();
+    if (currentLoc && currentLoc.start) {
+      const pNum = book.locations.locationFromCfi(currentLoc.start.cfi);
+      if (pNum !== -1 && pNum !== undefined) {
+        document.getElementById('page-input').value = pNum + 1;
+      }
+    }
+
+    updateTtsStatus(`Loaded EPUB: ${fileName} (${totalPages} pages). Ready for TTS.`);
+  }).catch((err) => {
+    console.warn('Page index generation failed:', err);
+    updateTtsStatus(`Loaded EPUB: ${fileName}. Ready for TTS.`);
+  });
+}
+
+// Restore saved EPUB and location from localStorage
+function restoreSavedState() {
+  try {
+    const savedData = localStorage.getItem('cool_ebooks_book_data');
+    const savedName = localStorage.getItem('cool_ebooks_book_name') || 'Saved Book.epub';
+    const savedLocation = localStorage.getItem('cool_ebooks_location');
+
+    if (savedData) {
+      loadBookFromData(savedData, savedName, savedLocation);
+    }
+  } catch (err) {
+    console.warn('Failed to restore saved book state from localStorage:', err);
+  }
+}
+
+// EPUB File Loading
+document.getElementById('file-input').addEventListener('change', function (e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = function (event) {
+    const arrayBuffer = event.target.result;
+    try {
+      const base64Str = bufferToBase64(arrayBuffer);
+      localStorage.setItem('cool_ebooks_book_data', base64Str);
+      localStorage.setItem('cool_ebooks_book_name', file.name);
+      localStorage.removeItem('cool_ebooks_location');
+      localStorage.removeItem('cool_ebooks_page');
+    } catch (err) {
+      console.warn('Could not store EPUB in localStorage (quota limit):', err);
+    }
+    loadBookFromData(arrayBuffer, file.name);
+  };
+
+  reader.readAsArrayBuffer(file);
+});
+
+// Event Listeners
+document.getElementById('next').addEventListener('click', () => {
+  handlePageFlip('next');
+});
+
+document.getElementById('prev').addEventListener('click', () => {
+  handlePageFlip('prev');
+});
+
+document.getElementById('page-go').addEventListener('click', handlePageJump);
+document.getElementById('page-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    handlePageJump();
+  }
+});
+
+ttsPlayBtn.addEventListener('click', startDoubleBufferedTts);
+ttsStopBtn.addEventListener('click', stopTts);
+
+// Keyboard navigation (Left / Right Arrows)
+document.addEventListener('keyup', (e) => {
+  if (!rendition) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowRight') {
     handlePageFlip('next');
-  });
-
-  document.getElementById('prev').addEventListener('click', () => {
+  }
+  if (e.key === 'ArrowLeft') {
     handlePageFlip('prev');
-  });
+  }
+});
 
-  document.getElementById('page-go').addEventListener('click', handlePageJump);
-  document.getElementById('page-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      handlePageJump();
-    }
-  });
+// Pre-load xintent and restore saved state
+ensureXIntent();
+restoreSavedState();
 
-  ttsPlayBtn.addEventListener('click', startDoubleBufferedTts);
-  ttsStopBtn.addEventListener('click', stopTts);
-
-  // Keyboard navigation (Left / Right Arrows)
-  document.addEventListener('keyup', (e) => {
-    if (!rendition) return;
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    if (e.key === 'ArrowRight') {
-      handlePageFlip('next');
-    }
-    if (e.key === 'ArrowLeft') {
-      handlePageFlip('prev');
-    }
-  });
-
-  // Pre-load xintent and restore saved state
-  ensureXIntent();
-  restoreSavedState();
 </script>
 
 </body>
