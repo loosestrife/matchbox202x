@@ -64,13 +64,52 @@ async function processQueue(cookie) {
   const queue = playbackQueues.get(cookie);
   if (!queue || queue.isPlaying) return;
 
-  const item = queue.pending.get(queue.nextSeqnum);
-  if (!item) return; // Wait for next sequential item
+  let item = queue.pending.get(queue.nextSeqnum);
+
+  // Fallback: If expected seqnum is missing but higher seqnums are queued, acknowledge skipped chunks and advance
+  if (!item && queue.pending.size > 0) {
+    const pendingSeqnums = Array.from(queue.pending.keys()).sort((a, b) => a - b);
+    const lowestPending = pendingSeqnums[0];
+    if (lowestPending > queue.nextSeqnum) {
+      logger.warn(`[XAudioSink] Missing seqnum(s) ${queue.nextSeqnum}..${lowestPending - 1}, advancing playback to seqnum ${lowestPending}`);
+
+      for (let skippedSeq = queue.nextSeqnum; skippedSeq < lowestPending; skippedSeq++) {
+        if (queue.pending.has(skippedSeq)) {
+          const skippedItem = queue.pending.get(skippedSeq);
+          queue.pending.delete(skippedSeq);
+          if (skippedItem && skippedItem.senderWin) {
+            const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
+            sendResponseFn(X, xintent.routerWin, {
+              targetWin: skippedItem.senderWin,
+              senderWin: lighterWin,
+              channel: skippedItem.channel || 0,
+              controlWord: 1,
+              payload: {
+                event: 'XAudioPlayResponseV0',
+                intent: 'XAudioPlayResponseV0',
+                OutputId: cookie,
+                cookie: cookie,
+                streamId: skippedItem.payload?.streamId !== undefined ? Number(skippedItem.payload.streamId) : 1,
+                seqnum: skippedSeq,
+                status: 410,
+                message: 'Skipped'
+              }
+            }).catch(e => logger.warn(`Failed to acknowledge skipped seqnum ${skippedSeq}:`, e.message));
+          }
+        }
+      }
+
+      queue.nextSeqnum = lowestPending;
+      item = queue.pending.get(lowestPending);
+    }
+  }
+
+  if (!item) return;
 
   queue.isPlaying = true;
   queue.pending.delete(queue.nextSeqnum);
 
-  const { blobAtom, payload, senderWin } = item;
+  const { blobAtom, payload, senderWin, channel } = item;
   const seqnum = queue.nextSeqnum;
   const streamId = payload.streamId !== undefined ? Number(payload.streamId) : (payload.stream !== undefined ? Number(payload.stream) : 1);
 
@@ -106,9 +145,12 @@ async function processQueue(cookie) {
       // 2. Dispatch XAudioPlayResponseV0 event back to client with streamId and seqnum
       try {
         if (senderWin) {
-          await xintent.sendXIntentEventV0(X, xintent.routerWin, {
+          const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
+          await sendResponseFn(X, xintent.routerWin, {
             targetWin: senderWin,
             senderWin: lighterWin,
+            channel: channel || 0,
+            controlWord: 1, // SYN (keep channel open for subsequent stream chunks)
             payload: {
               event: 'XAudioPlayResponseV0',
               intent: 'XAudioPlayResponseV0',
@@ -137,7 +179,7 @@ async function processQueue(cookie) {
   }
 }
 
-async function playSoundBlob(payload, senderWin, dataBlob) {
+async function playSoundBlob(payload, senderWin, dataBlob, channel = 0) {
   const cookie = payload.cookie || payload.Cookie || payload.OutputId || 'default';
   const rawBlob = dataBlob || payload.dataBlob || payload.sample || payload.BlobId || payload.blobId || payload.blob;
   const blobAtom = Number(rawBlob);
@@ -157,10 +199,35 @@ async function playSoundBlob(payload, senderWin, dataBlob) {
   const queue = playbackQueues.get(cookie);
   const targetSeqnum = seqnum !== null ? seqnum : (queue.pending.size + queue.nextSeqnum + (queue.isPlaying ? 1 : 0));
 
+  if (targetSeqnum < queue.nextSeqnum) {
+    logger.warn(`[XAudioSink] Outdated seqnum ${targetSeqnum} arrived after queue advanced to ${queue.nextSeqnum}, acknowledging 410 Too Late`);
+    if (senderWin) {
+      const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
+      await sendResponseFn(X, xintent.routerWin, {
+        targetWin: senderWin,
+        senderWin: lighterWin,
+        channel: channel || 0,
+        controlWord: 1,
+        payload: {
+          event: 'XAudioPlayResponseV0',
+          intent: 'XAudioPlayResponseV0',
+          OutputId: cookie,
+          cookie: cookie,
+          streamId: payload.streamId !== undefined ? Number(payload.streamId) : 1,
+          seqnum: targetSeqnum,
+          status: 410,
+          message: 'Too Late'
+        }
+      });
+    }
+    return { status: 'error', code: 410, message: 'Too Late', cookie, seqnum: targetSeqnum };
+  }
+
   queue.pending.set(targetSeqnum, {
     blobAtom,
     payload,
     senderWin,
+    channel,
   });
 
   processQueue(cookie);

@@ -13,6 +13,9 @@ const {
   parseXIntentIntentV0,
   parseXIntentEventV0,
   XClientMessage,
+  sendXIntentEventV0,
+  sendXAudioPlayResponseV0,
+  sendXChannelJsonFrame,
 } = require("../x11-promises/xintent");
 const { x11, X, root, routerWin } = require("./index");
 const {
@@ -34,134 +37,141 @@ const {
   initXIntentRegistry,
 } = require('./xintent-registry');
 
-const intentsAwaitingServicesQueue = {}; // intent -> [xintentIntent]
+const intentsAwaitingServicesQueue = {}; // intent -> [xchannelFrame]
 async function checkToDrainIntentsQueue(intentName) {
   const queue = intentsAwaitingServicesQueue[intentName];
   while (queue && queue.length) {
-    tryToForwardTheIntent(queue.shift());
+    tryToForwardTheFrame(queue.shift());
   }
 }
 initXIntentRegistry({checkToDrainIntentsQueue});
 
+function formatActionString(xchannelFrame, ev) {
+  const atomId = xchannelFrame?.messageTypeAtom || ev?.message_type;
+  const atomName = Object.keys(atoms).find(k => atoms[k] === atomId) || (atomId ? `ATOM_${atomId}` : 'XCHANNEL_FRAME');
+  const payload = xchannelFrame?.payload;
+  const subAction = payload?.intent || payload?.event || payload?.action;
+  return subAction ? `${atomName}:${subAction}` : atomName;
+}
+
 const handleXIntentIntentV0 = {
-  parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob: false}),
-  securityContext: (xintentIntent) => {
+  parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev, { unlinkPayloadBlob: false }),
+  securityContext: (xchannelFrame, ev) => {
     return {
-      source: { window: xintentIntent.senderWin },
-      action: `XIntent.${xintentIntent.payload.intent}`,
+      source: { window: xchannelFrame.senderWin },
+      action: formatActionString(xchannelFrame, ev),
       resources: [],
     };
   },
-  accept: async (xintentIntent) => {
-    await tryToForwardTheIntent(xintentIntent);
+  accept: async (xchannelFrame) => {
+    await tryToForwardTheFrame(xchannelFrame);
   },
 };
 
-const handleXIntentEventV0 = {
-  parse: async (ev) => parseXIntentEventV0(X, routerWin, ev, {unlinkPayloadBlob: false}),
-  securityContext: (xintentEvent) => {
+const handleForwardingOfXChannelJsonFrame = {
+  parse: async (ev) => parseXIntentEventV0(X, routerWin, ev, { unlinkPayloadBlob: false }),
+  securityContext: (xchannelFrame, ev) => {
     return {
-      source: {window: xintentEvent.senderWin },
-      action: `XIntentEvent.${xintentEvent.payload.event}`
+      source: { window: xchannelFrame.senderWin },
+      action: formatActionString(xchannelFrame, ev),
     };
   },
-  accept: async (xintentEvent) => {
-    await tryToForwardTheEvent(xintentEvent);
+  accept: async (xchannelFrame) => {
+    await tryToForwardTheFrame(xchannelFrame);
   }
 };
+const handleXIntentEventV0 = handleForwardingOfXChannelJsonFrame;
 
-const tryToForwardTheIntent = async (xintentIntent) => {
-  const {senderWin, channel, payload} = xintentIntent;
-  const intent = payload.intent;
+const tryToForwardTheFrame = async (xchannelFrame) => {
+  const { senderWin, channel, payload } = xchannelFrame;
+  const actionStr = formatActionString(xchannelFrame);
+  const intent = payload?.intent;
 
-  let channelObj = getChannelForMessage(xintentIntent);
-  if(channelObj){
-    if(await forwardMessageToChannel(channelObj, xintentIntent)){
+  let channelObj = getChannelForMessage(xchannelFrame);
+  if (channelObj) {
+    if (await forwardMessageToChannel(channelObj, xchannelFrame)) {
       return;
     }
   }
 
-  const controlWord = xintentIntent.controlWord ?? 3;
+  const controlWord = xchannelFrame.controlWord ?? 3;
   const isSyn = (controlWord & 1) !== 0;
 
   if (isSyn) {
     channelObj = getChannel(senderWin, channel);
     if (!channelObj) {
-      channelObj = newChannel(senderWin, channel, xintentIntent);
+      channelObj = newChannel(senderWin, channel, xchannelFrame);
     }
   }
 
-  // (4) find a handler and send the intent
-  const registryEntry = intentRegistry[intent];
-  if (registryEntry) {
-    const { wid, matchboxToml } = registryEntry[0];
-    logger.info(`[intent-router] Found service window (${widString(wid)})`);
-    if (channelObj) {
-      channelObj.handlerWin = wid;
-    }
-    await sendXIntentIntentV0(X, routerWin, {
-      targetWin: wid,
-      senderWin: routerWin,
-      ...getChannelToSend(wid, channelObj),
-      payload: xintentIntent.payload,
-      payloadBlob: xintentIntent.payloadBlob,
-      dataBlob: xintentIntent.dataBlob,
-    });
-    return;
-  } else {
-    logger.info(
-      `[intent-router] No service mapped for action: ${intent}, falling back to lighter ${JSON.stringify(lighterRegistry, null, 2)}`,
-    );
-    const lighterRegistryEntry = lighterRegistry[intent];
-    if (lighterRegistryEntry && lighterRegistryEntry.length > 0) {
-      const { computer, packageName, wid, publicKeyHash } =
-        lighterRegistryEntry[0];
+  if (intent) {
+    const registryEntry = intentRegistry[intent];
+    if (registryEntry) {
+      const { wid, matchboxToml } = registryEntry[0];
+      logger.info(`[intent-router] Found service window (${widString(wid)}) for ${actionStr}`);
+      if (channelObj) {
+        channelObj.handlerWin = wid;
+      }
       await sendXIntentIntentV0(X, routerWin, {
         targetWin: wid,
         senderWin: routerWin,
-        txId: 0,
-        payload: {
-          intent: "sys.Launch",
-          computer,
-          package: packageName,
-          intendedIntent: intent,
-        },
+        ...getChannelToSend(wid, channelObj),
+        payload: xchannelFrame.payload,
+        payloadBlob: xchannelFrame.payloadBlob,
+        dataBlob: xchannelFrame.dataBlob,
       });
+      return;
     } else {
-      logger.error(`no launchable service found for ${intent}`);
+      logger.info(
+        `[intent-router] No service mapped for action: ${actionStr}, falling back to lighter ${JSON.stringify(lighterRegistry, null, 2)}`,
+      );
+      const isAlreadyLaunching = intentsAwaitingServicesQueue[intent] && intentsAwaitingServicesQueue[intent].length > 0;
+      if (!intentsAwaitingServicesQueue[intent]) {
+        intentsAwaitingServicesQueue[intent] = [];
+      }
+      intentsAwaitingServicesQueue[intent].push(xchannelFrame);
+
+      if (!isAlreadyLaunching) {
+        const lighterRegistryEntry = lighterRegistry[intent];
+        if (lighterRegistryEntry && lighterRegistryEntry.length > 0) {
+          const { computer, packageName, wid, publicKeyHash } = lighterRegistryEntry[0];
+          await sendXIntentIntentV0(X, routerWin, {
+            targetWin: wid,
+            senderWin: routerWin,
+            txId: 0,
+            payload: {
+              intent: "sys.Launch",
+              computer,
+              package: packageName,
+              intendedIntent: intent,
+            },
+          });
+        } else {
+          logger.error(`no launchable service found for ${actionStr}`);
+        }
+      } else {
+        logger.info(`[intent-router] Service '${intent}' is already launching; queued ${actionStr}`);
+      }
     }
-    if (!intentsAwaitingServicesQueue[intent]) {
-      intentsAwaitingServicesQueue[intent] = [];
-    }
-    intentsAwaitingServicesQueue[intent].push(xintentIntent);
+  } else {
+    logger.info(`dropping xchannel frame without active channel ${actionStr}`, xchannelFrame);
   }
 };
 
-const tryToForwardTheEvent = async (xintentEvent) => {
-  let channelObj = getChannelForMessage(xintentEvent);
-  if(channelObj){
-    if(await forwardMessageToChannel(channelObj, xintentEvent)){
-      return;
-    }
-  }
-  logger.info("dropping event that isnt in a channel", xintentEvent);
-}
-
-
 const forwardMessageToChannel = async (channelObj, message) => {
-  const messageSubType = message.intent ?? message.event;
-  if(channelObj){
+  const actionStr = formatActionString(message);
+  if (channelObj) {
     if (channelObj.handlerWin) {
       let forwardTo;
       if (message.senderWin == channelObj.handlerWin) {
-        // usual case
+        // usual case: handler replying back to sender
         forwardTo = channelObj.senderWin;
       } else if (message.senderWin == channelObj.senderWin) {
-        // for example sys.Cancel 
+        // for example sys.Cancel or stream chunk from sender
         forwardTo = channelObj.handlerWin;
       } else {
         logger.info(
-          `Message ${messageSubType} in channel ${message.channel} was sent by ${widString(message.senderWin)} not on channel (was the intent redirected?)`,
+          `Message ${actionStr} in channel ${message.channel} was sent by ${widString(message.senderWin)} not on channel (was the intent redirected?)`,
           message,
           channelObj,
         );
@@ -171,9 +181,16 @@ const forwardMessageToChannel = async (channelObj, message) => {
       const isFin = (controlWord & 2) !== 0;
       const dataBlob = message.dataBlob || message.payload?.data_blob || message.payload?.blobId || message.payload?.blob || 0;
 
-      await sendXIntentIntentV0(X, routerWin, {
+      const sendFn = message.messageTypeAtom === atoms.XAUDIO_PLAY_RESPONSE_V0
+        ? sendXAudioPlayResponseV0
+        : (message.messageTypeAtom === atoms.XINTENT_EVENT_V0 ? sendXIntentEventV0 : sendXChannelJsonFrame);
+
+      await sendFn(X, routerWin, {
         targetWin: forwardTo,
         senderWin: routerWin,
+        controlWord: controlWord,
+        ...getChannelToSend(forwardTo, channelObj),
+        payload: message.payload,
         controlWord: controlWord,
         ...getChannelToSend(forwardTo, channelObj),
         payload: message.payload,
@@ -220,9 +237,7 @@ async function sendXIntentIntentV0(
   }
 
   const channelToSend = (channel !== undefined && channel !== 0) ? (channel >>> 0) : (txId !== undefined ? (txId >>> 0) : 0);
-  const ctrlWordToSend = (controlWord !== undefined
-    ? controlWord
-    : (channelToSend !== 0 || payload?.reply || payload?.Accept ? 3 : 0)) >>> 0;
+  const ctrlWordToSend = (controlWord !== undefined ? controlWord : 0) >>> 0;
 
   await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [
     (senderWin || routerWin) >>> 0,
@@ -338,6 +353,7 @@ const xintentUnregisterWindow = async (destroyedWin) => {
 module.exports = {
   handleXIntentIntentV0,
   handleXIntentEventV0,
+  handleForwardingOfXChannelJsonFrame,
   getAllMatchboxToml,
   parseWindowToml,
   parseWindowLighterToml,

@@ -494,41 +494,30 @@ async function startDoubleBufferedTts() {
   ttsPlayBtn.disabled = true;
   currentTtsCookie = 'tts_session_' + Date.now();
 
-  updateTtsStatus(`[TTS Double-Buffering Started] ${ttsQueue.length} chunks prepared.`);
+  const PIPELINE_DEPTH = 3;
+  updateTtsStatus(`[TTS Pipelining Started] ${ttsQueue.length} chunks prepared.`);
 
-  // Prime the double buffer: pre-fetch Chunk 0 AND pre-fetch Chunk 1 in parallel
-  currentTtsPromise = dispatchTtsChunk(ttsQueue[0], 0, currentTtsCookie);
-  if (ttsQueue.length > 1) {
-    nextTtsPromise = dispatchTtsChunk(ttsQueue[1], 1, currentTtsCookie);
-  } else {
-    nextTtsPromise = null;
-  }
+  const activePromises = [];
 
-  while (isTtsActive && ttsIndex < ttsQueue.length) {
-    const isPrebuffered = (ttsIndex + 1 < ttsQueue.length);
-    const bufferState = isPrebuffered ? `(Chunk ${ttsIndex + 2} pre-buffered in parallel)` : `(Final chunk)`;
-
-    updateTtsStatus(`[Speaking Chunk ${ttsIndex + 1}/${ttsQueue.length}] ${bufferState}:\n"${ttsQueue[ttsIndex]}"`);
-
-    // Await completion of current chunk
-    await currentTtsPromise;
-
+  for (let i = 0; i < ttsQueue.length; i++) {
     if (!isTtsActive) break;
 
-    ttsIndex++;
+    updateTtsStatus(`[Speaking Chunk ${i + 1}/${ttsQueue.length}] (${activePromises.length + 1} active in pipeline):\n"${ttsQueue[i]}"`);
 
-    if (ttsIndex < ttsQueue.length) {
-      // Promote pre-buffered N+1 chunk to current
-      currentTtsPromise = nextTtsPromise;
+    const p = dispatchTtsChunk(ttsQueue[i], i, currentTtsCookie);
+    activePromises.push(p);
 
-      // Pre-buffer N+2 chunk in background
-      if (ttsIndex + 1 < ttsQueue.length) {
-        nextTtsPromise = dispatchTtsChunk(ttsQueue[ttsIndex + 1], ttsIndex + 1, currentTtsCookie);
-      } else {
-        nextTtsPromise = null;
-      }
+    p.finally(() => {
+      const idx = activePromises.indexOf(p);
+      if (idx !== -1) activePromises.splice(idx, 1);
+    });
+
+    if (activePromises.length >= PIPELINE_DEPTH) {
+      await Promise.race(activePromises);
     }
   }
+
+  await Promise.all(activePromises);
 
   if (isTtsActive) {
     updateTtsStatus("Finished reading section.");

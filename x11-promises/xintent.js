@@ -101,6 +101,7 @@ async function connectToRouter(X, root) {
     "XBLOB_DESTRUCTOR_V0",
 
     "XAUDIO_PLAY_V0",
+    "XAUDIO_PLAY_RESPONSE_V0",
     "XAUDIO_CONTROL_V0",
     "XAUDIO_PREFETCH_SOUND_BLOB_V0",
     "XAUDIO_SEEK_STREAM_V0",
@@ -378,9 +379,7 @@ const sendXChannelJsonFrame = async (
   }
 
   const channelToSend = (channel !== undefined && channel !== 0) ? (channel >>> 0) : (txId !== undefined ? (txId >>> 0) : 0);
-  const ctrlWordToSend = (controlWord !== undefined
-    ? controlWord
-    : (channelToSend !== 0 || payload?.reply || payload?.Accept ? 3 : 0)) >>> 0;
+  const ctrlWordToSend = (controlWord !== undefined ? controlWord : 0) >>> 0;
 
   // 3. Dispatch XChannelJsonFrame: data.l[0]=senderWin, data.l[1]=channel, data.l[2]=controlWord, data.l[3]=payloadBlob, data.l[4]=dataBlob
   await XClientMessage(X, targetWin, messageTypeAtom, [
@@ -405,10 +404,13 @@ const sendXIntentEventV0 = (X, routerWin, opts) =>
   sendXChannelJsonFrame(atoms.XINTENT_EVENT_V0, X, routerWin, opts);
 
 const sendXAudioPlayV0 = (X, routerWin, opts) =>
-  sendXChannelJsonFrame(atoms.XAUDIO_PLAY_V0 || atoms.XAUDIO_PLAY_V0, X, routerWin, opts);
+  sendXChannelJsonFrame(atoms.XAUDIO_PLAY_V0, X, routerWin, opts);
+
+const sendXAudioPlayResponseV0 = (X, routerWin, opts) =>
+  sendXChannelJsonFrame(atoms.XAUDIO_PLAY_RESPONSE_V0, X, routerWin, opts);
 
 const sendXAudioControlV0 = (X, routerWin, opts) =>
-  sendXChannelJsonFrame(atoms.XAUDIO_CONTROL_V0 || atoms.XAUDIO_CONTROL_V0, X, routerWin, opts);
+  sendXChannelJsonFrame(atoms.XAUDIO_CONTROL_V0, X, routerWin, opts);
 
 async function XBlobRead(X, routerWin, blobAtom, host, version) {
   let hostWin = await X.GetSelectionOwner(blobAtom);
@@ -484,7 +486,8 @@ async function parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob = true}
   const channel = ev.data[1];
   const controlWord = ev.data[2];
   const dataBlob = ev.data[4];
-  return { targetWin: ev.wid, senderWin, channel, controlWord, payload, payloadBlob, dataBlob };
+  const messageTypeAtom = ev.message_type;
+  return { targetWin: ev.wid, senderWin, channel, controlWord, payload, payloadBlob, dataBlob, messageTypeAtom };
 }
 
 function parseXBlobBroadcastFrame(X, routerWin, ev){
@@ -527,6 +530,7 @@ module.exports = {
   sendXIntentIntentV0,
   sendXIntentEventV0,
   sendXAudioPlayV0,
+  sendXAudioPlayResponseV0,
   sendXAudioControlV0,
   XBlobCreate,
   XBlobGrant,

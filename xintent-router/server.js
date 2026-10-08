@@ -5,7 +5,7 @@ const logger = new Logger({module: 'server.js'});
 const {x11, X, rawX, root, routerWin} = require('.');
 const {atoms, widString, connectToRouter, init: xintentInit} = require('../x11-promises/xintent');
 xintentInit({logger: new Logger({module: 'libxintent'})});
-const {handleXIntentIntentV0, handleXIntentEventV0, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
+const {handleXIntentIntentV0, handleXIntentEventV0, handleForwardingOfXChannelJsonFrame, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
 const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0} = require('./xblob');
 const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0, xaudioUnregisterWindow} = require('./xaudio');
 const {checkXSecurePolicy} = require('./xsecure');
@@ -29,7 +29,7 @@ async function startRouter() {
   ];
   const dispatchAtoms = {
     'XINTENT_INTENT_V0': handleXIntentIntentV0,
-    'XINTENT_EVENT_V0': handleXIntentEventV0,
+    'XINTENT_EVENT_V0': handleForwardingOfXChannelJsonFrame,
 
     'XBLOB_CREATE_V0': handleXBlobCreateV0,
     'XBLOB_GRANT_V0': handleXBlobGrantV0,
@@ -41,6 +41,7 @@ async function startRouter() {
 
     'XAUDIO_GET_AUDIO_OUTPUTS_V0': handleXAudioGetAudioOutputsV0,
     'XAUDIO_PLAY_V0': handleXAudioPlayV0,
+    'XAUDIO_PLAY_RESPONSE_V0': handleForwardingOfXChannelJsonFrame,
     'XAUDIO_CONTROL_V0': handleXAudioControlV0,
   };
   await Promise.all(

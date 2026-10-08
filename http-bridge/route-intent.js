@@ -146,16 +146,28 @@ const routeIntent = async (req, res) => {
 
       const responsePromise = new Promise((resolve, reject) => {
         const responseHandler = async (ev) => {
+          const responseAtoms = [
+            xintent.atoms.XINTENT_INTENT_V0,
+            xintent.atoms.XINTENT_EVENT_V0,
+            xintent.atoms.XAUDIO_PLAY_RESPONSE_V0
+          ].filter(Boolean);
+
           if (
             ev &&
             ev.type == 33 &&
-            [xintent.atoms.XINTENT_INTENT_V0, xintent.atoms.XINTENT_EVENT_V0].includes(ev.message_type) &&
+            responseAtoms.includes(ev.message_type) &&
             ev.data &&
             ev.data[1] == txId
           ) {
             try {
               const routerWin = await xintent.getValidRouterWin(X, root);
               const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin, ev);
+
+              logger.info(`route-intent: [HTTP STREAM] Forwarding response frame (atom ${ev.message_type}) for txId ${txId} on channel ${ev.data[1]}`, {
+                event: eventData?.event || eventData?.intent,
+                txId,
+                controlWord: ev.data[2],
+              });
 
               const blobAtom = ev.data[4] || eventData?.data_blob || eventData?.blobId || eventData?.blob;
               const controlWord = ev.data[2];

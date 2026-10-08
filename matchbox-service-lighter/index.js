@@ -170,6 +170,7 @@ async function startLighter() {
 
   const xintentAtom = await X.InternAtom(false, 'XINTENT');
   const xintentIntentV0Atom = await X.InternAtom(false, 'XINTENT_INTENT_V0');
+  const xintentEventV0Atom = await X.InternAtom(false, 'XINTENT_EVENT_V0');
   const xintentDataAtom = await X.InternAtom(false, 'XINTENT_DATA');
 
   const xblobDestructorAtom = await X.InternAtom(false, 'XBLOB_DESTRUCTOR_V0');
@@ -208,7 +209,7 @@ async function startLighter() {
         },
         async () => {
           try {
-            if (ev.message_type == xintentIntentV0Atom) {
+            if (ev.message_type == xintentIntentV0Atom || ev.message_type == xintentEventV0Atom) {
               const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               const payload = xintentIntent.payload;
               const intentName = payload.intent || payload.action || payload.event;
@@ -238,13 +239,13 @@ async function startLighter() {
                 await pickFiles.pickFile(xintentIntent);
               }
               else if (["xaudio.PlaySoundBlob", "XAudioPlaySoundBlob", "XAudioPlaySoundBlobV0", "XAudioPlayV0", "XAudioPlay", "xaudio.Play"].includes(intentName)) {
-                await xaudioNode.playSoundBlob(payload, xintentIntent.senderWin, xintentIntent.dataBlob);
+                await xaudioNode.playSoundBlob(payload, xintentIntent.senderWin, xintentIntent.dataBlob, xintentIntent.channel);
               }
               else if (["xaudio.PrefetchSoundBlob", "XAudioPrefetchSoundBlob", "XAudioPrefetchSoundBlobV0", "XAudioPrefetch"].includes(intentName)) {
                 await xaudioNode.prefetchSoundBlob(payload, xintentIntent.dataBlob);
               }
               else if (["xaudio.PlayStream", "PlayStream", "XAudioPlayStreamV0"].includes(intentName)) {
-                await xaudioNode.playStream(payload, xintentIntent.senderWin, xintentIntent.dataBlob);
+                await xaudioNode.playStream(payload, xintentIntent.senderWin, xintentIntent.dataBlob, xintentIntent.channel);
               }
               else if (["xaudio.ControlStream", "ControlStream", "XAudioControlStreamV0", "XAudioControlV0", "XAudioControl", "xaudio.Control"].includes(intentName)) {
                 await xaudioNode.controlStream(payload);
@@ -258,9 +259,9 @@ async function startLighter() {
               }
             }
             else if (ev.message_type == xaudioPlaySoundBlobAtom) {
-              const { payload, senderWin, dataBlob } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
+              const { payload, senderWin, dataBlob, channel } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               logger.setContext({ intent: 'xaudio.Play' });
-              await xaudioNode.playSoundBlob(payload, senderWin, dataBlob);
+              await xaudioNode.playSoundBlob(payload, senderWin, dataBlob, channel);
             }
             else if (ev.message_type == xaudioPrefetchSoundBlobAtom) {
               const { payload } = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
