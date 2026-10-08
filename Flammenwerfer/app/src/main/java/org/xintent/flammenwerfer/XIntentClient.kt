@@ -77,7 +77,7 @@ id = "flammenwerfer-phone"
 "ui.Copy" = true
 "ui.Paste" = true
 
-[XAudioNode]
+[XAudioSink]
 name = "flammenwerfer-phone"
 """
 

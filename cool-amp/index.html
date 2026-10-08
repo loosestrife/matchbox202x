@@ -323,44 +323,39 @@
     timeDisplay.textContent = `${formatTime(current)} / ${formatTime(total || 0)}`;
   }
 
-  // Construct and send MediaStream XBlob Packet via window.xintent according to polyfills.md
+  // Construct and send XAudioPlay packet via window.xaudio
   async function sendMediaStreamChunk(base64Chunk, seq) {
     const xintent = await ensureXIntent();
 
-    // Construct MediaStream XBlob payload specified in polyfills.md
-    const mediaStreamXBlob = {
-      xblobType: "MediaStream",
-      type: "audio/mp3",
-      _dataType: "json",
-      data: [{
-        type: "audio",
-        timestamp: Date.now(),
-        streamId: currentStreamId,
-        seqNum: seq,
-        blob: {
-          type: "audio/mp3",
-          _dataType: "base64",
-          data: base64Chunk
-        }
-      }]
-    };
-
-    if (xintent && typeof xintent.intent === 'function') {
+    if (window.xblob && window.xaudio) {
       try {
-        await xintent.intent('xaudio.PlayStream', {
-          intent: 'xaudio.PlayStream',
-          BlobId: currentStreamId,
-          volume: parseFloat(volSlider.value),
-          mediaStreamBlob: mediaStreamXBlob
-        }, 'matchbox-service-lighter');
+        const created = await window.xblob.XBlobCreate({
+          type: "audio/mp3",
+          data: base64Chunk,
+          _dataType: "base64",
+          xblobType: "Blob"
+        });
+        const blobId = created.blobId || created.blob;
+
+        if (blobId) {
+          await window.xaudio.XAudioPlay({
+            cookie: currentStreamId,
+            streamId: currentStreamId,
+            seqnum: seq,
+            sample: blobId,
+            blob: blobId,
+            controlWord: window.xintent ? window.xintent.SYN : 1,
+            transferBlob: true
+          });
+        }
       } catch (err) {
-        // Fallback or log error
+        console.warn('[cool-amp] XAudioPlay failed:', err);
       }
     }
 
     streamSeqNum++;
     chunkCounter.textContent = `Chunks: ${streamSeqNum}`;
-    log(`[MediaStream Chunk #${seq}] Broadcasted XBlob packet (streamId: ${currentStreamId})`);
+    log(`[XAudioPlay Chunk #${seq}] Dispatched XBlob (streamId: ${currentStreamId})`);
   }
 
   // Start Playback & MediaStream Broadcasting
