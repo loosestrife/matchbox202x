@@ -169,6 +169,7 @@ const forwardMessageToChannel = async (channelObj, message) => {
       }
       const controlWord = message.controlWord ?? 3;
       const isFin = (controlWord & 2) !== 0;
+      const dataBlob = message.dataBlob || message.payload?.data_blob || message.payload?.blobId || message.payload?.blob || 0;
 
       await sendXIntentIntentV0(X, routerWin, {
         targetWin: forwardTo,
@@ -177,7 +178,7 @@ const forwardMessageToChannel = async (channelObj, message) => {
         ...getChannelToSend(forwardTo, channelObj),
         payload: message.payload,
         payloadBlob: message.payloadBlob,
-        dataBlob: message.dataBlob,
+        dataBlob: dataBlob,
       });
 
       if (isFin) {
@@ -200,9 +201,9 @@ const forwardMessageToChannel = async (channelObj, message) => {
 async function sendXIntentIntentV0(
   X,
   routerWin,
-  { targetWin, senderWin, txId, channel, payload, payloadBlob, dataBlob },
+  { targetWin, senderWin, txId, channel, controlWord, payload, payloadBlob, dataBlob },
 ) {
-  if(!payloadBlob){
+  if (!payloadBlob) {
     payloadBlob = await xblobCreate(routerWin);
     await X.ChangeProperty(
       0,
@@ -214,17 +215,24 @@ async function sendXIntentIntentV0(
     );
   }
   implicitXBlobTransfer(payloadBlob, routerWin, targetWin);
-  if(dataBlob){
+  if (dataBlob) {
     implicitXBlobTransfer(dataBlob, routerWin, targetWin);
   }
+
+  const channelToSend = (channel !== undefined && channel !== 0) ? (channel >>> 0) : (txId !== undefined ? (txId >>> 0) : 0);
+  const ctrlWordToSend = (controlWord !== undefined
+    ? controlWord
+    : (channelToSend !== 0 || payload?.reply || payload?.Accept ? 3 : 0)) >>> 0;
+
   await XClientMessage(X, targetWin, atoms.XINTENT_INTENT_V0, [
-    routerWin,
-    payloadBlob,
-    txId ?? channel ?? 0,
-    dataBlob ?? 0,
+    (senderWin || routerWin) >>> 0,
+    channelToSend,
+    ctrlWordToSend,
+    (payloadBlob >>> 0),
+    (dataBlob || 0) >>> 0,
   ]);
   logger.info(
-    `Dispatched ${payload?.intent} to ${widString(targetWin)} (payload blob ${widString(payloadBlob)})`,
+    `Dispatched ${payload?.intent || payload?.event} to ${widString(targetWin)} (channel ${channelToSend}, ctrl ${ctrlWordToSend}, payload blob ${widString(payloadBlob)})`,
   );
   return payloadBlob;
 }

@@ -217,10 +217,10 @@ function buildClientMessageBuffer(targetWin, message_type, data) {
   const ev = Buffer.alloc(32);
   ev.writeInt8(33, 0); // ClientMessage
   ev.writeInt8(32, 1); // 32-bit format
-  ev.writeUInt32LE(targetWin, 4);
-  ev.writeUInt32LE(message_type, 8);
+  ev.writeUInt32LE((targetWin || 0) >>> 0, 4);
+  ev.writeUInt32LE((message_type || 0) >>> 0, 8);
   for (let i = 0; i < data.length && i < 5; i++) {
-    ev.writeUInt32LE(data[i], 12 + 4 * i);
+    ev.writeUInt32LE((data[i] || 0) >>> 0, 12 + 4 * i);
   }
   return ev;
 }
@@ -248,7 +248,7 @@ async function XBlobCreate(
       ev.type === 33 &&
       ev.message_type === atoms.XBLOB_CREATE_RESPONSE_V0 &&
       ev.data &&
-      ev.data[2] === cookie,
+      ((ev.data[2] >>> 0) === (cookie >>> 0)),
     timeoutMs
   ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
 
@@ -377,18 +377,18 @@ const sendXChannelJsonFrame = async (
     logger.error("only allowed to specify one of txId, channel", { txId, channel });
   }
 
-  const channelToSend = (channel !== undefined && channel !== 0) ? channel : (txId !== undefined ? txId : 0);
-  const ctrlWordToSend = controlWord !== undefined
+  const channelToSend = (channel !== undefined && channel !== 0) ? (channel >>> 0) : (txId !== undefined ? (txId >>> 0) : 0);
+  const ctrlWordToSend = (controlWord !== undefined
     ? controlWord
-    : (channelToSend !== 0 || payload?.reply || payload?.Accept ? 3 : 0);
+    : (channelToSend !== 0 || payload?.reply || payload?.Accept ? 3 : 0)) >>> 0;
 
   // 3. Dispatch XChannelJsonFrame: data.l[0]=senderWin, data.l[1]=channel, data.l[2]=controlWord, data.l[3]=payloadBlob, data.l[4]=dataBlob
   await XClientMessage(X, targetWin, messageTypeAtom, [
-    senderWin,
+    (senderWin || routerWin) >>> 0,
     channelToSend,
     ctrlWordToSend,
-    payloadBlob,
-    dataBlob ?? 0,
+    (payloadBlob >>> 0),
+    (dataBlob || 0) >>> 0,
   ]);
 
   logger.info(

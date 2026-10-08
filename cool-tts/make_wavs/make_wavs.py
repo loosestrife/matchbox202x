@@ -55,14 +55,16 @@ def intent_server():
         out_path = os.path.join(tempfile.gettempdir(), file_id)
 
         try:
+            wav_bytes = b""
             with open(out_path, "wb") as fd:
                 generate_audio_data(engine, text, fd)
 
+            with open(out_path, "rb") as f:
+                wav_bytes = f.read()
+
             blob_id = 0
-            if server.x11_client:
+            if server.x11_client and wav_bytes:
                 try:
-                    with open(out_path, "rb") as f:
-                        wav_bytes = f.read()
                     blob_payload = {
                         "type": "audio/wav",
                         "data": base64.b64encode(wav_bytes).decode("ascii"),
@@ -73,13 +75,21 @@ def intent_server():
                 except Exception as blob_err:
                     logger.error(f"[cool-tts] Failed to create WAV XBlob: {blob_err}")
 
-            logger.info(f"[cool-tts] Audio generated successfully at {out_path} (data_blob={blob_id})")
-            return {
+            byte_count = len(wav_bytes)
+            channel = frame.get("channel", 0)
+            logger.info(f"[cool-tts] Sent ui.TextToSpeechResponse on channel {channel} with data_blob={blob_id} ({byte_count} bytes WAV)")
+
+            res_payload = {
                 "event": "ui.TextToSpeechResponse",
                 "status": "ok",
                 "disposition": "final",
                 "data_blob": blob_id,
             }
+            if not blob_id and wav_bytes:
+                res_payload["data"] = base64.b64encode(wav_bytes).decode("ascii")
+                res_payload["type"] = "audio/wav"
+                res_payload["_dataType"] = "base64"
+            return res_payload
         except Exception as e:
             logger.info(f"[cool-tts] TTS generation failed: {e}")
             return {

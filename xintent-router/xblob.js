@@ -27,11 +27,11 @@ const handleXBlobCreateV0 = {
     const responseEv = Buffer.alloc(32);
     responseEv.writeInt8(33, 0); // ClientMessage
     responseEv.writeInt8(32, 1); // 32-bit format
-    responseEv.writeUInt32LE(parsed.senderWin, 4);
-    responseEv.writeUInt32LE(atoms.XBLOB_CREATE_RESPONSE_V0, 8);
-    responseEv.writeUInt32LE(routerWin, 12);     // data.l[0] = senderWin (router)
-    responseEv.writeUInt32LE(blobAtom, 16);      // data.l[1] = allocated blob atom
-    responseEv.writeUInt32LE(parsed.cookie, 20); // data.l[2] = client cookie
+    responseEv.writeUInt32LE((parsed.senderWin || 0) >>> 0, 4);
+    responseEv.writeUInt32LE((atoms.XBLOB_CREATE_RESPONSE_V0 || 0) >>> 0, 8);
+    responseEv.writeUInt32LE((routerWin || 0) >>> 0, 12);        // data.l[0] = senderWin (router)
+    responseEv.writeUInt32LE((blobAtom || 0) >>> 0, 16);         // data.l[1] = allocated blob atom
+    responseEv.writeUInt32LE((parsed.cookie || 0) >>> 0, 20);    // data.l[2] = client cookie
 
     await X.SendEvent(parsed.senderWin, false, x11.eventMask.NoEventMask, responseEv);
   },

@@ -157,7 +157,7 @@ const routeIntent = async (req, res) => {
               const routerWin = await xintent.getValidRouterWin(X, root);
               const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin, ev);
 
-              const blobAtom = ev.data[4];
+              const blobAtom = ev.data[4] || eventData?.data_blob || eventData?.blobId || eventData?.blob;
               const controlWord = ev.data[2];
               const customIntentHeaders = {};
               if (blobAtom) {

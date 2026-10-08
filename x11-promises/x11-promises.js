@@ -23,6 +23,9 @@ function seqDiff16(a, b) {
 }
 
 function wrapPromiseXClient(client) {
+  if (typeof client.setMaxListeners === 'function') {
+    client.setMaxListeners(100);
+  }
   const pendingRequests = new Map(); // seq -> PendingEntry
 
   // Advances the internal sequence clock and resolves/rejects pending promises

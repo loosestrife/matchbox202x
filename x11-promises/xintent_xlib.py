@@ -163,7 +163,7 @@ class XIntentXlibClient:
 
     def blob_create(self, blob_data: Any, timeout_sec: float = 5.0) -> int:
         """Creates an XBlob owned by client_win with response cookie tracking."""
-        cookie = random.randint(1, 0xFFFFFFFF) & 0xFFFFFFFF
+        cookie = random.randint(1, 0x7FFFFFFF)
         router_id = self.get_router_win_id()
         self.x11.send_client_message(
             router_id,
@@ -180,7 +180,7 @@ class XIntentXlibClient:
                 event = self.x11.disp.next_event()
                 if event.type == X.ClientMessage and int(event.client_type) == atom_resp:
                     data32 = _extract_event_data(event)
-                    if data32 and len(data32) >= 3 and (int(data32[2]) & 0xFFFFFFFF) == cookie:
+                    if data32 and len(data32) >= 3 and (int(data32[2]) & 0xFFFFFFFF) == (cookie & 0xFFFFFFFF):
                         blob_atom = data32[1]
                         break
             time.sleep(0.01)
@@ -414,9 +414,10 @@ class XIntentXlibClient:
                         data_blob_id = 0
                         if isinstance(res_payload, dict) and "data_blob" in res_payload:
                             data_blob_id = res_payload.pop("data_blob")
-                        sys.stderr.write(f"[libxintent.py] Sending event response for '{intent_name}' back to {hex(sender_win_id)} with data_blob {hex(data_blob_id)}\n")
+                        router_id = self.get_router_win_id()
+                        sys.stderr.write(f"[libxintent.py] Sending event response for '{intent_name}' back to router {hex(router_id)} on channel {channel} with data_blob {hex(data_blob_id)}\n")
                         sys.stderr.flush()
-                        self.send_event(sender_win_id, res_payload, channel=channel, data_blob=data_blob_id)
+                        self.send_event(router_id, res_payload, channel=channel, data_blob=data_blob_id)
                 except Exception as err:
                     sys.stderr.write(f"[libxintent.py error] Error executing handler for '{intent_name}': {err}\n{traceback.format_exc()}\n")
                     sys.stderr.flush()

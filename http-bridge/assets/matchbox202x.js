@@ -276,12 +276,4 @@
       }, app);
     }
   };
-
-  window.xaudio.playSoundBlob = window.xaudio.XAudioPlay;
-      }, app);
-    }
-  };
-
-  window.xaudio.playSoundBlob = window.xaudio.XAudioPlay;
-
 })(window);
