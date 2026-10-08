@@ -118,12 +118,22 @@ class CardsActivity : ComponentActivity() {
         app: app
       });
 
+      var headers = {
+        'Content-Type': 'application/json',
+        'Accept': (payload && payload.Accept) ? payload.Accept : '*/*'
+      };
+      if (payload && payload.controlWord !== undefined) {
+        var ctrlStrings = [];
+        if (payload.controlWord & 1) ctrlStrings.push('SYN');
+        if (payload.controlWord & 2) ctrlStrings.push('FIN');
+        if (ctrlStrings.length > 0) {
+          headers['X-Channel-Control'] = ctrlStrings.join(',');
+        }
+      }
+
       return await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': '*/*'
-        },
+        headers: headers,
         body: JSON.stringify(bodyData)
       });
     }

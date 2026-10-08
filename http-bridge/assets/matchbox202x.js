@@ -31,6 +31,9 @@
           headers['X-Channel-Control'] = ctrlStrings.join(',');
         }
       }
+      if (payload.Accept) {
+        headers['Accept'] = payload.Accept;
+      }
 
       try {
         const response = await fetch(endpoint, {

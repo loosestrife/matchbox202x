@@ -102,9 +102,24 @@ const routeIntent = async (req, res) => {
   logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, payload);
   const txId = globalTransactionIdCounter++;
 
+  const channelControlHeader = req.headers['x-channel-control'];
+  let reqControlWord = payload.controlWord;
+  if (channelControlHeader) {
+    let cw = 0;
+    if (channelControlHeader.includes('SYN')) cw |= 1;
+    if (channelControlHeader.includes('FIN')) cw |= 2;
+    reqControlWord = cw;
+  }
+  if (reqControlWord !== undefined) {
+    payload.controlWord = reqControlWord;
+  }
+
+  const hasChannelControl = Boolean(channelControlHeader) || reqControlWord !== undefined;
+  const isStreamedResponse = hasChannelControl || payload.Accept || req.headers['accept'] || payload.reply;
+
   try {
     // --- 1. Streamed Multipart Response Path ---
-    if (payload.Accept) {
+    if (isStreamedResponse) {
       let headersSent = false;
       const BOUNDARY = 'MatchboxFrameBoundary_' + Date.now().toString(16);
 
@@ -204,6 +219,7 @@ const routeIntent = async (req, res) => {
         senderWin: clientWin,
         payload,
         txId,
+        controlWord: reqControlWord,
       });
 
       return await responsePromise;

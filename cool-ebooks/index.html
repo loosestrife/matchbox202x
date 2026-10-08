@@ -407,10 +407,10 @@ function parseMultipartResponse(responseText) {
           intent: 'ui.TextToSpeech',
           app: targetTtsApp,
           text: text,
-          format: 'audio/wav',
           speed: 1.0,
           reply: true,
-          Accept: '*'
+          controlWord: xintent.SYN,
+          Accept: 'audio/wav'
         }, targetTtsApp);
 
         const endTime = performance.now();
