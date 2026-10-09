@@ -120,6 +120,41 @@ const WebSocket = require('ws');
 
 const serverGlobals = require('./server-globals');
 
+function formatMessageHttp(payload, blobData, txId, controlWord) {
+  const jsonBody = JSON.stringify(payload, null, 2);
+  const boundary = 'MatchboxFrameBoundary_' + Date.now().toString(16);
+
+  if (!blobData) {
+    const headers = [
+      'Content-Type: application/json',
+      `Content-Length: ${Buffer.byteLength(jsonBody)}`,
+      `X-Tx-Id: ${txId}`,
+    ];
+    if (controlWord !== undefined) {
+      headers.push(`X-Channel-Control: ${controlWord & 2 ? 'FIN' : 'SYN'}`);
+    }
+    return headers.join('\r\n') + '\r\n\r\n' + jsonBody;
+  }
+
+  const mimeType = blobData.type || 'application/octet-stream';
+  let bodyBuf = Buffer.isBuffer(blobData.data)
+    ? blobData.data
+    : Buffer.from(typeof blobData.data === 'object' ? JSON.stringify(blobData.data) : String(blobData.data || ''), 'utf8');
+
+  const part1Header = `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(jsonBody)}\r\nX-Tx-Id: ${txId}`;
+  const part2Header = `Content-Type: ${mimeType}\r\nContent-Length: ${bodyBuf.length}\r\nX-XBlob-Type: ${blobData.xblobType || 'Blob'}`;
+
+  const headerBuf = Buffer.from(
+    `Content-Type: multipart/mixed; boundary=${boundary}\r\n\r\n` +
+    `--${boundary}\r\n${part1Header}\r\n\r\n${jsonBody}\r\n\r\n` +
+    `--${boundary}\r\n${part2Header}\r\n\r\n`,
+    'utf8'
+  );
+  const footerBuf = Buffer.from(`\r\n\r\n--${boundary}--\r\n`, 'utf8');
+
+  return Buffer.concat([headerBuf, bodyBuf, footerBuf]);
+}
+
 function createWebSocketXChannel(txId, ws, xaudioSink, msgPayload, controlWord) {
   return {
     txId,
@@ -149,13 +184,18 @@ function createWebSocketXChannel(txId, ws, xaudioSink, msgPayload, controlWord) 
           }
         }
 
-        const responseFrame = {
-          txId,
-          controlWord: msg.controlWord,
-          ...msg.payload,
-          ...(blobData ? { blob: blobData } : {}),
-        };
-        ws.send(JSON.stringify(responseFrame));
+        if (ws.isMessageHttp || ws.protocol === 'message/http') {
+          const httpMsg = formatMessageHttp(msg.payload || {}, blobData, txId, msg.controlWord);
+          ws.send(httpMsg);
+        } else {
+          const responseFrame = {
+            txId,
+            controlWord: msg.controlWord,
+            ...msg.payload,
+            ...(blobData ? { blob: blobData } : {}),
+          };
+          ws.send(JSON.stringify(responseFrame));
+        }
         logger.info(`WebSocket XChannel ${txId} routed messageFromX: ${xintent.frameDesc(msg)}`);
       }
 
@@ -236,7 +276,15 @@ wss.on('connection', (ws, request) => {
 
   ws.on('message', async (data) => {
     try {
-      const msg = JSON.parse(data.toString('utf8'));
+      let msg = null;
+      const dataStr = data.toString('utf8');
+      if (dataStr.includes('Content-Type:') || dataStr.includes('MatchboxFrameBoundary')) {
+        const parsedBlob = xintent.parseXBlobAtRest(data);
+        msg = (parsedBlob && typeof parsedBlob.data === 'object') ? parsedBlob.data : parsedBlob;
+      } else {
+        msg = JSON.parse(dataStr);
+      }
+
       if (!ws.isXAudio) {
          logger.info('Remote WebSocket message received:', msg);
       }

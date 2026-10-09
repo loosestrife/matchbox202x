@@ -241,19 +241,32 @@ class CardsActivity : ComponentActivity() {
       var wsUrl = wsProtocol + '//' + host + '/xaudio?XAudioSink=' + encodeURIComponent(sink);
 
       try {
-        var ws = new WebSocket(wsUrl);
+        var ws = new WebSocket(wsUrl, 'message/http');
         this._ws = ws;
         var self = this;
 
         ws.onopen = function() {
-          console.log('[xaudio] Real-time WebSocket connected to ' + wsUrl);
+          console.log('[xaudio] Real-time message/http WebSocket connected to ' + wsUrl);
         };
 
         ws.onmessage = function(event) {
           try {
-            var frame = JSON.parse(event.data);
-            for (var i = 0; i < self._wsListeners.length; i++) {
-              try { self._wsListeners[i](frame); } catch (_) {}
+            var frame = null;
+            if (typeof event.data === 'string' && (event.data.indexOf('Content-Type:') !== -1 || event.data.indexOf('MatchboxFrameBoundary') !== -1)) {
+              var parts = window.xintent ? window.xintent.parseMultipartResponse(event.data) : [];
+              if (parts.length > 0) {
+                frame = parts[0].json || parts[0].body;
+                if (parts.length > 1 && parts[1].body) {
+                  frame = Object.assign({}, typeof frame === 'object' ? frame : { data: frame }, { blob: parts[1].body });
+                }
+              }
+            } else {
+              frame = JSON.parse(event.data);
+            }
+            if (frame) {
+              for (var i = 0; i < self._wsListeners.length; i++) {
+                try { self._wsListeners[i](frame); } catch (_) {}
+              }
             }
           } catch (_) {}
         };

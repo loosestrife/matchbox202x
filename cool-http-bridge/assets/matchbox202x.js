@@ -374,18 +374,31 @@
       const wsUrl = `${wsProtocol}//${window.location.host}/xaudio?XAudioSink=${encodeURIComponent(sinkName)}`;
 
       try {
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(wsUrl, 'message/http');
         this._ws = ws;
 
         ws.onopen = () => {
-          console.log('[xaudio] Real-time WebSocket connected to /xaudio');
+          console.log('[xaudio] Real-time message/http WebSocket connected to /xaudio');
         };
 
         ws.onmessage = (event) => {
           try {
-            const frame = JSON.parse(event.data);
-            for (const listener of this._wsListeners) {
-              try { listener(frame); } catch (_) {}
+            let frame = null;
+            if (typeof event.data === 'string' && (event.data.includes('Content-Type:') || event.data.includes('MatchboxFrameBoundary'))) {
+              const parts = window.xintent ? window.xintent.parseMultipartResponse(event.data) : [];
+              if (parts.length > 0) {
+                frame = parts[0].json || parts[0].body;
+                if (parts.length > 1 && parts[1].body) {
+                  frame = Object.assign({}, typeof frame === 'object' ? frame : { data: frame }, { blob: parts[1].body });
+                }
+              }
+            } else {
+              frame = JSON.parse(event.data);
+            }
+            if (frame) {
+              for (const listener of this._wsListeners) {
+                try { listener(frame); } catch (_) {}
+              }
             }
           } catch (_) {}
         };

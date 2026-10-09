@@ -10,6 +10,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -100,6 +101,42 @@ name = "flammenwerfer-phone"
         }
     }
 
+    private fun handleWebSocketRawBytes(webSocket: WebSocket, rawBytes: ByteArray, context: Context) {
+        val (jsonList, audio) = parseMultipartRawBytes(rawBytes)
+        for (json in jsonList) {
+            val intentName = json.optString("intent", json.optString("event", ""))
+            val txId = json.optInt("txId", 0)
+
+            if (intentName == "xaudio.PlaySoundBlob" || intentName == "XAudioPlay" || intentName == "xaudio.Play") {
+                if (isLocalAudioEnabled(context)) {
+                    val resJsonStr = CardsActivity.instance?.triggerLocalAudioPlay(json.toString()) ?: JSONObject().apply {
+                        put("event", "XAudioPlayResponseV0")
+                        put("status", 200)
+                        if (txId != 0) put("txId", txId)
+                    }.toString()
+
+                    val resObj = JSONObject(resJsonStr).apply {
+                        put("event", "XAudioPlayResponseV0")
+                        if (txId != 0) put("txId", txId)
+                        put("status", 200)
+                    }
+                    webSocket.send(resObj.toString())
+                    addLog("[XAudioSink 🔊] Sent XAudioPlayResponseV0 for txId $txId over WebSocket")
+                }
+            } else if (intentName == "xaudio.ControlStream" || intentName == "XAudioControl") {
+                if (isLocalAudioEnabled(context)) {
+                    val resJsonStr = CardsActivity.instance?.triggerLocalAudioControl(json.toString()) ?: JSONObject().apply {
+                        put("event", "XAudioControlResponseV0")
+                        put("status", 200)
+                        if (txId != 0) put("txId", txId)
+                    }.toString()
+                    webSocket.send(resJsonStr)
+                    addLog("[XAudioSink 🔊] Sent XAudioControlResponseV0 for txId $txId over WebSocket")
+                }
+            }
+        }
+    }
+
     fun connectWebSocket(context: Context) {
         if (webSocketState == WebSocketState.CONNECTED || webSocketState == WebSocketState.CONNECTING) {
             return
@@ -113,52 +150,23 @@ name = "flammenwerfer-phone"
 
         val request = Request.Builder()
             .url(wsUrl)
+            .addHeader("Sec-WebSocket-Protocol", "message/http")
             .build()
 
         activeWebSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i(TAG, "WebSocket connected to $wsUrl")
-                addLog("[WebSocket 🟢] Connected to $wsUrl")
+                Log.i(TAG, "WebSocket connected to $wsUrl with message/http subprotocol")
+                addLog("[WebSocket 🟢] Connected to $wsUrl (message/http)")
                 updateWebSocketState(WebSocketState.CONNECTED)
                 sendSysAdvertise(webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.i(TAG, "WebSocket text message: $text")
-                addLog("[WebSocket 📩] Remote message: $text")
-                try {
-                    val json = JSONObject(text)
-                    val intentName = json.optString("intent", json.optString("event", ""))
-                    val txId = json.optInt("txId", 0)
+                handleWebSocketRawBytes(webSocket, text.toByteArray(Charsets.UTF_8), context)
+            }
 
-                    if (intentName == "xaudio.PlaySoundBlob" || intentName == "XAudioPlay" || intentName == "xaudio.Play") {
-                        if (isLocalAudioEnabled(context)) {
-                            val resJsonStr = CardsActivity.instance?.triggerLocalAudioPlay(text) ?: JSONObject().apply {
-                                put("event", "XAudioPlayResponseV0")
-                                put("status", 200)
-                                if (txId != 0) put("txId", txId)
-                            }.toString()
-
-                            val resObj = JSONObject(resJsonStr).apply {
-                                put("event", "XAudioPlayResponseV0")
-                                if (txId != 0) put("txId", txId)
-                                put("status", 200)
-                            }
-                            webSocket.send(resObj.toString())
-                            addLog("[XAudioSink 🔊] Sent XAudioPlayResponseV0 for txId $txId over WebSocket")
-                        }
-                    } else if (intentName == "xaudio.ControlStream" || intentName == "XAudioControl") {
-                        if (isLocalAudioEnabled(context)) {
-                            val resJsonStr = CardsActivity.instance?.triggerLocalAudioControl(text) ?: JSONObject().apply {
-                                put("event", "XAudioControlResponseV0")
-                                put("status", 200)
-                                if (txId != 0) put("txId", txId)
-                            }.toString()
-                            webSocket.send(resJsonStr)
-                            addLog("[XAudioSink 🔊] Sent XAudioControlResponseV0 for txId $txId over WebSocket")
-                        }
-                    }
-                } catch (_: Exception) {}
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                handleWebSocketRawBytes(webSocket, bytes.toByteArray(), context)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
