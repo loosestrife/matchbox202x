@@ -83,7 +83,9 @@ note that
 `xprop` tries to dump property data into the terminal and that cant be done on the XBlobHost windows because theyre full of huge binary data.
 
 # `XINTENT_INTENT_V0` and `XINTENT_EVENT_V0`
-These are XChannelJsonFrame's.  Whoever sends the event that closes the channel MAY send `{disposition: final/error/cancel}` in the payload.
+These are XChannelJsonFrame's with {intent: fs.PickFile} and {event: fs.PickFileResponse}
+* Whoever sends the event that closes the channel MAY send `{disposition: final/error/cancel}` in the payload.
+* When sending an intent, a client may send `Prefer: return=minimal` to tell bridges they dont have to pull any data blob's data to the sender's bus and just need to return the blob id to the sender.  The sender can then send that data blob id somewhere else, facilitating minimal network hops for bulk data (e.g. cool-ebooks sending tts intents here and audio data there).
 
 # XBLOB V0
 an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  XBlob V1 id's will not be atoms, but they will be nonzero u32 values.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms

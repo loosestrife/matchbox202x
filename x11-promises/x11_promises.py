@@ -92,13 +92,13 @@ class X11PromisesClient:
         self, win_id: int, property_atom: int
     ) -> Optional[str]:
         """
-        Reads string window property across 32KB chunks.
+        Reads string or binary window property across 32KB chunks.
         """
         try:
             win = self.disp.create_resource_object("window", win_id)
-            prop = win.get_full_property(property_atom, Xatom.STRING)
+            prop = win.get_full_property(property_atom, 0) # AnyPropertyType
             if not prop or not prop.value:
-                prop = win.get_full_property(property_atom, X.AnyPropertyType)
+                prop = win.get_full_property(property_atom, Xatom.STRING)
             if prop and prop.value:
                 if isinstance(prop.value, bytes):
                     return prop.value.decode("utf-8", errors="replace")
@@ -112,10 +112,10 @@ class X11PromisesClient:
         return None
 
     def set_window_property_string(
-        self, win_id: int, property_atom: int, value_str: Any
+        self, win_id: int, property_atom: int, value_str: Any, type_atom: Optional[int] = None
     ):
         """
-        Writes string or binary window property in 32KB chunks.
+        Writes string or binary window property in 32KB chunks with optional custom type atom.
         """
         win = self.disp.create_resource_object("window", win_id)
         if isinstance(value_str, (bytes, bytearray)):
@@ -124,12 +124,13 @@ class X11PromisesClient:
             data_bytes = value_str.encode("utf-8")
         else:
             data_bytes = str(value_str).encode("utf-8")
+        prop_type = type_atom if type_atom else Xatom.STRING
         CHUNK_SIZE = 32768
         for offset in range(0, len(data_bytes), CHUNK_SIZE):
             chunk = data_bytes[offset : offset + CHUNK_SIZE]
             mode = X.PropModeReplace if offset == 0 else X.PropModeAppend
             win.change_property(
-                property_atom, Xatom.STRING, 8, list(chunk), mode=mode
+                property_atom, prop_type, 8, list(chunk), mode=mode
             )
         self.disp.flush()
 

@@ -358,6 +358,7 @@ class XIntentXlibClient:
         "STRING",
         "WM_NAME",
         "WM_CLASS",
+        "message/http",
     ]
 
     def __init__(self, app_id: str = "cool-tts", display_name: Optional[str] = None):
@@ -474,7 +475,8 @@ class XIntentXlibClient:
         target_win_id = xblob_host_id if xblob_host_id else router_id
 
         payload_at_rest = format_xblob_at_rest(blob_data)
-        self.x11.set_window_property_string(target_win_id, blob_atom, payload_at_rest)
+        type_atom = self.atoms.get("message/http") or self.atoms.get("STRING") or 0
+        self.x11.set_window_property_string(target_win_id, blob_atom, payload_at_rest, type_atom=type_atom)
         self.x11.set_selection_owner(target_win_id, blob_atom)
 
     def blob_read(self, blob_atom: int) -> Any:

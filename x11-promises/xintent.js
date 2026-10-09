@@ -106,6 +106,8 @@ async function connectToRouter(X, root) {
     "XAUDIO_PREFETCH_SOUND_BLOB_V0",
     "XAUDIO_SEEK_STREAM_V0",
     "XAUDIO_GET_AUDIO_OUTPUTS_V0",
+
+    "message/http",
   ];
 
   await Promise.all(
@@ -479,11 +481,12 @@ async function XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, host, ver
     // Mode 0 = PropModeReplace (first chunk resets/creates the prop)
     // Mode 2 = PropModeAppend  (subsequent chunks append)
     const mode = offset === 0 ? 0 : 2;
+    const typeAtom = atoms['message/http'] || atoms.STRING;
     X.ChangeProperty(
       mode,
       xblobHost,
       blobAtom,
-      atoms.STRING,
+      typeAtom,
       8,
       chunk
     );
@@ -584,7 +587,7 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
     0,
     hostWin,
     blobAtom,
-    atoms.STRING,
+    0, // 0 = AnyPropertyType in X11 protocol
     0,
     4_000_000_000
   );
