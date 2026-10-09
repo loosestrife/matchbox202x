@@ -83,6 +83,7 @@ def intent_server():
                 "event": "ui.TextToSpeechResponse",
                 "status": "ok",
                 "disposition": "final",
+                "controlWord": 2,
                 "data_blob": blob_id,
             }
             if not blob_id and wav_bytes:

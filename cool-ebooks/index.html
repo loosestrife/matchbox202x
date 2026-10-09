@@ -859,7 +859,7 @@ document.getElementById('xintent-pick').addEventListener('click', async () => {
   try {
     const res = await window.xintent.intent('fs.PickFile', {
       intent: 'fs.PickFile',
-      Accept: 'application/json'
+      Accept: 'application/epub+zip'
     });
     if (res && res.ok) {
       let parts = [];

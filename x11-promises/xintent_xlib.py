@@ -347,7 +347,7 @@ class XIntentXlibClient:
 
         tx_or_channel = channel if (channel and channel != 0) else (tx_id if tx_id else 0)
         ctrl_word_to_send = control_word if control_word else (
-            (3 if (payload.get("disposition") in ["final", "error"]) else 1) if tx_or_channel else 0
+            (2 if (payload.get("disposition") in ["final", "error"]) else 1) if tx_or_channel else 0
         )
 
         # XChannelJsonFrame: data[0]=senderWin, data[1]=channel, data[2]=controlWord, data[3]=payloadBlob, data[4]=dataBlob
@@ -444,11 +444,18 @@ class XIntentXlibClient:
                     if res is not None:
                         res_payload = res if isinstance(res, dict) else {"data": res}
                         data_blob_id = 0
-                        if isinstance(res_payload, dict) and "data_blob" in res_payload:
-                            data_blob_id = res_payload.pop("data_blob")
+                        ctrl_word = 0
+                        if isinstance(res_payload, dict):
+                            if "data_blob" in res_payload:
+                                data_blob_id = res_payload.pop("data_blob")
+                            if "controlWord" in res_payload:
+                                ctrl_word = res_payload.pop("controlWord")
+                            elif "control_word" in res_payload:
+                                ctrl_word = res_payload.pop("control_word")
+
                         router_id = self.get_router_win_id()
-                        logger.info(f"[xintent_xlib] Sending event response for '{intent_name}' back to router {hex(router_id)} on channel {channel} with data_blob {hex(data_blob_id)}")
-                        self.send_event(router_id, res_payload, channel=channel, data_blob=data_blob_id)
+                        logger.info(f"[xintent_xlib] Sending event response for '{intent_name}' back to router {hex(router_id)} on channel {channel} with control_word {ctrl_word} data_blob {hex(data_blob_id)}")
+                        self.send_event(router_id, res_payload, channel=channel, control_word=ctrl_word, data_blob=data_blob_id)
                 except Exception as err:
                     logger.error(f"[xintent_xlib] Error executing handler for '{intent_name}': {err}", exc_info=True)
             else:

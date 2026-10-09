@@ -39,6 +39,7 @@ def handle_text_to_speech(frame):
         "file_path": tmp_path,
         "target_app": target_app,
         "disposition": "final",
+        "controlWord": 2,
     }
 
 

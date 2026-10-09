@@ -1,5 +1,5 @@
 const { Logger } = require("../server-tools");
-const { atoms, widString } = require("../x11-promises/xintent");
+const { atoms, widString, frameType, frameDesc } = require("../x11-promises/xintent");
 const logger = new Logger({ module: "xintent-channels" });
 
 // ipc isn't just client <- messages -> client its client:port <- channels -> client:port
@@ -44,7 +44,7 @@ const newChannel = (senderWin, txId, xintentIntent) => {
     senderWin,
     senderCookie: txId, // Original 24-bit client txId
     handlerWin: null,   // Bound once mapped to a service window
-    intent: xintentIntent.payload?.intent || xintentIntent.payload?.event,
+    intent: frameType(xintentIntent),
     xintentIntent,
   };
 
@@ -55,7 +55,7 @@ const newChannel = (senderWin, txId, xintentIntent) => {
   }
   txidToChannel[senderWin][txId] = channelObj;
 
-  logger.info(`Allocated channel ${channelNum} for client ${widString(senderWin)} (cookie txId: ${txId})`);
+  logger.info(`Allocated channel ${channelNum} for ${frameDesc(xintentIntent)} (cookie txId: ${txId})`);
   return channelObj;
 };
 
@@ -75,7 +75,7 @@ const closeChannel = (channelObj) => {
     }
   }
 
-  logger.info(`Closed and deallocated channel ${channelObj.channelNum}`);
+  logger.info(`Closed and deallocated channel ${channelObj.channelNum} (${channelObj.intent || 'unknown'})`);
 };
 
 const getChannel = (senderWin, channel) => {
@@ -98,28 +98,23 @@ const getChannelToSend = (targetWin, channelObj) => {
 };
 
 const getChannelForMessage = (message) => {
-  const {senderWin, channel} = message;
+  if (!message) return null;
+  const { senderWin, channel } = message;
 
   const channelObj = getChannel(senderWin, channel);
-  if(!channelObj && channel >= CHANNEL_BASE){
-    // throw new Error(404, 'channel not found')
+  if (!channelObj && channel >= CHANNEL_BASE) {
     logger.info(
-      `Message ${intent} from sender ${widString(senderWin)} on unknown channel ${channel}`,
-      xintentIntent,
-      activeChannels,
+      `Frame ${frameDesc(message)} on unknown channel ${channel}`
     );
   }
-  if(channelObj && channel >= CHANNEL_BASE){
-    if(senderWin != channelObj.handlerWin){
-      // throw new Error(401, 'not on channel')
+  if (channelObj && channel >= CHANNEL_BASE) {
+    if (senderWin !== channelObj.handlerWin && senderWin !== channelObj.senderWin) {
       logger.info(
-        `Message ${xintentIntent.payload.intent} from sender ${senderWin} not on channel ${xintentIntent.channel}`,
-        xintentIntent,
-        activeChannels,
+        `Frame ${frameDesc(message)} not registered on channel ${channel}`
       );
     }
   }
   return channelObj;
-}
+};
 
 module.exports = {activeChannels, txidToChannel, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage};

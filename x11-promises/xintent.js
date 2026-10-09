@@ -505,6 +505,61 @@ function parseXBlobDestructorFrame(X, routerWin, ev) {
 }
 
 
+function getAtomName(atomId) {
+  if (typeof atomId === 'string' && atomId.length > 0) return atomId;
+  if (typeof atomId === 'number') {
+    for (const [name, val] of Object.entries(atoms)) {
+      if (val === atomId) return name;
+    }
+    return `ATOM_${atomId}`;
+  }
+  return 'FRAME';
+}
+
+function frameType(msg) {
+  if (!msg) return 'UNKNOWN_FRAME';
+
+  const atomId = msg.messageTypeAtom || msg.message_type || msg.messageType || msg.type || msg.atom;
+  const atomName = getAtomName(atomId);
+
+  const payload = msg.payload || (typeof msg === 'object' ? msg : {});
+  const actionName = payload?.intent || payload?.event || payload?.action;
+
+  if (actionName) {
+    return `${atomName}:${actionName}`;
+  }
+  return atomName;
+}
+
+function formatControlWord(cw) {
+  if (cw === undefined || cw === null) return '';
+  const num = Number(cw);
+  const flags = [];
+  if (num & 1) flags.push('SYN');
+  if (num & 2) flags.push('FIN');
+  return flags.length > 0 ? flags.join(',') : String(num);
+}
+
+function frameDesc(msg) {
+  if (!msg) return 'UNKNOWN_FRAME';
+
+  const sender = msg.senderWin || msg.sender || 0;
+  const target = msg.targetWin || msg.target || msg.wid || 0;
+  const cw = msg.controlWord !== undefined ? msg.controlWord : msg.ctrl;
+  const channel = msg.channel !== undefined ? msg.channel : msg.txId;
+
+  let ctrlStr = '';
+  if (cw !== undefined || (channel !== undefined && channel !== 0)) {
+    const channelPart = (channel !== undefined && channel !== 0) ? `${channel}:` : '';
+    const cwPart = cw !== undefined ? formatControlWord(cw) : '';
+    ctrlStr = `[${channelPart}${cwPart}]`;
+  }
+
+  const fType = frameType(msg);
+
+  return `${widString(sender)} - ${ctrlStr}${fType} -> ${widString(target)}`;
+}
+
 const SYN = 1;
 const FIN = 2;
 const SYN_FIN = 3;
@@ -520,6 +575,8 @@ module.exports = {
   createClientWindow,
   atoms,
   widString,
+  frameType,
+  frameDesc,
   parseJsonFrame,
   parseXIntentIntentV0,
   parseXIntentEventV0: parseXIntentIntentV0,

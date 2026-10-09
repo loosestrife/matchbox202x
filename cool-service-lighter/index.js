@@ -1,4 +1,4 @@
-// matchbox-service-lighter/index.js
+// cool-service-lighter/index.js
 const { spawn } = require('child_process');
 const http = require('http');
 const os = require('os');
@@ -14,14 +14,14 @@ const xaudioNode = require('./xaudio-node');
 
 xintent.init({logger: new Logger({module: 'libxintent'})});
 const logger = new Logger({module: 'index.js'});
-logger.setProjectName('service-lighter')
+logger.setProjectName('cool-service-lighter')
 
 logger.info('got manifesto', TOML.stringify(xintentServicesManifesto));
 
 const hostname = os.hostname();
 const matchboxToml = `
 [app]
-id = "matchbox-service-lighter"
+id = "cool-service-lighter"
 
 [intents]
 "sys.Launch" = true
@@ -117,8 +117,8 @@ function spawnRuntime(cmdFile, workingDir) {
 async function ensureXIntentRouter(X, root) {
   let routerWin = await xintent.connectToRouter(X, root);
   if (!routerWin) {
-    logger.info('[service-lighter] xintent-router not detected. Auto-launching xintent-router...');
-    const routerDir = path.join(__dirname, '../xintent-router');
+    logger.info('[cool-service-lighter] cool-intent-router not detected. Auto-launching cool-intent-router...');
+    const routerDir = path.join(__dirname, '../cool-intent-router');
     const entryFile = path.join(routerDir, 'index.js');
 
     spawnRuntime(entryFile, routerDir);
@@ -127,12 +127,12 @@ async function ensureXIntentRouter(X, root) {
       await new Promise((resolve) => setTimeout(resolve, 250));
       routerWin = await xintent.connectToRouter(X, root);
       if (routerWin) {
-        logger.info(`[service-lighter] Connected to auto-launched xintent-router (0x${routerWin.toString(16)})`);
+        logger.info(`[cool-service-lighter] Connected to auto-launched cool-intent-router (0x${routerWin.toString(16)})`);
         break;
       }
     }
   } else {
-    logger.info(`[service-lighter] Connected to existing xintent-router (0x${routerWin.toString(16)})`);
+    logger.info(`[cool-service-lighter] Connected to existing cool-intent-router (0x${routerWin.toString(16)})`);
   }
   return routerWin;
 }
@@ -140,14 +140,14 @@ async function ensureXIntentRouter(X, root) {
 async function ensureHttpBridge() {
   const isRunning = await checkHttpBridge(12345);
   if (!isRunning) {
-    logger.info('[service-lighter] http-bridge not detected on port 12345. Auto-launching http-bridge...');
-    const bridgeDir = path.join(__dirname, '../http-bridge');
+    logger.info('[cool-service-lighter] cool-http-bridge not detected on port 12345. Auto-launching cool-http-bridge...');
+    const bridgeDir = path.join(__dirname, '../cool-http-bridge');
     const entryFile = path.join(bridgeDir, 'index.js');
 
     spawnRuntime(entryFile, bridgeDir);
-    logger.info('[service-lighter] Auto-launched http-bridge service on port 12345.');
+    logger.info('[cool-service-lighter] Auto-launched cool-http-bridge service on port 12345.');
   } else {
-    logger.info('[service-lighter] http-bridge is active on http://localhost:12345.');
+    logger.info('[cool-service-lighter] cool-http-bridge is active on http://localhost:12345.');
   }
 }
 

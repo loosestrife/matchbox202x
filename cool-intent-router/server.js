@@ -3,7 +3,7 @@ const {Logger, alStorage} = require('../server-tools');
 const logger = new Logger({module: 'server.js'});
 
 const {x11, X, rawX, root, routerWin} = require('.');
-const {atoms, widString, connectToRouter, init: xintentInit} = require('../x11-promises/xintent');
+const {atoms, widString, frameType, frameDesc, connectToRouter, init: xintentInit} = require('../x11-promises/xintent');
 xintentInit({logger: new Logger({module: 'libxintent'})});
 const {handleXIntentIntentV0, handleXIntentEventV0, handleForwardingOfXChannelJsonFrame, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
 const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0} = require('./xblob');
@@ -142,6 +142,10 @@ async function startRouter() {
           async () => {
             const handler = dispatchTable[ev.message_type];
             const parsed = await handler.parse(ev);
+            if (parsed) {
+              parsed.messageTypeAtom = ev.message_type;
+              parsed.messageType = msgTypeName;
+            }
 
             // Attach parsed message to alStorage context
             logger.setContext({
@@ -149,7 +153,7 @@ async function startRouter() {
               intent: parsed.payload?.intent || parsed.payload?.event || parsed.payload?.action
             });
 
-            logger.info(`parsed ${handler.name}`, parsed);
+            logger.info(`parsed ${frameDesc(parsed)}`, parsed);
             const securityContext = await handler.securityContext(parsed);
             const securityPolicy = await checkXSecurePolicy(
               securityContext,

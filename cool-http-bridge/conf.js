@@ -26,5 +26,5 @@ const conf = {
   }
 }
 
-logger.info('http-bridge configuration:', conf);
+logger.info('cool-http-bridge configuration:', conf);
 module.exports = conf;

@@ -2,7 +2,7 @@
 const x11 = require('../x11-promises/x11-promises');
 const {Logger} = require('../server-tools');
 const logger = new Logger({module: 'index.js'});
-logger.setProjectName('xintent-router');
+logger.setProjectName('cool-intent-router');
 
 (async () => {
   Object.assign(module.exports, await x11.createClientWithPromises(), { x11 });

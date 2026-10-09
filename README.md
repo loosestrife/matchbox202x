@@ -47,8 +47,8 @@ This specification defines a unified, lightweight desktop platform constructed e
 ### 1.2 User's Distributed Lifestyle
 User is running a session on user-phone and has an ssh -X to user-laptop in the coffee shop with him and an ssh -X to user-desktop at home over tailscale.  User is running cool-ebook off user-laptop where the files are but cool-ebook's html card is running on user-phone.
 * Naively, tts intents stream locally from user-laptop:cool-ebook's html card to user-phone:cool-tts, burning user-phone's battery and lagging becaue cool-tts is slower on user-phone than on user-laptop.
-* User needs to run `matchbox-services-lighter` in its .profile when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled `user-desktop:cool-tts` for the purpose of `libplatform intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts`
-* `matchbox-services-ligter` launches a headless x client daemon to load services in response to requests from matchbox202x-desktop-panel
+* User needs to run `matchbox-service-lighter` in its .profile when it logs in to user-laptop over ssh -X in order for the session server to know what services user-laptop provides.  Non local services get a little connect icon and are labeled `user-desktop:cool-tts` for the purpose of `libplatform intent --intent ui.TextToSpeech --text "my string" --app user-desktop:cool-tts`
+* `matchbox-service-lighter` launches a headless x client daemon to load services in response to requests from matchbox202x-desktop-panel
 * User realizes the wrong file picker opened and does a super-I.  The intent rerouter window pops open, shows the list of current intents, the user picks the new file picker, the intent is sent to the new file picker instead.
 * `$ cat --xintent ui.SaveFile video-lecture.mp4`
 * `other-computer:~$ cat --redirect-intent --xintent ui.SaveFile | ffmpeg -o audio-lecture.m4a`
@@ -186,7 +186,7 @@ ui.TextToSpeechResponse({BlobId})
 sys.RerouteIntent({ChannelId, recieverName, recieverHost})
 ```
 
-So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-services-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` or whatever user set the intent rerouting hotkey to and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-services-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  Because firefox currently only reads uri's, the blob has to be stowed to /tmp/xblob-bounce-buffers 
+So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-service-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` or whatever user set the intent rerouting hotkey to and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-service-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  Because firefox currently only reads uri's, the blob has to be stowed to /tmp/xblob-bounce-buffers 
 
 
 

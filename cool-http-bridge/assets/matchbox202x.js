@@ -349,7 +349,7 @@
      * @param {function(frame: any): void} [onFrameHandler=null]
      * @returns {WebSocket}
      */
-    connectXAudioWs: function(onFrameHandler = null) {
+    connectXAudioWs: function(onFrameHandler = null, sinkName = 'user-desktop-speakers') {
       this._wsListeners = this._wsListeners || new Set();
       if (typeof onFrameHandler === 'function') {
         this._wsListeners.add(onFrameHandler);
@@ -360,7 +360,7 @@
       }
 
       const wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${window.location.host}/xaudio`;
+      const wsUrl = `${wsProtocol}//${window.location.host}/xaudio?XAudioSink=${encodeURIComponent(sinkName)}`;
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -426,7 +426,7 @@
         }
       }
 
-      return window.xintent.intent('xaudio.PlaySoundBlob', {
+      const payload = {
         intent: 'xaudio.PlaySoundBlob',
         app: app,
         OutputId: cookie,
@@ -440,7 +440,24 @@
         loop: loop,
         controlWord: controlWord,
         ...options
-      }, app);
+      };
+
+      const ws = this.connectXAudioWs(null, app);
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(payload));
+        } else {
+          ws.addEventListener('open', () => {
+            try { ws.send(JSON.stringify(payload)); } catch (_) {}
+          }, { once: true });
+        }
+        return new Response(JSON.stringify({ status: 200, queued: true, seqnum: seq, via: 'websocket' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      return window.xintent.intent('xaudio.PlaySoundBlob', payload, app);
     },
 
     /**

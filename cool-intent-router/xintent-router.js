@@ -10,6 +10,8 @@ const logger = new Logger({module: 'xintent-router'});
 const {
   atoms,
   widString,
+  frameType,
+  frameDesc,
   parseXIntentIntentV0,
   parseXIntentEventV0,
   XClientMessage,
@@ -47,11 +49,7 @@ async function checkToDrainIntentsQueue(intentName) {
 initXIntentRegistry({checkToDrainIntentsQueue});
 
 function formatActionString(xchannelFrame, ev) {
-  const atomId = xchannelFrame?.messageTypeAtom || ev?.message_type;
-  const atomName = Object.keys(atoms).find(k => atoms[k] === atomId) || (atomId ? `ATOM_${atomId}` : 'XCHANNEL_FRAME');
-  const payload = xchannelFrame?.payload;
-  const subAction = payload?.intent || payload?.event || payload?.action;
-  return subAction ? `${atomName}:${subAction}` : atomName;
+  return frameType(xchannelFrame || ev);
 }
 
 const handleXIntentIntentV0 = {
@@ -188,9 +186,6 @@ const forwardMessageToChannel = async (channelObj, message) => {
       await sendFn(X, routerWin, {
         targetWin: forwardTo,
         senderWin: routerWin,
-        controlWord: controlWord,
-        ...getChannelToSend(forwardTo, channelObj),
-        payload: message.payload,
         controlWord: controlWord,
         ...getChannelToSend(forwardTo, channelObj),
         payload: message.payload,

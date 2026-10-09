@@ -14,6 +14,18 @@ module.exports = ({ X, clientWin }) => {
     res.status(200).json({ status: 'ok', blobId, blob: blobId });
   };
 
+  const routeXBlobRead = async (req, res) => {
+    const targetBlob = Number(req.body?.blobId || req.body?.blob || req.params?.blobId);
+    logger.info(`POST /xblob/XBlobRead blob=${targetBlob}`);
+    try {
+      const blobData = await xintent.XBlobRead(X, routerWin(), targetBlob);
+      res.setHeader('Matchbox-Bridge', '1.0');
+      res.status(200).json({ status: 'ok', blobId: targetBlob, blob: blobData });
+    } catch (err) {
+      res.status(404).json({ status: 'error', message: err.message });
+    }
+  };
+
   const routeXBlobTransfer = async (req, res) => {
     const { blobId, blob, grantee } = req.body || {};
     const targetBlob = Number(blobId || blob);
@@ -54,6 +66,7 @@ module.exports = ({ X, clientWin }) => {
 
   return {
     routeXBlobCreate,
+    routeXBlobRead,
     routeXBlobTransfer,
     routeXBlobGrant,
     routeXBlobUnlink,

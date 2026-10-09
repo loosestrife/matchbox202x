@@ -2,11 +2,10 @@ const { on } = require('node:events');
 const TOML = require('@iarna/toml');
 const { Logger, HttpError, alStorage } = require('../server-tools');
 const xintent = require('../x11-promises/xintent');
-
+const server = require('./server-globals');
 const logger = new Logger({ module: 'route-intent' });
+const activeHttpAudioStreams = new Map();
 let clientWin, X, root;
-let globalTransactionIdCounter = 1;
-const activeHttpAudioStreams = new Map(); // cookie -> { res, txId }
 
 /**
  * Reads the aggregated TOML property off routerWin
@@ -109,7 +108,7 @@ const routeIntent = async (req, res) => {
   });
 
   logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, logPayload);
-  const txId = globalTransactionIdCounter++;
+  const txId = server.getNextTxId();
   let reqControlWord = payload.controlWord;
   if (channelControlHeader) {
     let cw = 0;
@@ -122,19 +121,20 @@ const routeIntent = async (req, res) => {
   }
 
   const hasChannelControl = Boolean(channelControlHeader) || reqControlWord !== undefined;
-  const isStreamedResponse = hasChannelControl || payload.Accept || req.headers['accept'];
+  const opensChannel = hasChannelControl || payload.Accept || req.headers['accept'];
 
   try {
     // --- 1. Streamed Multipart Response Path ---
-    if (isStreamedResponse) {
+    if (opensChannel) {
       let headersSent = false;
       const BOUNDARY = 'MatchboxFrameBoundary_' + Date.now().toString(16);
 
       const writeJsonFrame = (res, data, customHeaders = {}) => {
+        if (res.writableEnded || res.finished) return;
         if (!headersSent) {
           res.writeHead(200, {
-            // firefox bug: firefox doesnt stream response data of type multipart/mixed to apps.  so we claim to be application/x-matchbox-stream instead
-            'Content-Type': `application/x-matchbox-stream; boundary=${BOUNDARY}`,
+            // firefox bug: firefox doesnt stream response data of type multipart/mixed to apps
+            'Content-Type': `multipart/mixed; boundary=${BOUNDARY}`,
             'Cache-Control': 'no-cache, no-store, must-revalidate, no-transform, max-age=0',
             'Pragma': 'no-cache',
             'Expires': '0',
@@ -158,92 +158,90 @@ const routeIntent = async (req, res) => {
         }
       };
 
-      const responsePromise = new Promise((resolve, reject) => {
-        const responseHandler = async (ev) => {
-          const responseAtoms = [
-            xintent.atoms.XINTENT_INTENT_V0,
-            xintent.atoms.XINTENT_EVENT_V0,
-            xintent.atoms.XAUDIO_PLAY_RESPONSE_V0
-          ].filter(Boolean);
+      const responsePromise = new Promise((resolve) => {
+        const handleMessageFromX = async (msg) => {
+          if (res.writableEnded || res.finished) return;
 
-          if (
-            ev &&
-            ev.type == 33 &&
-            responseAtoms.includes(ev.message_type) &&
-            ev.data &&
-            ev.data[1] == txId
-          ) {
+          const eventData = msg?.payload || {};
+          const controlWord = msg?.controlWord;
+          const blobAtom = msg?.dataBlob || eventData?.data_blob || eventData?.blobId || eventData?.blob;
+
+          logger.info(`route-intent: [HTTP STREAM] messageFromX XChannel ${txId}: ${xintent.frameDesc(msg)}`);
+
+          if (typeof broadcastWsFrame === 'function' && eventData) {
+            broadcastWsFrame(eventData);
+          }
+
+          const customIntentHeaders = {};
+          if (blobAtom) {
+            customIntentHeaders['X-Attached-Blob-Id'] = blobAtom;
+          }
+          if (controlWord !== undefined) {
+            const ctrlStrings = [];
+            if (controlWord & 1) ctrlStrings.push('SYN');
+            if (controlWord & 2) ctrlStrings.push('FIN');
+            if (ctrlStrings.length > 0) {
+              customIntentHeaders['X-Channel-Control'] = ctrlStrings.join(',');
+            }
+          }
+
+          writeJsonFrame(res, eventData, customIntentHeaders);
+
+          if (blobAtom && !res.writableEnded && !res.finished) {
             try {
               const routerWin = await xintent.getValidRouterWin(X, root);
-              const { payload: eventData } = await xintent.parseXIntentIntentV0(X, routerWin, ev);
-
-              logger.info(`route-intent: [HTTP STREAM] Forwarding response frame (atom ${ev.message_type}) for txId ${txId} on channel ${ev.data[1]}`, {
-                event: eventData?.event || eventData?.intent,
-                txId,
-                controlWord: ev.data[2],
-              });
-
-              if (typeof broadcastWsFrame === 'function' && eventData) {
-                broadcastWsFrame(eventData);
-              }
-
-              const blobAtom = ev.data[4] || eventData?.data_blob || eventData?.blobId || eventData?.blob;
-              const controlWord = ev.data[2];
-              const customIntentHeaders = {};
-              if (blobAtom) {
-                customIntentHeaders['X-Attached-Blob-Id'] = blobAtom;
-              }
-              if (controlWord !== undefined) {
-                const ctrlStrings = [];
-                if (controlWord & 1) ctrlStrings.push('SYN');
-                if (controlWord & 2) ctrlStrings.push('FIN');
-                if (ctrlStrings.length > 0) {
-                  customIntentHeaders['X-Channel-Control'] = ctrlStrings.join(',');
-                }
-              }
-
-              writeJsonFrame(res, eventData, customIntentHeaders);
-
-              if (blobAtom) {
-                try {
-                  const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
-                  if (blob) {
-                    writeJsonFrame(res, blob, { 'X-Blob-Id': blobAtom });
-                  }
-                } catch (err) {
-                  logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
-                }
-              }
-
-              // Finalize stream when controlWord has FIN bit set (bit 1)
-              const isFin = controlWord !== undefined ? (controlWord & 2) !== 0 : true;
-              if (isFin) {
-                logger.info("Closing stream (FIN control word received)", {txId, controlWord});
-                if (headersSent) {
-                  res.write(`--${BOUNDARY}--\r\n`);
-                  res.end();
-                }
-                const cookieKey = eventData?.cookie || eventData?.OutputId;
-                if (cookieKey) {
-                  activeHttpAudioStreams.delete(cookieKey);
-                }
-                X.removeListener('event', responseHandler);
-                resolve();
+              const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
+              if (blob && !res.writableEnded && !res.finished) {
+                writeJsonFrame(res, blob, { 'X-Blob-Id': blobAtom });
               }
             } catch (err) {
-              logger.error(`[STREAM ERROR] ${err.message}`);
-              X.removeListener('event', responseHandler);
-              if (headersSent) {
-                res.end();
-              } else {
-                reject(err);
-              }
-              resolve();
+              logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
             }
+          }
+
+          // Finalize stream when FIN control word received
+          const isFin = controlWord !== undefined ? (controlWord & 2) !== 0 : false;
+
+          if (isFin && !res.writableEnded && !res.finished) {
+            logger.info("Closing HTTP stream (FIN received)", { txId, controlWord });
+            if (headersSent) {
+              res.write(`--${BOUNDARY}--\r\n`);
+              res.end();
+            } else {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(eventData));
+            }
+            const cookieKey = eventData?.cookie || eventData?.OutputId;
+            if (cookieKey) {
+              activeHttpAudioStreams.delete(cookieKey);
+            }
+            delete server.channelNatTable[txId];
+            resolve();
           }
         };
 
-        X.on('event', responseHandler);
+        const sessionObj = {
+          txId,
+          type: 'http',
+          res,
+          intent,
+          cookie: payload.cookie || payload.OutputId,
+          controlWord: reqControlWord,
+          createdAt: Date.now(),
+          messageFromX: handleMessageFromX,
+          writeFrame: handleMessageFromX,
+        };
+        server.channelNatTable[txId] = sessionObj;
+
+        res.on('close', () => {
+          if (!res.writableEnded && !res.finished) {
+            logger.info(`[HTTP STREAM ABORTED] Client closed connection prematurely for txId ${txId}`);
+            if (server.channelNatTable[txId]) {
+              delete server.channelNatTable[txId];
+            }
+            resolve();
+          }
+        });
       });
 
       const reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
@@ -328,6 +326,7 @@ const getActiveAudioStreams = () => {
   return streams;
 };
 
+
 let broadcastWsFrame = null;
 
 module.exports = ({ X: xClient, root: xRoot, clientWin: theClientWin, broadcastWsFrame: theBroadcastWsFrame }) => {
@@ -341,6 +340,5 @@ module.exports = ({ X: xClient, root: xRoot, clientWin: theClientWin, broadcastW
     getAggregateToml,
     fetchAggregateToml,
     aggregateTomlAsObject,
-    getActiveAudioStreams,
   };
 };

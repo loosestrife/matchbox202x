@@ -38,12 +38,9 @@ class XIntentTextToSpeechService : TextToSpeechService() {
         if (text.isBlank()) return
 
         val speechRate = (request.speechRate / 100.0f).coerceIn(0.5f, 3.0f)
-        val targetApp = XIntentClient.getTargetApp(applicationContext, 1)
+        val targetApp = XIntentClient.getTargetApp(applicationContext, 1).ifBlank { "cool-tts" }
 
         Log.i(TAG, "Synthesizing text via $targetApp: $text")
-
-        val sampleRate = 16000
-        callback.start(sampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
 
         runBlocking {
             val result = XIntentClient.sendTextToSpeechIntent(
@@ -56,17 +53,66 @@ class XIntentTextToSpeechService : TextToSpeechService() {
             if (result.success && result.replacementText != null) {
                 val wavBytes = Base64.decode(result.replacementText, Base64.DEFAULT)
                 if (wavBytes.isNotEmpty()) {
-                    // Skip 44-byte WAV header to get pure PCM payload
-                    val pcmOffset = 44
-                    val pcmLength = wavBytes.size - pcmOffset
+                    val sampleRate = extractWavSampleRate(wavBytes)
+                    val numChannels = extractWavChannels(wavBytes)
+                    val pcmOffset = findWavDataOffset(wavBytes) ?: 44
+                    val pcmLength = (wavBytes.size - pcmOffset).coerceAtLeast(0)
+
+                    Log.i(TAG, "Streaming $pcmLength bytes of PCM data ($sampleRate Hz, $numChannels ch, maxBuffer ${callback.maxBufferSize}) to Android TTS engine")
+
+                    callback.start(sampleRate, AudioFormat.ENCODING_PCM_16BIT, numChannels)
                     if (pcmLength > 0) {
-                        Log.i(TAG, "Streaming $pcmLength bytes of PCM data to Android TTS engine")
-                        callback.audioAvailable(wavBytes, pcmOffset, pcmLength)
+                        val maxBuffer = callback.maxBufferSize.coerceAtLeast(1024)
+                        var offset = pcmOffset
+                        var remaining = pcmLength
+
+                        while (remaining > 0) {
+                            val chunkSize = minOf(remaining, maxBuffer)
+                            val status = callback.audioAvailable(wavBytes, offset, chunkSize)
+                            if (status != TextToSpeech.SUCCESS) {
+                                Log.e(TAG, "SynthesisCallback.audioAvailable failed with status $status at offset $offset")
+                                break
+                            }
+                            offset += chunkSize
+                            remaining -= chunkSize
+                        }
                     }
                 }
             }
         }
 
         callback.done()
+    }
+
+    private fun extractWavSampleRate(bytes: ByteArray): Int {
+        return if (bytes.size >= 28) {
+            (bytes[24].toInt() and 0xFF) or
+            ((bytes[25].toInt() and 0xFF) shl 8) or
+            ((bytes[26].toInt() and 0xFF) shl 16) or
+            ((bytes[27].toInt() and 0xFF) shl 24)
+        } else {
+            22050
+        }
+    }
+
+    private fun extractWavChannels(bytes: ByteArray): Int {
+        return if (bytes.size >= 24) {
+            (bytes[22].toInt() and 0xFF) or ((bytes[23].toInt() and 0xFF) shl 8)
+        } else {
+            1
+        }
+    }
+
+    private fun findWavDataOffset(bytes: ByteArray): Int? {
+        for (i in 0 until bytes.size - 4) {
+            if (bytes[i] == 'd'.code.toByte() &&
+                bytes[i + 1] == 'a'.code.toByte() &&
+                bytes[i + 2] == 't'.code.toByte() &&
+                bytes[i + 3] == 'a'.code.toByte()
+            ) {
+                return i + 8
+            }
+        }
+        return null
     }
 }

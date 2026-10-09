@@ -106,7 +106,7 @@ name = "flammenwerfer-phone"
         }
 
         val httpUrl = getServerUrl(context)
-        val wsUrl = httpUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
+        val wsUrl = httpUrl.replace("http://", "ws://").replace("https://", "wss://") + "/xaudio?XAudioSink=flammenwerfer-phone"
 
         addLog("[WebSocket] Connecting to Remote Intents at $wsUrl...")
         updateWebSocketState(WebSocketState.CONNECTING)
@@ -126,6 +126,39 @@ name = "flammenwerfer-phone"
             override fun onMessage(webSocket: WebSocket, text: String) {
                 Log.i(TAG, "WebSocket text message: $text")
                 addLog("[WebSocket 📩] Remote message: $text")
+                try {
+                    val json = JSONObject(text)
+                    val intentName = json.optString("intent", json.optString("event", ""))
+                    val txId = json.optInt("txId", 0)
+
+                    if (intentName == "xaudio.PlaySoundBlob" || intentName == "XAudioPlay" || intentName == "xaudio.Play") {
+                        if (isLocalAudioEnabled(context)) {
+                            val resJsonStr = CardsActivity.instance?.triggerLocalAudioPlay(text) ?: JSONObject().apply {
+                                put("event", "XAudioPlayResponseV0")
+                                put("status", 200)
+                                if (txId != 0) put("txId", txId)
+                            }.toString()
+
+                            val resObj = JSONObject(resJsonStr).apply {
+                                put("event", "XAudioPlayResponseV0")
+                                if (txId != 0) put("txId", txId)
+                                put("status", 200)
+                            }
+                            webSocket.send(resObj.toString())
+                            addLog("[XAudioSink 🔊] Sent XAudioPlayResponseV0 for txId $txId over WebSocket")
+                        }
+                    } else if (intentName == "xaudio.ControlStream" || intentName == "XAudioControl") {
+                        if (isLocalAudioEnabled(context)) {
+                            val resJsonStr = CardsActivity.instance?.triggerLocalAudioControl(text) ?: JSONObject().apply {
+                                put("event", "XAudioControlResponseV0")
+                                put("status", 200)
+                                if (txId != 0) put("txId", txId)
+                            }.toString()
+                            webSocket.send(resJsonStr)
+                            addLog("[XAudioSink 🔊] Sent XAudioControlResponseV0 for txId $txId over WebSocket")
+                        }
+                    }
+                } catch (_: Exception) {}
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -374,6 +407,32 @@ name = "flammenwerfer-phone"
         return trimmed
     }
 
+    fun extractAudioBytesFromRawResponse(rawBytes: ByteArray): ByteArray? {
+        if (rawBytes.isEmpty()) return null
+        val respText = String(rawBytes, Charsets.UTF_8)
+        if (respText.trim().startsWith("{")) {
+            return try {
+                val respJson = JSONObject(respText)
+                val blobDataObj = respJson.optJSONObject("blob")
+                if (blobDataObj != null && blobDataObj.has("data")) {
+                    Base64.decode(blobDataObj.getString("data"), Base64.DEFAULT)
+                } else if (blobDataObj != null && blobDataObj.has("buffer")) {
+                    Base64.decode(blobDataObj.getString("buffer"), Base64.DEFAULT)
+                } else {
+                    val rawBlobStr = respJson.optString("blob")
+                    if (rawBlobStr.isNotBlank()) {
+                        Base64.decode(rawBlobStr, Base64.DEFAULT)
+                    } else null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        } else if (rawBytes.size > 4 && rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte()) {
+            return rawBytes
+        }
+        return null
+    }
+
     suspend fun fetchApiTags(context: Context): Result = withContext(Dispatchers.IO) {
         val baseUrl = getServerUrl(context)
         val fullUrl = "$baseUrl/api/tags"
@@ -481,9 +540,6 @@ name = "flammenwerfer-phone"
 
             while (reader.read(buffer).also { bytesRead = it } != -1) {
                 responseTextBuilder.appendRange(buffer, 0, bytesRead)
-                val currentText = responseTextBuilder.toString().trim()
-                if (currentText.contains("--MatchboxFrameBoundary_") && 
-                    (currentText.contains("--\r\n") || currentText.contains("--\n"))) break
             }
 
             val responseText = responseTextBuilder.toString()
@@ -499,6 +555,34 @@ name = "flammenwerfer-phone"
                 if (json.has("data") && json.optString("_dataType") == "base64") {
                     audioBytes = Base64.decode(json.getString("data"), Base64.DEFAULT)
                     break
+                } else if (json.has("blob")) {
+                    val blobObj = json.optJSONObject("blob")
+                    if (blobObj != null && blobObj.optString("_dataType") == "base64") {
+                        audioBytes = Base64.decode(blobObj.getString("data"), Base64.DEFAULT)
+                        break
+                    }
+                }
+            }
+
+            if (audioBytes == null || audioBytes.isEmpty()) {
+                val blobIdMatch = Regex("""(?:X-Attached-Blob-Id|X-Blob-Id|data_blob|dataBlob|payloadBlob)\s*[:=]\s*"?(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(responseText)
+                val blobId = blobIdMatch?.groupValues?.get(1) ?: ""
+
+                if (blobId.isNotBlank() && blobId != "0") {
+                    try {
+                        val conn = (URL("$baseUrl/xblob/$blobId").openConnection() as HttpURLConnection).apply {
+                            requestMethod = "GET"
+                            connectTimeout = 5000
+                            readTimeout = 10000
+                        }
+                        if (conn.responseCode in 200..299) {
+                            val rawBytes = conn.inputStream.readBytes()
+                            audioBytes = extractAudioBytesFromRawResponse(rawBytes)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error fetching xblob $blobId for TTS", e)
+                    }
                 }
             }
 
@@ -849,9 +933,7 @@ name = "flammenwerfer-phone"
                 if (currentText.startsWith("{") && currentText.endsWith("}")) {
                     break
                 }
-                if (currentText.contains("--MatchboxFrameBoundary_") &&
-                    (currentText.contains("--\r\n") || currentText.contains("--\n"))
-                ) {
+                if (currentText.contains("--MatchboxFrameBoundary_") && currentText.endsWith("--")) {
                     break
                 }
             }

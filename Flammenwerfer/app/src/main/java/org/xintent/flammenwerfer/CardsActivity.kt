@@ -1,17 +1,27 @@
 package org.xintent.flammenwerfer
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.util.Base64
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -21,18 +31,24 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -42,19 +58,27 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.xintent.flammenwerfer.ui.theme.FlammenwerferTheme
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 
 class CardsActivity : ComponentActivity() {
 
     companion object {
+        var instance: CardsActivity? = null
         const val EXTRA_APP_NAME = "extra_app_name"
         const val EXTRA_CARD_NAME = "extra_card_name"
 
         const val INJECT_XINTENT_JS = """
 (function() {
-  if (window.xintent && typeof window.xintent.intent === 'function') return;
+  if (window.xintent && typeof window.xintent.intent === 'function' && window.xaudio) return;
 
-  window.xintent = {
+  window.xintent = window.xintent || {
+    SYN: 1,
+    FIN: 2,
+    SYN_FIN: 3,
+
     getTags: async function() {
       if (window.XIntentNative && typeof window.XIntentNative.fetchApiTagsJson === 'function') {
         try {
@@ -98,7 +122,7 @@ class CardsActivity : ComponentActivity() {
 
       if (window.XIntentNative && typeof window.XIntentNative.isLocalFsEnabled === 'function' && window.XIntentNative.isLocalFsEnabled()) {
         if (intentName === 'fs.PickFile') {
-          var rawRes = window.XIntentNative.handleLocalPickFile();
+          var rawRes = window.XIntentNative.handleLocalPickFile(JSON.stringify(payload || {}));
           return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
         if (intentName === 'fs.SaveAs') {
@@ -119,15 +143,17 @@ class CardsActivity : ComponentActivity() {
         app: app
       });
 
+      var isXAudio = (intentName || '').indexOf('xaudio.') === 0 || (intentName || '').indexOf('XAudio') === 0;
+
+      if (bodyData.controlWord === undefined && (bodyData.Accept || isXAudio)) {
+        bodyData.controlWord = 1;
+      }
+
       var headers = {
         'Content-Type': 'application/json',
         'Accept': (payload && payload.Accept) ? payload.Accept : '*/*',
         'X-Forwarded-By': 'flammenwerfer-web-card'
       };
-
-      if (bodyData.controlWord === undefined && bodyData.Accept) {
-        bodyData.controlWord = 1;
-      }
 
       if (bodyData.controlWord !== undefined) {
         var ctrlStrings = [];
@@ -198,7 +224,130 @@ class CardsActivity : ComponentActivity() {
     }
   };
 
-  console.log('[Flammenwerfer] Attached window.xintent runtime library.');
+  window.xaudio = window.xaudio || {
+    connectXAudioWs: function(onFrameHandler, sinkName) {
+      this._wsListeners = this._wsListeners || [];
+      if (typeof onFrameHandler === 'function') {
+        this._wsListeners.push(onFrameHandler);
+      }
+
+      if (this._ws && (this._ws.readyState === 0 || this._ws.readyState === 1)) {
+        return this._ws;
+      }
+
+      var wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+      var host = window.location.host || 'localhost:12345';
+      var sink = sinkName || 'user-desktop-speakers';
+      var wsUrl = wsProtocol + '//' + host + '/xaudio?XAudioSink=' + encodeURIComponent(sink);
+
+      try {
+        var ws = new WebSocket(wsUrl);
+        this._ws = ws;
+        var self = this;
+
+        ws.onopen = function() {
+          console.log('[xaudio] Real-time WebSocket connected to ' + wsUrl);
+        };
+
+        ws.onmessage = function(event) {
+          try {
+            var frame = JSON.parse(event.data);
+            for (var i = 0; i < self._wsListeners.length; i++) {
+              try { self._wsListeners[i](frame); } catch (_) {}
+            }
+          } catch (_) {}
+        };
+
+        ws.onclose = function() {
+          self._ws = null;
+        };
+
+        return ws;
+      } catch (err) {
+        console.warn('[xaudio] Could not establish WebSocket:', err);
+        return null;
+      }
+    },
+    XAudioPlay: async function(cookieOrOptions, seqnum, sample) {
+      var options = (typeof cookieOrOptions === 'object' && cookieOrOptions !== null) ? cookieOrOptions : {
+        cookie: cookieOrOptions,
+        seqnum: seqnum || 0,
+        sample: sample || seqnum || 0
+      };
+      var cookie = options.cookie || options.Cookie || options.OutputId || 'default';
+      var seq = options.seqnum !== undefined ? options.seqnum : (options.seq || 0);
+      var blobId = options.sample || options.blob || options.blobId || options.BlobId;
+      var app = options.app || 'localhost';
+
+      var payload = Object.assign({
+        intent: 'xaudio.PlaySoundBlob',
+        app: app,
+        OutputId: cookie,
+        cookie: cookie,
+        streamId: options.streamId || 1,
+        seqnum: seq,
+        sample: blobId,
+        controlWord: options.controlWord || 1
+      }, options);
+
+      if (window.XIntentNative && typeof window.XIntentNative.isLocalAudioEnabled === 'function' && window.XIntentNative.isLocalAudioEnabled()) {
+        var rawRes = window.XIntentNative.handleLocalAudioPlay(JSON.stringify(payload));
+        return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      var ws = this.connectXAudioWs(null, app);
+      if (ws && (ws.readyState === 0 || ws.readyState === 1)) {
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify(payload));
+        } else {
+          ws.addEventListener('open', function() {
+            try { ws.send(JSON.stringify(payload)); } catch(_) {}
+          }, { once: true });
+        }
+        return new Response(JSON.stringify({ status: 200, queued: true, seqnum: seq, via: 'websocket' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      return window.xintent.intent('xaudio.PlaySoundBlob', payload, app);
+    },
+    prefetchSoundBlob: async function(options) {
+      options = options || {};
+      var app = options.app || 'localhost';
+      var payload = Object.assign({
+        intent: 'xaudio.PrefetchSoundBlob',
+        app: app
+      }, options);
+
+      if (window.XIntentNative && typeof window.XIntentNative.isLocalAudioEnabled === 'function' && window.XIntentNative.isLocalAudioEnabled()) {
+        var rawRes = window.XIntentNative.handleLocalPrefetch(JSON.stringify(payload));
+        return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      return window.xintent.intent('xaudio.PrefetchSoundBlob', payload, app);
+    },
+    controlStream: async function(options) {
+      options = options || {};
+      var command = typeof options === 'string' ? options : (options.command || 'stop');
+      var app = (typeof options === 'object' && options.app) ? options.app : 'localhost';
+      return window.xintent.intent('xaudio.ControlStream', Object.assign({
+        intent: 'xaudio.ControlStream',
+        command: command,
+        app: app
+      }, typeof options === 'object' ? options : {}), app);
+    },
+    seekStream: async function(options) {
+      options = options || {};
+      var app = options.app || 'localhost';
+      return window.xintent.intent('xaudio.SeekStream', Object.assign({
+        intent: 'xaudio.SeekStream',
+        app: app
+      }, options), app);
+    }
+  };
+
+  console.log('[Flammenwerfer] Attached window.xintent and window.xaudio runtime library.');
 })();
 """
     }
@@ -379,15 +528,26 @@ class CardsActivity : ComponentActivity() {
         }
     }
 
-    fun triggerLocalPickFile(): String {
+    fun triggerLocalPickFile(jsonPayload: String? = null): String {
         var responseString = ""
         val latch = CountDownLatch(1)
         
+        var acceptMime = "*/*"
+        try {
+            if (!jsonPayload.isNullOrBlank()) {
+                val json = JSONObject(jsonPayload)
+                val accept = json.optString("Accept", "")
+                if (accept.isNotBlank() && accept != "*/*") {
+                    acceptMime = accept
+                }
+            }
+        } catch (_: Exception) {}
+
         runOnUiThread {
             try {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "*/*"
+                    type = acceptMime
                 }
                 pendingPickCallback = { res -> 
                     responseString = res
@@ -452,6 +612,7 @@ class CardsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
         enableEdgeToEdge()
 
         localTtsEngine = TextToSpeech(applicationContext) { status ->
@@ -477,7 +638,222 @@ class CardsActivity : ComponentActivity() {
         }
     }
 
+    data class LocalAudioChunk(
+        val seqnum: Int,
+        val streamId: Int,
+        val cookie: String,
+        val tempAudioFile: File,
+        val sizeBytes: Int,
+    )
+
+    var cardWebView: WebView? = null
+    private val localAudioQueue = ConcurrentLinkedQueue<LocalAudioChunk>()
+    private var isLocalAudioPlaying = false
     private var localMediaPlayer: MediaPlayer? = null
+
+    var isPinned by mutableStateOf(false)
+        private set
+
+    fun togglePinCard(pinned: Boolean) {
+        isPinned = pinned
+        if (pinned) {
+            checkAndRequestNotificationPermission()
+        }
+        runOnUiThread {
+            val serviceIntent = Intent(this, XIntentCardService::class.java).apply {
+                if (pinned) {
+                    action = XIntentCardService.ACTION_START_PINNED
+                    putExtra("appName", intent.getStringExtra(EXTRA_APP_NAME) ?: "Web Card")
+                    putExtra("cardName", intent.getStringExtra(EXTRA_CARD_NAME) ?: "index")
+                } else {
+                    action = XIntentCardService.ACTION_STOP_PINNED
+                }
+            }
+
+            if (pinned) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+                cardWebView?.onResume()
+                cardWebView?.resumeTimers()
+                XIntentClient.addLog("[CardsActivity 📌] Card Pinned (Foreground Service & CPU WakeLock active - screen can turn off in pocket)")
+            } else {
+                startService(serviceIntent)
+                XIntentClient.addLog("[CardsActivity 📌] Card Unpinned")
+            }
+        }
+    }
+
+    private fun checkAndRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e("CardsActivity", "Error requesting battery optimization exemption", e)
+                }
+            }
+        }
+    }
+
+    fun dispatchJsXAudioResponse(responseJson: JSONObject) {
+        runOnUiThread {
+            val jsonStr = responseJson.toString()
+            val jsCode = """
+                (function() {
+                    var frame = $jsonStr;
+                    if (window.xaudio && window.xaudio._wsListeners) {
+                        for (var i = 0; i < window.xaudio._wsListeners.length; i++) {
+                            try { window.xaudio._wsListeners[i](frame); } catch(_) {}
+                        }
+                    }
+                })();
+            """.trimIndent()
+            cardWebView?.evaluateJavascript(jsCode, null)
+        }
+    }
+
+    private fun playNextLocalAudioChunk() {
+        val chunk = localAudioQueue.poll()
+        if (chunk == null) {
+            isLocalAudioPlaying = false
+            return
+        }
+
+        isLocalAudioPlaying = true
+
+        try {
+            localMediaPlayer?.release()
+            localMediaPlayer = MediaPlayer().apply {
+                setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                setDataSource(chunk.tempAudioFile.absolutePath)
+                setOnCompletionListener { _ ->
+                    XIntentClient.addLog("[xaudio.PlaySoundBlob] Finished playing seq #${chunk.seqnum} on phone speaker")
+
+                    val responseJson = JSONObject().apply {
+                        put("event", "XAudioPlayResponseV0")
+                        put("intent", "XAudioPlayResponseV0")
+                        put("status", 200)
+                        put("cookie", chunk.cookie)
+                        put("OutputId", chunk.cookie)
+                        put("streamId", chunk.streamId)
+                        put("seqnum", chunk.seqnum)
+                    }
+
+                    dispatchJsXAudioResponse(responseJson)
+
+                    try { chunk.tempAudioFile.delete() } catch (_: Exception) {}
+
+                    playNextLocalAudioChunk()
+                }
+                setOnErrorListener { _, what, _ ->
+                    XIntentClient.addLog("[xaudio.PlaySoundBlob] MediaPlayer error $what on seq #${chunk.seqnum}")
+                    try { chunk.tempAudioFile.delete() } catch (_: Exception) {}
+                    playNextLocalAudioChunk()
+                    true
+                }
+                prepare()
+                start()
+            }
+
+            XIntentClient.addLog("[xaudio.PlaySoundBlob] Playing seq #${chunk.seqnum} on phone speaker (${chunk.sizeBytes} bytes)")
+        } catch (e: Exception) {
+            XIntentClient.addLog("[xaudio.PlaySoundBlob] Error playing seq #${chunk.seqnum}: ${e.message}")
+            try { chunk.tempAudioFile.delete() } catch (_: Exception) {}
+            playNextLocalAudioChunk()
+        }
+    }
+
+    private val localBlobCache = ConcurrentHashMap<String, File>()
+
+    private fun extractAudioBytesFromResponse(rawBytes: ByteArray): ByteArray? {
+        if (rawBytes.isEmpty()) return null
+        val respText = String(rawBytes, Charsets.UTF_8)
+        if (respText.trim().startsWith("{")) {
+            return try {
+                val respJson = JSONObject(respText)
+                val blobDataObj = respJson.optJSONObject("blob")
+                if (blobDataObj != null && blobDataObj.has("data")) {
+                    Base64.decode(blobDataObj.getString("data"), Base64.DEFAULT)
+                } else if (blobDataObj != null && blobDataObj.has("buffer")) {
+                    Base64.decode(blobDataObj.getString("buffer"), Base64.DEFAULT)
+                } else {
+                    val rawBlobStr = respJson.optString("blob")
+                    if (rawBlobStr.isNotBlank()) {
+                        Base64.decode(rawBlobStr, Base64.DEFAULT)
+                    } else null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        } else if (rawBytes.size > 4 && rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte()) {
+            return rawBytes
+        }
+        return null
+    }
+
+    fun triggerLocalPrefetch(jsonPayload: String): String {
+        return try {
+            val json = JSONObject(jsonPayload)
+            val sampleId = json.optString("sample")
+                .ifBlank { json.optString("blobId", json.optString("blob", "")) }
+
+            if (sampleId.isNotBlank() && !localBlobCache.containsKey(sampleId)) {
+                val serverUrl = XIntentClient.getServerUrl(applicationContext)
+                val blobUrl = "$serverUrl/xblob/$sampleId"
+
+                Executors.newSingleThreadExecutor().execute {
+                    try {
+                        val conn = (URL(blobUrl).openConnection() as HttpURLConnection).apply {
+                            requestMethod = "GET"
+                            connectTimeout = 5000
+                            readTimeout = 10000
+                        }
+                        if (conn.responseCode in 200..299) {
+                            val rawBytes = conn.inputStream.readBytes()
+                            val audioBytes = extractAudioBytesFromResponse(rawBytes)
+                            if (audioBytes != null && audioBytes.isNotEmpty()) {
+                                val tempFile = File.createTempFile("flammen_prefetch_", ".wav", cacheDir)
+                                FileOutputStream(tempFile).use { it.write(audioBytes) }
+                                localBlobCache[sampleId] = tempFile
+                                XIntentClient.addLog("[xaudio.PrefetchSoundBlob] Prefetched blob $sampleId (${audioBytes.size} bytes)")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("CardsActivity", "Error prefetching xblob $sampleId", e)
+                    }
+                }
+            }
+
+            JSONObject().apply {
+                put("status", "ok")
+                put("message", "Prefetch started for $sampleId")
+            }.toString()
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("status", "error")
+                put("message", e.message ?: "Failed prefetch")
+            }.toString()
+        }
+    }
 
     fun triggerLocalAudioPlay(jsonPayload: String): String {
         return try {
@@ -497,27 +873,57 @@ class CardsActivity : ComponentActivity() {
                 }
             }
 
+            val sampleId = json.optString("sample")
+                .ifBlank { json.optString("blobId", json.optString("blob", "")) }
+
+            var tempAudioFile: File? = if (sampleId.isNotBlank()) localBlobCache.remove(sampleId) else null
+
+            if (tempAudioFile == null && audioBytes == null && sampleId.isNotBlank()) {
+                val serverUrl = XIntentClient.getServerUrl(applicationContext)
+                val blobUrl = "$serverUrl/xblob/$sampleId"
+                try {
+                    val conn = (URL(blobUrl).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        connectTimeout = 5000
+                        readTimeout = 10000
+                    }
+                    if (conn.responseCode in 200..299) {
+                        val rawBytes = conn.inputStream.readBytes()
+                        audioBytes = extractAudioBytesFromResponse(rawBytes)
+                    }
+                } catch (e: Exception) {
+                    Log.e("CardsActivity", "Error fetching xblob $sampleId from $blobUrl", e)
+                }
+            }
+
+            if (tempAudioFile == null && audioBytes != null && audioBytes.isNotEmpty()) {
+                tempAudioFile = File.createTempFile("flammen_audio_", ".wav", cacheDir)
+                FileOutputStream(tempAudioFile).use { fos ->
+                    fos.write(audioBytes)
+                }
+            }
+
             if (audioBytes != null && audioBytes.isNotEmpty()) {
                 val tempAudioFile = File.createTempFile("flammen_audio_", ".wav", cacheDir)
                 FileOutputStream(tempAudioFile).use { fos ->
                     fos.write(audioBytes)
                 }
 
-                localMediaPlayer?.release()
-                localMediaPlayer = MediaPlayer().apply {
-                    setDataSource(tempAudioFile.absolutePath)
-                    prepare()
-                    start()
+                val chunk = LocalAudioChunk(seqnum, streamId, cookie, tempAudioFile, audioBytes.size)
+                localAudioQueue.add(chunk)
+
+                XIntentClient.addLog("[xaudio.PlaySoundBlob] Queued phone speaker audio seq #$seqnum (${audioBytes.size} bytes). Queue size: ${localAudioQueue.size}")
+
+                synchronized(this) {
+                    if (!isLocalAudioPlaying) {
+                        playNextLocalAudioChunk()
+                    }
                 }
 
-                XIntentClient.addLog("[xaudio.PlaySoundBlob] Playing audio on phone speaker (${audioBytes.size} bytes, seq #$seqnum)")
-
                 JSONObject().apply {
-                    put("event", "XAudioPlayResponseV0")
-                    put("status", 200)
+                    put("status", "ok")
+                    put("message", "XAudioPlay queued")
                     put("cookie", cookie)
-                    put("OutputId", cookie)
-                    put("streamId", streamId)
                     put("seqnum", seqnum)
                 }.toString()
             } else {
@@ -541,10 +947,12 @@ class CardsActivity : ComponentActivity() {
             val json = JSONObject(jsonPayload)
             val command = json.optString("command", "stop")
             if (command == "stop" || command == "pause") {
+                localAudioQueue.clear()
                 localMediaPlayer?.stop()
                 localMediaPlayer?.release()
                 localMediaPlayer = null
-                XIntentClient.addLog("[xaudio.ControlStream] Stopped phone speaker audio playback")
+                isLocalAudioPlaying = false
+                XIntentClient.addLog("[xaudio.ControlStream] Stopped phone speaker audio playback & cleared queue")
             }
             JSONObject().apply {
                 put("status", "ok")
@@ -558,11 +966,38 @@ class CardsActivity : ComponentActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        if (isPinned) {
+            cardWebView?.onResume()
+            cardWebView?.resumeTimers()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isPinned) {
+            cardWebView?.onResume()
+            cardWebView?.resumeTimers()
+        }
+    }
+
     override fun onDestroy() {
+        if (isPinned) {
+            val serviceIntent = Intent(this, XIntentCardService::class.java).apply {
+                action = XIntentCardService.ACTION_STOP_PINNED
+            }
+            try { startService(serviceIntent) } catch (_: Exception) {}
+        }
         super.onDestroy()
+        if (instance === this) {
+            instance = null
+        }
+        localAudioQueue.clear()
         localMediaPlayer?.stop()
         localMediaPlayer?.release()
         localMediaPlayer = null
+        isLocalAudioPlaying = false
         localTtsEngine?.stop()
         localTtsEngine?.shutdown()
         localTtsEngine = null
@@ -580,6 +1015,12 @@ class XIntentJSBridge(private val activity: CardsActivity) {
     @JavascriptInterface
     fun handleLocalAudioPlay(jsonPayload: String): String {
         return activity.triggerLocalAudioPlay(jsonPayload)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun handleLocalPrefetch(jsonPayload: String): String {
+        return activity.triggerLocalPrefetch(jsonPayload)
     }
 
     @Suppress("unused")
@@ -625,8 +1066,8 @@ class XIntentJSBridge(private val activity: CardsActivity) {
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalPickFile(): String {
-        return activity.triggerLocalPickFile()
+    fun handleLocalPickFile(jsonPayload: String): String {
+        return activity.triggerLocalPickFile(jsonPayload)
     }
 
     @Suppress("unused")
@@ -679,8 +1120,9 @@ fun CardScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp),
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(onClick = onClose) {
                 Text("Close")
@@ -693,23 +1135,36 @@ fun CardScreen(
                     }
                     context.startActivity(intent)
                 },
-                modifier = Modifier.padding(start = 8.dp)
             ) {
                 Text("Settings")
             }
 
-            Text(
-                text = " $appName / $cardName",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp),
-            )
+            val isPinned = activity?.isPinned == true
+            Button(
+                onClick = {
+                    activity?.togglePinCard(!isPinned)
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (isPinned) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+            ) {
+                Text(if (isPinned) "📌 Pinned" else "📌 Pin")
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
 
             Button(onClick = { webViewRef?.reload() }) {
                 Text("Reload")
             }
         }
+
+        Text(
+            text = "$appName / $cardName",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+        )
 
         AndroidView(
             factory = { ctx ->
@@ -737,11 +1192,13 @@ fun CardScreen(
                     }
 
                     activity?.let {
+                        it.cardWebView = this
                         addJavascriptInterface(XIntentJSBridge(it), "XIntentNative")
                     }
 
                     loadUrl(cardUrl)
                     webViewRef = this
+                    activity?.cardWebView = this
                 }
             },
             modifier = Modifier.fillMaxSize(),

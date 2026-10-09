@@ -141,7 +141,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "Flammenwerfer HTTP Bridge",
+            text = "Flammenwerfer Matchbox Android Enclave",
             style = MaterialTheme.typography.headlineMedium,
         )
 
@@ -171,7 +171,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         OutlinedTextField(
             value = serverUrl,
             onValueChange = { serverUrl = it },
-            label = { Text("HTTP Bridge URL") },
+            label = { Text("Matchbox HTTP Bridge URL") },
             placeholder = { Text(XIntentClient.DEFAULT_SERVER_URL) },
             modifier = Modifier.fillMaxWidth(),
         )

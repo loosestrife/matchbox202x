@@ -1,7 +1,7 @@
 // xaudio.js
 const { Logger } = require('../server-tools');
 const logger = new Logger({ module: 'xaudio' });
-const { atoms, widString, parseXIntentIntentV0, sendXIntentIntentV0, sendXIntentEventV0, sendXAudioPlayV0, sendXAudioControlV0 } = require('../x11-promises/xintent.js');
+const { atoms, widString, frameType, frameDesc, parseXIntentIntentV0, sendXIntentIntentV0, sendXIntentEventV0, sendXAudioPlayV0, sendXAudioControlV0 } = require('../x11-promises/xintent.js');
 const { X, root, routerWin } = require('./index.js');
 const { activeChannels, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage } = require('./xchannel');
 const { lighterAudioRegistry, windowRegistry } = require('./xintent-registry');
@@ -62,9 +62,8 @@ const handleXAudioPlayV0 = {
     action: 'XAudio.Play',
   }),
   accept: async (parsed) => {
-    const { senderWin, channel, controlWord = 3, payload, payloadBlob, dataBlob } = parsed;
+    const { senderWin, channel, controlWord = 1, payload, payloadBlob, dataBlob } = parsed;
     const isSyn = (controlWord & 1) !== 0;
-    const isFin = (controlWord & 2) !== 0;
 
     let channelObj = getChannelForMessage(parsed);
     if (isSyn && !channelObj) {
@@ -81,7 +80,7 @@ const handleXAudioPlayV0 = {
       channelObj.handlerWin = sinkWin;
     }
 
-    logger.info(`[xaudio] Routing XAudioPlay to sink window ${widString(sinkWin)} (ctrl: ${controlWord}, dataBlob: ${widString(dataBlob)})`);
+    logger.info(`[xaudio] Routing ${frameDesc(parsed)} to sink window ${widString(sinkWin)} (dataBlob: ${widString(dataBlob)})`);
 
     const dispatchFn = sendXAudioPlayV0 || sendXIntentIntentV0;
     await dispatchFn(X, routerWin, {
@@ -93,10 +92,6 @@ const handleXAudioPlayV0 = {
       payloadBlob,
       dataBlob,
     });
-
-    if (isFin && channelObj) {
-      closeChannel(channelObj);
-    }
   },
 };
 
@@ -107,14 +102,13 @@ const handleXAudioControlV0 = {
     action: 'XAudio.Control',
   }),
   accept: async (parsed) => {
-    const { senderWin, channel, controlWord = 3, payload, payloadBlob, dataBlob } = parsed;
-    const isFin = (controlWord & 2) !== 0;
+    const { senderWin, channel, controlWord = 1, payload, payloadBlob, dataBlob } = parsed;
 
     let channelObj = getChannelForMessage(parsed);
     const sinkWin = (channelObj && channelObj.handlerWin) ? channelObj.handlerWin : findXAudioSinkWindow();
 
     if (sinkWin) {
-      logger.info(`[xaudio] Routing XAudioControl to sink window ${widString(sinkWin)} (ctrl: ${controlWord})`);
+      logger.info(`[xaudio] Routing ${frameDesc(parsed)} to sink window ${widString(sinkWin)}`);
       const dispatchFn = sendXAudioControlV0 || sendXIntentIntentV0;
       await dispatchFn(X, routerWin, {
         targetWin: sinkWin,
@@ -125,10 +119,6 @@ const handleXAudioControlV0 = {
         payloadBlob,
         dataBlob,
       });
-    }
-
-    if (isFin && channelObj) {
-      closeChannel(channelObj);
     }
   },
 };
