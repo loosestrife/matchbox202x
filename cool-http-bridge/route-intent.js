@@ -100,6 +100,11 @@ const routeIntent = async (req, res) => {
   if (channelControlHeader) logPayload['X-Channel-Control'] = channelControlHeader;
   if (forwardedByHeader) logPayload['X-Forwarded-By'] = forwardedByHeader;
 
+  const preferReqHeader = (req.headers['prefer'] || '').toLowerCase();
+  if (preferReqHeader.includes('return=minimal')) {
+    payload.Prefer = 'return=minimal';
+  }
+
   // Store intent context in AsyncLocalStorage so all error logs include the intent JSON
   logger.setContext({
     intent,
@@ -158,6 +163,60 @@ const routeIntent = async (req, res) => {
         }
       };
 
+      const writeXBlobFrame = (res, blobData, customHeaders = {}) => {
+        if (res.writableEnded || res.finished) return;
+        if (!headersSent) {
+          res.writeHead(200, {
+            'Content-Type': `multipart/mixed; boundary=${BOUNDARY}`,
+            'Cache-Control': 'no-cache, no-store, must-revalidate, no-transform, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+            'Connection': 'keep-alive',
+            'X-Content-Type-Options': 'nosniff',
+            'Matchbox-Bridge': '1.0',
+          });
+          headersSent = true;
+        }
+
+        const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'text/plain');
+        const dataType = blobData._dataType || (mimeType.includes('application/json') ? 'json' : 'text');
+
+        let bodyStr = '';
+        if (blobData.data !== undefined) {
+          bodyStr = typeof blobData.data === 'object' ? JSON.stringify(blobData.data) : String(blobData.data);
+        } else {
+          bodyStr = typeof blobData === 'object' ? JSON.stringify(blobData) : String(blobData);
+        }
+
+        const bodyLen = blobData.size !== undefined ? blobData.size : Buffer.byteLength(bodyStr, 'utf8');
+
+        const headers = [
+          `Content-Type: ${mimeType}`,
+          `Content-Length: ${bodyLen}`,
+        ];
+
+        if (dataType === 'base64') {
+          headers.push('Content-Encoding: base64');
+        }
+
+        if (blobData.name) {
+          headers.push(`Content-Disposition: attachment; filename="${blobData.name}"`);
+        } else if (!mimeType.includes('application/json')) {
+          headers.push('Content-Disposition: inline');
+        }
+
+        headers.push(`X-XBlob-Type: ${blobData.xblobType || 'Blob'}`);
+
+        Object.entries(customHeaders).forEach(([key, val]) => {
+          headers.push(`${key}: ${val}`);
+        });
+
+        res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${bodyStr}\r\n\r\n`);
+        if (typeof res.flush === 'function') {
+          try { res.flush(); } catch (_) {}
+        }
+      };
+
       const responsePromise = new Promise((resolve) => {
         const handleMessageFromX = async (msg) => {
           if (res.writableEnded || res.finished) return;
@@ -187,12 +246,15 @@ const routeIntent = async (req, res) => {
 
           writeJsonFrame(res, eventData, customIntentHeaders);
 
-          if (blobAtom && !res.writableEnded && !res.finished) {
+          const preferVal = String(eventData?.Prefer || payload?.Prefer || req.headers['prefer'] || '').toLowerCase();
+          const isMinimalPreferred = preferVal.includes('return=minimal') || payload?.receive_data === false || payload?.receiveData === false;
+
+          if (blobAtom && !isMinimalPreferred && !res.writableEnded && !res.finished) {
             try {
               const routerWin = await xintent.getValidRouterWin(X, root);
               const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
               if (blob && !res.writableEnded && !res.finished) {
-                writeJsonFrame(res, blob, { 'X-Blob-Id': blobAtom });
+                writeXBlobFrame(res, blob, { 'X-Blob-Id': blobAtom });
               }
             } catch (err) {
               logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });

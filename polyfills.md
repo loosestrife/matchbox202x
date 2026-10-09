@@ -64,7 +64,8 @@ an XChannelFrame with
 True natwork transparency comes from knowing that your message will be bridged and natted 10 times before it gets to its destination and designing the envelope to be natted.
 
 ## Limitations
-It is not possible to send an xintent without registering a window, even for fire and forget intents like `ui.Copy`.  This is because XClientMessage is 20 bytes and in order to create a blob to hold the intent payload we must either coordinate with the XBlob server or do some dance where the XBlob server advertises possible blob atoms and we grab one.  In order to send an xintent, we need to 
+### Needing a Window
+It is not possible to send an xintent without registering a window in XIntent V0, even for fire and forget intents like `ui.Copy`.  This is because XClientMessage is 20 bytes and in order to create a blob to hold the intent payload we must either coordinate with the XBlob server or do some dance where the XBlob server advertises possible blob ids and we grab one.  In order to send an xintent, we need to 
 ```C
 int win = XAllocId();
 XCreateWindow(win);
@@ -75,15 +76,39 @@ XClientMessage(...{win, payload})
 ```
 note that
 * any other protocol to get a blob atom will have as many round trips
-* the blobHost round trip is gratuitous in XINTENT V0 
 * XCreateWindow is not a round trip, so theres no point in not creating a window to have an ipc port
 * the cooperative security model in XSECURE V0 is going to look at the `_NET_WM_PID` on the window to decide security policy
+
+### XBlob V0 and `xprop`
+`xprop` tries to dump property data into the terminal and that cant be done on the XBlobHost windows because theyre full of huge binary data.
 
 # `XINTENT_INTENT_V0` and `XINTENT_EVENT_V0`
 These are XChannelJsonFrame's.  Whoever sends the event that closes the channel MAY send `{disposition: final/error/cancel}` in the payload.
 
 # XBLOB V0
 an XBlob V0 is an X property on the blob host window, to be deleted when its out of links.  XBlob V1 id's will not be atoms, but they will be nonzero u32 values.  The atom for the property is given by the xblob server on XBlobCreate.  The atom is some kind of `XBLOB_BLOB_SLOT_${number}` and these are aggressively reused after unlinking to not leak atoms
+```http
+Content-Type: audio/wav
+Content-Length: 9000
+Content-Encoding: base64
+```
+
+a file would also include
+```http
+Content-Disposition: attachment; filename="sample.wav"
+Last-Modified: Fri, 09 Oct 2026 06:13:00 GMT
+```
+
+meanwhile, for streams,
+```http
+Content-Type: multipart/mixed
+Transfer-Encoding: chunked
+Expect: 100-continue
+X-Stream-Chunk: 0
+X-Stream-Credit: 0
+```
+
+this is likely parsed by client libraries to
 ```js
 {xblobType, type, size, name, data, _dataType}
 ```
@@ -98,7 +123,7 @@ since it is a pseudo-rtmp packet, there is no reason for the data field to not b
 
 When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkReceived`, but should be reused as soon as possible.
 
-XBlob requests are always bus local.  When an XBlob is linked across a bridge, both sides of the bridge need XBlob id's for it, the bridge would hold links on both sides and the nat table, and if the bridge dies, the links are automatically unlinked at the same time as the dead bridge loses the nat table.  The XBlobBroadcast is also bus local, but it is propagated across bridges accordingly as there are links.
+XBlob requests are always bus local since XBlob id's are bus local.  When an XBlob is linked across a bridge, both sides of the bridge need XBlob id's for it, the bridge would hold links on both sides and the nat table, and if the bridge dies, the links are automatically unlinked at the same time as the dead bridge loses the nat table.  The XBlobBroadcast is also bus local, but it is propagated across bridges accordingly as there are links.
 
 ## XBlobCreate
 an XMessageFrame with message type `XBlobCreateV0` and `data.l[1]` as the client's cookie.  The client cookie won't be needed by the real XBLOB V1 because that would use the X request seqence number.
@@ -206,6 +231,9 @@ your fire and forget service still has to send `202 Accepted` and your other ser
 
 ## Why all the NAT
 user-desktop has the X session and user has user-phone with flammenwerfer and user-watch with flammenspritzer.  User goes in a cave.  Flammenwerfer and flammenspritzer continue to work over bluetooth because 10.x.x.x is a local address.  When user leaves the cave, flammenwerfer syncs to user-desktop.
+
+## XChannel Control Word
+In the XClientMessage, the XChannel control word could be split into top 16 for flags and bottom 16 for txId / channelId.  It would be referred to in the documentation as The XChannel Word and no one would know what it does.
 
 # Notes on Atomic X Operations
 When this all moves to V1, we can also use one of the unused bytes of the XInternAtom reply, set it to 0x1 by default and 0x2 if the atom was created.  However, for now, two separate XInternAtom requests sent at the same exact time will do an atomic claim.

@@ -133,7 +133,14 @@ function createWebSocketXChannel(txId, ws, xaudioSink, msgPayload, controlWord) 
     messageFromX: async (msg) => {
       if (ws.readyState === WebSocket.OPEN) {
         let blobData = null;
-        if (msg.dataBlob) {
+        const shouldReceiveData = msgPayload?.receive_data !== false &&
+          msgPayload?.receiveData !== false &&
+          msgPayload?.fetch_data !== false &&
+          msgPayload?.fetch_blob !== false &&
+          msgPayload?.fetchData !== false &&
+          msgPayload?.fetchBlob !== false;
+
+        if (msg.dataBlob && shouldReceiveData) {
           try {
             const routerWin = await xintent.getValidRouterWin(X, root);
             blobData = await xintent.XBlobRead(X, routerWin, msg.dataBlob);

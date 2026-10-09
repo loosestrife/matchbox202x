@@ -301,14 +301,214 @@ async function XBlobBroadcast(X, routerWin, senderWin, blobAtom, host, version) 
   ]);
 }
 
+function formatXBlobAtRest(blobData) {
+  if (blobData === null || blobData === undefined) {
+    blobData = {};
+  }
+
+  let xblobType = 'Blob';
+  let type = null;
+  let size = null;
+  let name = null;
+  let dataType = null;
+  let bodyBuf = Buffer.alloc(0);
+
+  if (typeof blobData === 'object' && blobData !== null && !Buffer.isBuffer(blobData)) {
+    if (blobData.xblobType) xblobType = blobData.xblobType;
+    if (blobData.name) name = blobData.name;
+    if (blobData.type) type = blobData.type;
+    if (blobData.size !== undefined) size = blobData.size;
+    if (blobData._dataType) dataType = blobData._dataType;
+
+    if (blobData.data !== undefined) {
+      if (Buffer.isBuffer(blobData.data)) {
+        bodyBuf = blobData.data;
+        if (!dataType) dataType = 'binary';
+      } else if (typeof blobData.data === 'object') {
+        bodyBuf = Buffer.from(JSON.stringify(blobData.data), 'utf8');
+        if (!dataType) dataType = 'json';
+      } else {
+        bodyBuf = Buffer.from(String(blobData.data), 'utf8');
+      }
+    } else {
+      bodyBuf = Buffer.from(JSON.stringify(blobData), 'utf8');
+      if (!dataType) dataType = 'json';
+    }
+  } else if (Buffer.isBuffer(blobData)) {
+    bodyBuf = blobData;
+    dataType = 'binary';
+  } else {
+    bodyBuf = Buffer.from(String(blobData), 'utf8');
+  }
+
+  if (!dataType) {
+    if (type && (type.includes('application/json') || type.endsWith('+json'))) {
+      dataType = 'json';
+    } else {
+      dataType = 'text';
+    }
+  }
+
+  if (!type) {
+    if (dataType === 'json') {
+      type = 'application/json';
+    } else if (dataType === 'base64' || dataType === 'binary') {
+      type = 'application/octet-stream';
+    } else {
+      type = 'text/plain';
+    }
+  }
+
+  if (size === null || size === undefined) {
+    size = bodyBuf.length;
+  }
+
+  const headers = [];
+  headers.push(`Content-Type: ${type}`);
+  headers.push(`Content-Length: ${size}`);
+  if (dataType === 'base64') {
+    headers.push('Content-Encoding: base64');
+  }
+  if (name) {
+    headers.push(`Content-Disposition: attachment; filename="${name}"`);
+    if (!blobData.xblobType) xblobType = 'File';
+  }
+  headers.push(`X-XBlob-Type: ${xblobType}`);
+
+  const headerBuf = Buffer.from(headers.join('\r\n') + '\r\n\r\n', 'utf8');
+  return Buffer.concat([headerBuf, bodyBuf]);
+}
+
+function parseXBlobAtRest(raw) {
+  if (!raw) {
+    return {
+      xblobType: 'Blob',
+      type: 'text/plain',
+      size: 0,
+      name: null,
+      data: Buffer.alloc(0),
+      _dataType: 'text',
+    };
+  }
+
+  const rawBuf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), 'utf8');
+  let sepPos = rawBuf.indexOf('\r\n\r\n');
+  let sepLen = 4;
+  if (sepPos === -1) {
+    sepPos = rawBuf.indexOf('\n\n');
+    sepLen = 2;
+  }
+
+  let headerText = '';
+  let bodyBuf = Buffer.alloc(0);
+
+  if (sepPos !== -1) {
+    headerText = rawBuf.slice(0, sepPos).toString('utf8');
+    bodyBuf = rawBuf.slice(sepPos + sepLen);
+  } else {
+    headerText = rawBuf.toString('utf8');
+  }
+
+  const headers = {};
+  headerText.split(/\r?\n/).forEach((line) => {
+    const colonPos = line.indexOf(':');
+    if (colonPos !== -1) {
+      const key = line.slice(0, colonPos).trim().toLowerCase();
+      const val = line.slice(colonPos + 1).trim();
+      headers[key] = val;
+    }
+  });
+
+  const contentType = headers['content-type'] || 'application/octet-stream';
+  let size = headers['content-length'] ? parseInt(headers['content-length'], 10) : bodyBuf.length;
+  if (isNaN(size)) size = bodyBuf.length;
+
+  let name = null;
+  const contentDisp = headers['content-disposition'];
+  if (contentDisp) {
+    const fnMatch = contentDisp.match(/filename\s*=\s*"?([^";]+)"?/i);
+    if (fnMatch) name = fnMatch[1];
+  }
+
+  let xblobType = headers['x-xblob-type'] || headers['x-blob-type'] || 'Blob';
+  const transferEnc = headers['content-encoding'] || headers['content-transfer-encoding'];
+  let dataType = 'binary';
+
+  let data = bodyBuf;
+  if (transferEnc && transferEnc.toLowerCase().includes('base64')) {
+    try {
+      data = Buffer.from(bodyBuf.toString('utf8').trim(), 'base64');
+      dataType = 'binary';
+    } catch (_) {
+      data = bodyBuf.toString('utf8');
+      dataType = 'base64';
+    }
+  } else if (contentType.includes('application/json') || contentType.includes('+json')) {
+    try {
+      data = JSON.parse(bodyBuf.toString('utf8'));
+      dataType = 'json';
+    } catch (_) {
+      data = bodyBuf.toString('utf8');
+      dataType = 'text';
+    }
+  }
+
+  return {
+    xblobType,
+    type: contentType,
+    size,
+    name,
+    data,
+    _dataType: dataType,
+  };
+}
+  let dataType = 'text';
+  if (transferEnc && transferEnc.toLowerCase().includes('base64')) {
+    dataType = 'base64';
+  } else if (contentType.includes('application/json') || contentType.includes('+json')) {
+    dataType = 'json';
+  }
+
+  let data = bodyText;
+  let parsedJsonObject = null;
+
+  if (dataType === 'json') {
+    try {
+      parsedJsonObject = JSON.parse(bodyText);
+      data = parsedJsonObject;
+    } catch (_) {
+      data = bodyText;
+    }
+  }
+
+  const result = {
+    xblobType,
+    type: contentType,
+    size,
+    name,
+    data,
+    _dataType: dataType,
+  };
+
+  if (dataType === 'json' && parsedJsonObject && typeof parsedJsonObject === 'object' && !Array.isArray(parsedJsonObject)) {
+    for (const key of Object.keys(parsedJsonObject)) {
+      if (!(key in result)) {
+        result[key] = parsedJsonObject[key];
+      }
+    }
+  }
+
+  return result;
+}
+
 async function XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, host, version){
-  if(version){
-    data.version = version; // todo: get the current verion and bump it
+  if(version && typeof blobData === 'object' && blobData !== null){
+    blobData = Object.assign({}, blobData, { version });
   }
   const hostname = os.hostname();
   const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
   const xblobHost = (await X.GetSelectionOwner(hostAtom)) || routerWin;
-  const payloadString = Buffer.from(JSON.stringify(blobData, null, 2));
+  const payloadString = formatXBlobAtRest(blobData);
   const buffer = Buffer.from(payloadString, 'utf8');
   // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
   const CHUNK_SIZE = 32768;
@@ -429,7 +629,7 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
   if (prop && prop.data) {
     const rawStr = prop.data.toString();
     try {
-      return JSON.parse(rawStr);
+      return parseXBlobAtRest(rawStr);
     } catch (parseErr) {
       const snippet = rawStr.length > 200 ? rawStr.slice(0, 200) + '...' : rawStr;
       logger.setContext({
@@ -439,7 +639,7 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
         rawSnippet: snippet
       });
       const err = new SyntaxError(
-        `XBlobRead JSON Parse error at blobAtom ${widString(blobAtom)} on window ${widString(hostWin)} (raw length: ${rawStr.length} bytes, snippet: ${JSON.stringify(snippet)}): ${parseErr.message}`
+        `XBlobRead Parse error at blobAtom ${widString(blobAtom)} on window ${widString(hostWin)} (raw length: ${rawStr.length} bytes, snippet: ${JSON.stringify(snippet)}): ${parseErr.message}`
       );
       err.rawString = rawStr;
       err.blobAtom = blobAtom;
@@ -598,4 +798,6 @@ module.exports = {
   XBlobRead,
   XBlobWrite,
   XBlobBroadcast,
+  formatXBlobAtRest,
+  parseXBlobAtRest,
 };

@@ -28,7 +28,7 @@
      * @param {string} [app='localhost'] - Target application or node
      * @returns {Promise<Response>}
      */
-    intent: async function(intent, payload = {}, app = 'localhost') {
+    intent: async function(intent, payload = {}, app = 'localhost', options = {}) {
       const parts = intent.split('.');
       if (parts.length < 2) {
         throw new Error("Invalid intent format. Must be 'namespace.action' (e.g. 'ui.TextToSpeech')");
@@ -37,6 +37,14 @@
       const endpoint = `/intent/${namespace}/${action}?app=${encodeURIComponent(app)}`;
 
       const headers = { 'Content-Type': 'application/json' };
+
+      const opts = (typeof options === 'object' && options !== null) ? options : {};
+      if (opts.Prefer) payload.Prefer = opts.Prefer;
+      if (opts.receive_data === false || opts.receiveData === false) payload.Prefer = 'return=minimal';
+
+      if (payload.receive_data === false || payload.receiveData === false) {
+        payload.Prefer = 'return=minimal';
+      }
 
       // Auto-infer SYN control word if expecting a stream (has Accept header) but not specified
       if (payload.controlWord === undefined && payload.Accept) {
@@ -53,6 +61,9 @@
       }
       if (payload.Accept) {
         headers['Accept'] = payload.Accept;
+      }
+      if (payload.Prefer) {
+        headers['Prefer'] = payload.Prefer;
       }
       headers['X-Forwarded-By'] = getForwardedByHeader(payload['X-Forwarded-By']);
 

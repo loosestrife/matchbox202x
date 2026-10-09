@@ -439,6 +439,7 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
         speed: 1.0,
         reply: true,
         controlWord: xintent.SYN,
+        receive_data: false,
         Accept: 'audio/wav'
       }, targetTtsApp);
 

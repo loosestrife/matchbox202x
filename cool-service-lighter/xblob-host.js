@@ -101,15 +101,17 @@ function execShell(command) {
 
 let X;
 let lighterWin;
+let blobHostWin;
 const init = async g => {
   X = g.X;
   lighterWin = g.lighterWin;
+  blobHostWin = g.blobHostWin || lighterWin;
   if (g.trackChild) {
     trackChild = g.trackChild;
   }
   const hostname = os.hostname();
   const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
-  X.SetSelectionOwner(lighterWin, hostAtom, 0);
+  X.SetSelectionOwner(blobHostWin, hostAtom, 0);
 };
 
 module.exports = {

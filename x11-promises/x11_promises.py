@@ -112,13 +112,18 @@ class X11PromisesClient:
         return None
 
     def set_window_property_string(
-        self, win_id: int, property_atom: int, value_str: str
+        self, win_id: int, property_atom: int, value_str: Any
     ):
         """
-        Writes string window property in 32KB chunks.
+        Writes string or binary window property in 32KB chunks.
         """
         win = self.disp.create_resource_object("window", win_id)
-        data_bytes = value_str.encode("utf-8")
+        if isinstance(value_str, (bytes, bytearray)):
+            data_bytes = bytes(value_str)
+        elif isinstance(value_str, str):
+            data_bytes = value_str.encode("utf-8")
+        else:
+            data_bytes = str(value_str).encode("utf-8")
         CHUNK_SIZE = 32768
         for offset in range(0, len(data_bytes), CHUNK_SIZE):
             chunk = data_bytes[offset : offset + CHUNK_SIZE]

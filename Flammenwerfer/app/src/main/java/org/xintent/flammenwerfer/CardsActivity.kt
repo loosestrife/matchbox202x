@@ -786,8 +786,14 @@ class CardsActivity : ComponentActivity() {
 
     private fun extractAudioBytesFromResponse(rawBytes: ByteArray): ByteArray? {
         if (rawBytes.isEmpty()) return null
-        val respText = String(rawBytes, Charsets.UTF_8)
-        if (respText.trim().startsWith("{")) {
+
+        if (rawBytes.size >= 4 && rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte()) {
+            return rawBytes
+        }
+
+        val respText = try { String(rawBytes, Charsets.UTF_8).trim() } catch (_: Exception) { "" }
+
+        if (respText.startsWith("{")) {
             return try {
                 val respJson = JSONObject(respText)
                 val blobDataObj = respJson.optJSONObject("blob")
@@ -804,10 +810,26 @@ class CardsActivity : ComponentActivity() {
             } catch (_: Exception) {
                 null
             }
-        } else if (rawBytes.size > 4 && rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte()) {
-            return rawBytes
+        } else if (respText.contains("Content-Type:", ignoreCase = true) || respText.contains("Content-Transfer-Encoding:", ignoreCase = true) || respText.contains("Content-Encoding:", ignoreCase = true)) {
+            val headerEnd = if (respText.contains("\r\n\r\n")) respText.indexOf("\r\n\r\n") + 4 else respText.indexOf("\n\n") + 2
+            val headerText = respText.substring(0, headerEnd)
+            val bodyText = respText.substring(headerEnd)
+            val isBase64 = headerText.contains("base64", ignoreCase = true)
+            return if (isBase64) {
+                try { Base64.decode(bodyText.trim(), Base64.DEFAULT) } catch (_: Exception) { bodyText.toByteArray(Charsets.UTF_8) }
+            } else {
+                bodyText.toByteArray(Charsets.UTF_8)
+            }
         }
-        return null
+
+        try {
+            val decoded = Base64.decode(respText, Base64.DEFAULT)
+            if (decoded.isNotEmpty()) {
+                return decoded
+            }
+        } catch (_: Exception) {}
+
+        return rawBytes
     }
 
     fun triggerLocalPrefetch(jsonPayload: String): String {
@@ -903,16 +925,12 @@ class CardsActivity : ComponentActivity() {
                 }
             }
 
-            if (audioBytes != null && audioBytes.isNotEmpty()) {
-                val tempAudioFile = File.createTempFile("flammen_audio_", ".wav", cacheDir)
-                FileOutputStream(tempAudioFile).use { fos ->
-                    fos.write(audioBytes)
-                }
-
-                val chunk = LocalAudioChunk(seqnum, streamId, cookie, tempAudioFile, audioBytes.size)
+            if (tempAudioFile != null && tempAudioFile.exists()) {
+                val fileSize = tempAudioFile.length().toInt()
+                val chunk = LocalAudioChunk(seqnum, streamId, cookie, tempAudioFile, fileSize)
                 localAudioQueue.add(chunk)
 
-                XIntentClient.addLog("[xaudio.PlaySoundBlob] Queued phone speaker audio seq #$seqnum (${audioBytes.size} bytes). Queue size: ${localAudioQueue.size}")
+                XIntentClient.addLog("[xaudio.PlaySoundBlob] Queued phone speaker audio seq #$seqnum ($fileSize bytes). Queue size: ${localAudioQueue.size}")
 
                 synchronized(this) {
                     if (!isLocalAudioPlaying) {

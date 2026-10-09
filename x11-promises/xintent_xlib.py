@@ -7,6 +7,7 @@ Implements the full X11 IPC protocol from x11-promises/xintent.js in Python.
 import os
 import random
 import json
+import re
 import socket
 import sys
 import time
@@ -71,6 +72,262 @@ def _extract_event_data(event):
         sys.stderr.flush()
 
     return []
+
+
+def format_xblob_at_rest(blob_data: Any) -> bytes:
+    if blob_data is None:
+        blob_data = {}
+
+    xblob_type = "Blob"
+    mime_type = None
+    size = None
+    name = None
+    data_type = None
+    body_bytes = b""
+
+    if isinstance(blob_data, dict):
+        if "xblobType" in blob_data:
+            xblob_type = blob_data["xblobType"]
+        if "name" in blob_data:
+            name = blob_data["name"]
+        if "type" in blob_data:
+            mime_type = blob_data["type"]
+        if "size" in blob_data and blob_data["size"] is not None:
+            size = blob_data["size"]
+        if "_dataType" in blob_data:
+            data_type = blob_data["_dataType"]
+
+        if "data" in blob_data:
+            d = blob_data["data"]
+            if isinstance(d, (bytes, bytearray)):
+                body_bytes = bytes(d)
+                if not data_type:
+                    data_type = "binary"
+            elif isinstance(d, (dict, list)):
+                body_bytes = json.dumps(d).encode("utf-8")
+                if not data_type:
+                    data_type = "json"
+            else:
+                body_bytes = str(d).encode("utf-8") if d is not None else b""
+        else:
+            body_bytes = json.dumps(blob_data).encode("utf-8")
+            if not data_type:
+                data_type = "json"
+    elif isinstance(blob_data, (bytes, bytearray)):
+        body_bytes = bytes(blob_data)
+        data_type = "binary"
+    else:
+        body_bytes = str(blob_data).encode("utf-8")
+
+    if not data_type:
+        if mime_type and ("json" in mime_type):
+            data_type = "json"
+        else:
+            data_type = "text"
+
+    if not mime_type:
+        if data_type == "json":
+            mime_type = "application/json"
+        elif data_type in ["base64", "binary"]:
+            mime_type = "application/octet-stream"
+        else:
+            mime_type = "text/plain"
+
+    if size is None:
+        size = len(body_bytes)
+
+    headers = [
+        f"Content-Type: {mime_type}",
+        f"Content-Length: {size}",
+    ]
+    if data_type == "base64":
+        headers.append("Content-Encoding: base64")
+    if name:
+        headers.append(f'Content-Disposition: attachment; filename="{name}"')
+        if "xblobType" not in blob_data:
+            xblob_type = "File"
+    headers.append(f"X-XBlob-Type: {xblob_type}")
+
+    header_bytes = ("\r\n".join(headers) + "\r\n\r\n").encode("latin1")
+    return header_bytes + body_bytes
+
+
+def parse_xblob_at_rest(raw: Any) -> Any:
+    if not raw:
+        return {
+            "xblobType": "Blob",
+            "type": "text/plain",
+            "size": 0,
+            "name": None,
+            "data": b"",
+            "_dataType": "text",
+        }
+
+    if isinstance(raw, (bytes, bytearray)):
+        raw_bytes = bytes(raw)
+        sep_pos = raw_bytes.find(b"\r\n\r\n")
+        sep_len = 4
+        if sep_pos == -1:
+            sep_pos = raw_bytes.find(b"\n\n")
+            sep_len = 2
+
+        if sep_pos != -1:
+            header_text = raw_bytes[:sep_pos].decode("latin1", errors="replace")
+            body_bytes = raw_bytes[sep_pos + sep_len:]
+        else:
+            header_text = ""
+            body_bytes = raw_bytes
+
+        headers = {}
+        for line in header_text.splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                headers[k.strip().lower()] = v.strip()
+
+        content_type = headers.get("content-type", "application/octet-stream")
+        size_val = headers.get("content-length")
+        try:
+            size = int(size_val) if size_val else len(body_bytes)
+        except ValueError:
+            size = len(body_bytes)
+
+        name = None
+        content_disp = headers.get("content-disposition", "")
+        if content_disp:
+            fn_match = re.search(r'filename\s*=\s*"?([^";]+)"?', content_disp, re.IGNORECASE)
+            if fn_match:
+                name = fn_match.group(1)
+
+        xblob_type = headers.get("x-xblob-type") or headers.get("x-blob-type") or "Blob"
+        transfer_enc = headers.get("content-encoding") or headers.get("content-transfer-encoding", "")
+
+        if "base64" in transfer_enc.lower():
+            try:
+                data = base64.b64decode(body_bytes.strip())
+                data_type = "binary"
+            except Exception:
+                data = body_bytes
+                data_type = "base64"
+        elif "application/json" in content_type or "+json" in content_type:
+            try:
+                data = json.loads(body_bytes.decode("utf-8"))
+                data_type = "json"
+            except Exception:
+                data = body_bytes
+                data_type = "text"
+        else:
+            data = body_bytes
+            data_type = "binary"
+
+        return {
+            "xblobType": xblob_type,
+            "type": content_type,
+            "size": size,
+            "name": name,
+            "data": data,
+            "_dataType": data_type,
+        }
+
+    raw_str = str(raw)
+    header_sep_pos = raw_str.find("\r\n\r\n")
+    sep_len = 4
+    if header_sep_pos == -1:
+        header_sep_pos = raw_str.find("\n\n")
+        sep_len = 2
+
+    if header_sep_pos != -1:
+        header_text = raw_str[:header_sep_pos]
+        body_text = raw_str[header_sep_pos + sep_len:]
+    elif re.match(r"^(Content-Type|X-XBlob-Type|Content-Length|Content-Disposition|Content-Encoding|Content-Transfer-Encoding)\s*:", raw_str, re.IGNORECASE):
+        header_text = raw_str
+        body_text = ""
+    else:
+        try:
+            parsed = json.loads(raw_str)
+            if isinstance(parsed, dict):
+                if "_dataType" in parsed or "xblobType" in parsed or "data" in parsed:
+                    return parsed
+                res = dict(parsed)
+                res.update({
+                    "xblobType": "Blob",
+                    "type": "application/json",
+                    "size": len(raw_str.encode("utf-8")),
+                    "name": None,
+                    "data": parsed,
+                    "_dataType": "json",
+                })
+                return res
+        except Exception:
+            pass
+        return {
+            "xblobType": "Blob",
+            "type": "text/plain",
+            "size": len(raw_str.encode("utf-8")),
+            "name": None,
+            "data": raw_str,
+            "_dataType": "text",
+        }
+
+    headers = {}
+    for line in header_text.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip().lower()] = v.strip()
+
+    content_type = headers.get("content-type", "text/plain")
+    size_val = headers.get("content-length")
+    try:
+        size = int(size_val) if size_val else len(body_text.encode("utf-8"))
+    except ValueError:
+        size = len(body_text.encode("utf-8"))
+
+    name = None
+    content_disp = headers.get("content-disposition", "")
+    if content_disp:
+        fn_match = re.search(r'filename\s*=\s*"?([^";]+)"?', content_disp, re.IGNORECASE)
+        if fn_match:
+            name = fn_match.group(1)
+
+    xblob_type = headers.get("x-xblob-type") or headers.get("x-blob-type")
+    if not xblob_type:
+        if name or "attachment" in content_disp.lower():
+            xblob_type = "File"
+        elif content_type == "multipart/mixed" or headers.get("transfer-encoding") == "chunked":
+            xblob_type = "ReadableStream"
+        else:
+            xblob_type = "Blob"
+
+    transfer_enc = headers.get("content-encoding") or headers.get("content-transfer-encoding", "")
+    data_type = "text"
+    if "base64" in transfer_enc.lower():
+        data_type = "base64"
+    elif "application/json" in content_type or "+json" in content_type:
+        data_type = "json"
+
+    data = body_text
+    parsed_json_obj = None
+    if data_type == "json":
+        try:
+            parsed_json_obj = json.loads(body_text)
+            data = parsed_json_obj
+        except Exception:
+            data = body_text
+
+    result = {
+        "xblobType": xblob_type,
+        "type": content_type,
+        "size": size,
+        "name": name,
+        "data": data,
+        "_dataType": data_type,
+    }
+
+    if data_type == "json" and isinstance(parsed_json_obj, dict):
+        for k, v in parsed_json_obj.items():
+            if k not in result:
+                result[k] = v
+
+    return result
 
 
 class XIntentXlibClient:
@@ -209,19 +466,19 @@ class XIntentXlibClient:
         return blob_atom
 
     def blob_write(self, blob_atom: int, blob_data: Any):
-        """Writes JSON payload to XBLOB_HOST_<hostname> window property blob_atom."""
+        """Writes HTTP headers/data at rest payload to XBLOB_HOST_<hostname> window property blob_atom."""
         hostname = socket.gethostname()
         host_atom = self.x11.intern_atom(f"XBLOB_HOST_{hostname}")
         xblob_host_id = self.x11.get_selection_owner(host_atom)
         router_id = self.get_router_win_id()
         target_win_id = xblob_host_id if xblob_host_id else router_id
 
-        payload_json = json.dumps(blob_data, indent=2)
-        self.x11.set_window_property_string(target_win_id, blob_atom, payload_json)
+        payload_at_rest = format_xblob_at_rest(blob_data)
+        self.x11.set_window_property_string(target_win_id, blob_atom, payload_at_rest)
         self.x11.set_selection_owner(target_win_id, blob_atom)
 
     def blob_read(self, blob_atom: int) -> Any:
-        """Reads JSON data from selection owner window property blob_atom."""
+        """Reads HTTP headers/data at rest payload from selection owner window property blob_atom."""
         sys.stderr.write(f"[libxintent.py debug] blob_read start for {hex(blob_atom)}\n")
         sys.stderr.flush()
 
@@ -254,7 +511,7 @@ class XIntentXlibClient:
                 if prop_str:
                     sys.stderr.write(f"[libxintent.py] Read blob {hex(blob_atom)} from window {hex(target_win_id)} ({len(prop_str)} bytes)\n")
                     sys.stderr.flush()
-                    return json.loads(prop_str)
+                    return parse_xblob_at_rest(prop_str)
             except Exception as e:
                 sys.stderr.write(f"[libxintent.py error] blob_read attempt on {hex(target_win_id)} failed: {e}\n{traceback.format_exc()}\n")
                 sys.stderr.flush()

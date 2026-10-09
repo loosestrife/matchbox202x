@@ -67,8 +67,8 @@ def intent_server():
                 try:
                     blob_payload = {
                         "type": "audio/wav",
-                        "data": base64.b64encode(wav_bytes).decode("ascii"),
-                        "_dataType": "base64",
+                        "data": wav_bytes,
+                        "_dataType": "binary",
                         "xblobType": "Blob"
                     }
                     blob_id = server.x11_client.blob_create(blob_payload)

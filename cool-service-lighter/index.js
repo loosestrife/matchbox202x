@@ -28,11 +28,13 @@ id = "cool-service-lighter"
 "fs.PickFile" = true
 "fs.PickFilePath" = true
 
-[XBlobHost]
-host = "${hostname}"
-
 [XAudioSink]
 name = "${hostname}-speakers"
+`;
+
+const blobhostMatchboxToml = `
+[XBlobHost]
+host = "${hostname}"
 `;
 
 const children = new Set();
@@ -161,11 +163,18 @@ async function startLighter() {
     { eventMask: x11.eventMask.PropertyChange }
   );
 
-  pickFiles.init({X, lighterWin, trackChild});
+  const blobHostWin = X.AllocID();
+  X.CreateWindow(
+    blobHostWin, root,
+    0, 0, 1, 1, 0, 0, 0, 0,
+    { eventMask: x11.eventMask.PropertyChange }
+  );
+
+  pickFiles.init({X, lighterWin, blobHostWin, trackChild});
   xaudioNode.init({X, lighterWin, trackChild});
 
   const xintentServicesManifestAtom = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
-  const xintentMatchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
+  const matchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
   const netWmPidAtom = await X.InternAtom(false, '_NET_WM_PID');
 
   const xintentAtom = await X.InternAtom(false, 'XINTENT');
@@ -182,15 +191,21 @@ async function startLighter() {
   const xaudioPlayStreamAtom = await X.InternAtom(false, 'XAUDIO_PLAY_STREAM_V0');
   const xaudioControlStreamAtom = await X.InternAtom(false, 'XAUDIO_CONTROL_V0');
   const xaudioSeekStreamAtom = await X.InternAtom(false, 'XAUDIO_SEEK_STREAM_V0');
-
+  
   X.ChangeProperty(0, lighterWin, X.atoms.WM_NAME, X.atoms.STRING, 8, 'MATCHBOX_SERVICE_LIGHTER');
+  X.ChangeProperty(0, blobHostWin, X.atoms.WM_NAME, X.atoms.STRING, 8, 'XBLOB_HOST');
+
+  X.ChangeProperty(0, lighterWin, matchboxTomlAtom, X.atoms.STRING, 8, matchboxToml);
+  X.ChangeProperty(0, blobHostWin, matchboxTomlAtom, X.atoms.STRING, 8, blobhostMatchboxToml);
+
   X.ChangeProperty(0, lighterWin, xintentServicesManifestAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
-  X.ChangeProperty(0, lighterWin, xintentMatchboxTomlAtom, X.atoms.STRING, 8, matchboxToml);
+
 
   const pidBuf = Buffer.alloc(4);
   pidBuf.writeUInt32LE(process.pid, 0);
   X.ChangeProperty(0, lighterWin, netWmPidAtom, X.atoms.CARDINAL, 32, pidBuf);
-  logger.info(`Registered services (0x${lighterWin.toString(16)})`);
+  X.ChangeProperty(0, blobHostWin, netWmPidAtom, X.atoms.CARDINAL, 32, pidBuf);
+  logger.info(`Registered services (0x${lighterWin.toString(16)}) and dedicated XBlobHost window (0x${blobHostWin.toString(16)})`);
 
   await ensureXIntentRouter(X, root);
   await ensureHttpBridge();

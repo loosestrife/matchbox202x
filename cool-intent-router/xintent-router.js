@@ -18,6 +18,7 @@ const {
   sendXIntentEventV0,
   sendXAudioPlayResponseV0,
   sendXChannelJsonFrame,
+  XBlobWrite,
 } = require("../x11-promises/xintent");
 const { x11, X, root, routerWin } = require("./index");
 const {
@@ -217,14 +218,7 @@ async function sendXIntentIntentV0(
 ) {
   if (!payloadBlob) {
     payloadBlob = await xblobCreate(routerWin);
-    await X.ChangeProperty(
-      0,
-      routerWin,
-      payloadBlob,
-      atoms.STRING,
-      8,
-      Buffer.from(JSON.stringify(payload, null, 2)),
-    );
+    await XBlobWrite(X, routerWin, routerWin, payloadBlob, payload);
   }
   implicitXBlobTransfer(payloadBlob, routerWin, targetWin);
   if (dataBlob) {
