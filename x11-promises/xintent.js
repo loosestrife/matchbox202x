@@ -86,8 +86,8 @@ async function connectToRouter(X, root) {
     "CARDINAL",
 
     'MATCHBOX_TOML',
-    'XINTENT_AGGREGATE_TOML',
-    'XINTENT_SERVICES_MANIFEST',
+    'AGGREGATE_TOML',
+    'SERVICE_MANIFEST_TOML',
 
     "XINTENT_EVENT_V0",
     "XBLOB_CREATE_V0",

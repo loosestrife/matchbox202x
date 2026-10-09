@@ -173,7 +173,7 @@ async function startLighter() {
   pickFiles.init({X, lighterWin, blobHostWin, trackChild});
   xaudioNode.init({X, lighterWin, trackChild});
 
-  const xintentServicesManifestAtom = await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
+  const serviceManifestTomlAtom = await X.InternAtom(false, 'SERVICE_MANIFEST_TOML');
   const matchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
   const netWmPidAtom = await X.InternAtom(false, '_NET_WM_PID');
 
@@ -198,7 +198,7 @@ async function startLighter() {
   X.ChangeProperty(0, lighterWin, matchboxTomlAtom, X.atoms.STRING, 8, matchboxToml);
   X.ChangeProperty(0, blobHostWin, matchboxTomlAtom, X.atoms.STRING, 8, blobhostMatchboxToml);
 
-  X.ChangeProperty(0, lighterWin, xintentServicesManifestAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
+  X.ChangeProperty(0, lighterWin, serviceManifestTomlAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
 
 
   const pidBuf = Buffer.alloc(4);

@@ -89,7 +89,7 @@ async function updateAggregateToml() {
     }
   }
 
-  const aggregateAtom = atoms.XINTENT_AGGREGATE_TOML || atoms.AGGREGATE_TOML;
+  const aggregateAtom = atoms.AGGREGATE_TOML || atoms.XINTENT_AGGREGATE_TOML;
   if (!aggregateAtom || !routerWin) return;
 
   try {
@@ -174,7 +174,7 @@ async function parseWindowToml(wid) {
 
 async function parseWindowLighterToml(wid) {
   try {
-    const manifestAtom = atoms.XINTENT_SERVICES_MANIFEST || await X.InternAtom(false, 'XINTENT_SERVICES_MANIFEST');
+    const manifestAtom = atoms.SERVICE_MANIFEST_TOML || await X.InternAtom(false, 'SERVICE_MANIFEST_TOML');
     const prop = await X.GetProperty(
       0,
       wid,
@@ -188,7 +188,7 @@ async function parseWindowLighterToml(wid) {
     }
     const toml = TOML.parse(prop.data.toString("utf8"));
     logger.info(
-      "got XINTENT_SERVICES_MANIFEST from window",
+      "got SERVICE_MANIFEST_TOML from window",
       widString(wid),
       toml,
     );

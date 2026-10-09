@@ -12,7 +12,7 @@ let clientWin, X, root;
  */
 const fetchAggregateToml = async () => {
   const targetWin = xintent.routerWin;
-  const atom = xintent.atoms.XINTENT_AGGREGATE_TOML;
+  const atom = xintent.atoms.AGGREGATE_TOML || xintent.atoms.XINTENT_AGGREGATE_TOML;
 
   try {
     logger.info('tryna get AGGREGATE_TOML');

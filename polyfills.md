@@ -176,6 +176,24 @@ an XChannelJsonFrame with message type `XAudioControlStreamV0` and payload `{com
 ## SeekStream
 an XChannelJsonFrame with message type `XAudioSeekStreamV0`, payload `{streamId, seekTo}`, and an attached data blob.
 
+# TOML Properties
+## MATCHBOX_TOML
+Windows advertise this -> they get ipc calls.
+```toml
+[intents]
+"fs.SaveAs" = {type="audio/*"}
+
+[XAudioSink]
+name = "sound-player"
+```
+
+## SERVICE_MANIFEST_TOML
+Service lighters advertise this and get `sys.Launch` intents
+
+## AGGREGATE_TOML
+Intent routers advertise this and bridges propagate it.
+
+
 # Rationale
 ## Why XINTENT V0 is based on XBLOB V0
 * The immediate thing to use is properties: the client sets a property on its window, then sends an XClientMessage with that property atom.  Now the client has to not exit until the intent router replies to its XClientMessage.

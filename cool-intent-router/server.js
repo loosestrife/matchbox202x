@@ -23,8 +23,8 @@ async function startRouter() {
     'XINTENT',
     'XINTENT_DATA',
     'MATCHBOX_TOML',
-    'XINTENT_AGGREGATE_TOML',
-    'XINTENT_SERVICES_MANIFEST',
+    'AGGREGATE_TOML',
+    'SERVICE_MANIFEST_TOML',
     'XBLOB_CREATE_RESPONSE_V0',
   ];
   const dispatchAtoms = {
@@ -209,14 +209,14 @@ async function startRouter() {
       const propWin = ev.window || ev.wid;
       if (ev.atom === atoms.MATCHBOX_TOML) {
         await parseWindowToml(propWin);
-      } else if (ev.atom === atoms.XINTENT_SERVICES_MANIFEST) {
+      } else if (ev.atom === atoms.SERVICE_MANIFEST_TOML) {
         await parseWindowLighterToml(propWin);
       } else {
         try {
           const atomName = await X.GetAtomName(ev.atom);
           if (atomName === 'MATCHBOX_TOML') {
             await parseWindowToml(propWin);
-          } else if (atomName === 'XINTENT_SERVICES_MANIFEST') {
+          } else if (atomName === 'SERVICE_MANIFEST_TOML') {
             await parseWindowLighterToml(propWin);
           }
         } catch (_) {}
