@@ -674,8 +674,12 @@ class XIntentXlibClient:
             sys.stderr.flush()
 
             try:
-                payload = self.blob_read(payload_blob)
+                raw_payload = self.blob_read(payload_blob)
                 self.blob_unlink(payload_blob)
+                if isinstance(raw_payload, dict) and "data" in raw_payload:
+                    payload = raw_payload["data"]
+                else:
+                    payload = raw_payload
             except Exception as err:
                 logger.error(f"[xintent_xlib] Error reading payload blob {hex(payload_blob)}: {err}", exc_info=True)
                 return

@@ -28,7 +28,7 @@ const checkXSecurePolicy = async (context, parsed, ev) => {
         logger.warn(`Window ${widString(context.source.window)} has PID ${context.source.pid} but /proc/cmdline unreadable: ${err.message}`);
       }
     } else {
-      const actionName = context.action || parsed?.payload?.intent || parsed?.payload?.event || parsed?.payload?.action || 'unknown';
+      const actionName = context.action || parsed?.payload?.intent || parsed?.payload?.event || parsed?.payload?.action || (parsed?.payload?.data && typeof parsed.payload.data === 'object' ? (parsed.payload.data.intent || parsed.payload.data.event || parsed.payload.data.action) : undefined) || 'unknown';
       logger.warn(`Window ${widString(context.source.window)} sent request '${actionName}' without valid _NET_WM_PID property`);
     }
   } else {

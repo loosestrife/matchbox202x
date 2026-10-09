@@ -407,15 +407,156 @@ name = "flammenwerfer-phone"
         return trimmed
     }
 
+    fun parseMultipartRawBytes(rawBytes: ByteArray): Pair<List<JSONObject>, ByteArray?> {
+        if (rawBytes.isEmpty()) return Pair(emptyList(), null)
+
+        val rawStr = try { String(rawBytes, Charsets.ISO_8859_1) } catch (_: Exception) { "" }
+        if (!rawStr.contains("MatchboxFrameBoundary")) {
+            val jsonList = extractJsonObjects(String(rawBytes, Charsets.UTF_8))
+            val audio = extractAudioBytesFromRawResponse(rawBytes)
+            return Pair(jsonList, audio)
+        }
+
+        val jsonList = mutableListOf<JSONObject>()
+        var extractedAudio: ByteArray? = null
+
+        val boundaryLine = rawStr.lines().firstOrNull { it.contains("MatchboxFrameBoundary") }?.trim() ?: ""
+        var boundary = boundaryLine
+        if (boundary.startsWith("--")) boundary = boundary.substring(2)
+        if (boundary.endsWith("--")) boundary = boundary.substring(0, boundary.length - 2)
+        boundary = boundary.trim()
+
+        if (boundary.isBlank()) {
+            val jsonListFallback = extractJsonObjects(String(rawBytes, Charsets.UTF_8))
+            val audioFallback = extractAudioBytesFromRawResponse(rawBytes)
+            return Pair(jsonListFallback, audioFallback)
+        }
+
+        val boundaryBytes = ("--" + boundary).toByteArray(Charsets.ISO_8859_1)
+        val parts = splitBytesByDelimiter(rawBytes, boundaryBytes)
+
+        for (partBytes in parts) {
+            if (partBytes.isEmpty()) continue
+            val headerSep = findSequence(partBytes, "\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
+            val headerSepLen = if (headerSep != -1) 4 else {
+                val altSep = findSequence(partBytes, "\n\n".toByteArray(Charsets.ISO_8859_1))
+                if (altSep != -1) 2 else -1
+            }
+
+            val bodyBytes = if (headerSep != -1) {
+                partBytes.copyOfRange(headerSep + headerSepLen, partBytes.size)
+            } else {
+                partBytes
+            }
+
+            if (bodyBytes.isEmpty()) continue
+
+            val bodyStr = try { String(bodyBytes, Charsets.UTF_8).trim() } catch (_: Exception) { "" }
+            if (bodyStr.startsWith("{") && bodyStr.endsWith("}")) {
+                try {
+                    jsonList.add(JSONObject(bodyStr))
+                    continue
+                } catch (_: Exception) {}
+            }
+
+            val audioFromPart = extractAudioBytesFromRawResponse(bodyBytes)
+            if (audioFromPart != null && audioFromPart.size > 10) {
+                extractedAudio = audioFromPart
+                break
+            }
+        }
+
+        return Pair(jsonList, extractedAudio)
+    }
+
+    private fun findSequence(source: ByteArray, target: ByteArray): Int {
+        if (target.isEmpty() || source.size < target.size) return -1
+        for (i in 0..source.size - target.size) {
+            var match = true
+            for (j in target.indices) {
+                if (source[i + j] != target[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return i
+        }
+        return -1
+    }
+
+    private fun splitBytesByDelimiter(source: ByteArray, delimiter: ByteArray): List<ByteArray> {
+        val result = mutableListOf<ByteArray>()
+        var start = 0
+        while (true) {
+            if (start >= source.size) break
+            val pos = findSequence(source.copyOfRange(start, source.size), delimiter)
+            if (pos == -1) {
+                if (start < source.size) {
+                    result.add(source.copyOfRange(start, source.size))
+                }
+                break
+            }
+            val actualPos = start + pos
+            if (actualPos > start) {
+                result.add(source.copyOfRange(start, actualPos))
+            }
+            start = actualPos + delimiter.size
+        }
+        return result
+    }
+
     fun extractAudioBytesFromRawResponse(rawBytes: ByteArray): ByteArray? {
         if (rawBytes.isEmpty()) return null
 
+        // 1. Direct WAV / audio magic bytes
         if (rawBytes.size >= 4 && rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte()) {
             return rawBytes
         }
+        if (rawBytes.size >= 3 && rawBytes[0] == 'I'.code.toByte() && rawBytes[1] == 'D'.code.toByte() && rawBytes[2] == '3'.code.toByte()) return rawBytes
+        if (rawBytes.size >= 4 && rawBytes[0] == 'O'.code.toByte() && rawBytes[1] == 'g'.code.toByte()) return rawBytes
+        if (rawBytes.size >= 4 && rawBytes[0] == 'f'.code.toByte() && rawBytes[1] == 'L'.code.toByte()) return rawBytes
 
-        val respText = try { String(rawBytes, Charsets.UTF_8) } catch (_: Exception) { "" }
-        if (respText.trim().startsWith("{")) {
+        // 2. Find HTTP-style headers in byte buffer at byte-level
+        val sepPos = findSequence(rawBytes, "\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
+        val sepLen = if (sepPos != -1) 4 else {
+            val altPos = findSequence(rawBytes, "\n\n".toByteArray(Charsets.ISO_8859_1))
+            if (altPos != -1) 2 else -1
+        }
+
+        if (sepPos != -1) {
+            val headerText = try { String(rawBytes.copyOfRange(0, sepPos), Charsets.ISO_8859_1) } catch (_: Exception) { "" }
+            if (headerText.contains("Content-Type:", ignoreCase = true) || headerText.contains("Content-Encoding:", ignoreCase = true) || headerText.contains("Content-Transfer-Encoding:", ignoreCase = true)) {
+                val bodyBytes = rawBytes.copyOfRange(sepPos + sepLen, rawBytes.size)
+                if (bodyBytes.isEmpty()) return null
+
+                val isBase64 = headerText.contains("base64", ignoreCase = true)
+                if (isBase64) {
+                    return try {
+                        val strBody = String(bodyBytes, Charsets.UTF_8).trim()
+                        Base64.decode(strBody, Base64.DEFAULT)
+                    } catch (_: Exception) {
+                        bodyBytes
+                    }
+                }
+
+                val strBody = try { String(bodyBytes, Charsets.UTF_8).trim() } catch (_: Exception) { "" }
+                if (strBody.startsWith("{") && strBody.endsWith("}")) {
+                    try {
+                        val respJson = JSONObject(strBody)
+                        val blobObj = respJson.optJSONObject("blob")
+                        if (blobObj != null && blobObj.has("data")) {
+                            return Base64.decode(blobObj.getString("data"), Base64.DEFAULT)
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                return bodyBytes
+            }
+        }
+
+        // 3. Try parsing JSON body directly
+        val respText = try { String(rawBytes, Charsets.UTF_8).trim() } catch (_: Exception) { "" }
+        if (respText.startsWith("{")) {
             return try {
                 val respJson = JSONObject(respText)
                 val blobDataObj = respJson.optJSONObject("blob")
@@ -432,17 +573,15 @@ name = "flammenwerfer-phone"
             } catch (_: Exception) {
                 null
             }
-        } else if (respText.contains("Content-Type:", ignoreCase = true) || respText.contains("Content-Transfer-Encoding:", ignoreCase = true) || respText.contains("Content-Encoding:", ignoreCase = true)) {
-            val headerEnd = if (respText.contains("\r\n\r\n")) respText.indexOf("\r\n\r\n") + 4 else respText.indexOf("\n\n") + 2
-            val headerText = respText.substring(0, headerEnd)
-            val bodyText = respText.substring(headerEnd)
-            val isBase64 = headerText.contains("base64", ignoreCase = true)
-            return if (isBase64) {
-                try { Base64.decode(bodyText.trim(), Base64.DEFAULT) } catch (_: Exception) { bodyText.toByteArray(Charsets.ISO_8859_1) }
-            } else {
-                bodyText.toByteArray(Charsets.ISO_8859_1)
-            }
         }
+
+        // 4. Try Base64 string fallback
+        try {
+            val decoded = Base64.decode(respText, Base64.DEFAULT)
+            if (decoded.isNotEmpty() && decoded.size > 10) {
+                return decoded
+            }
+        } catch (_: Exception) {}
 
         return rawBytes
     }
@@ -547,33 +686,28 @@ name = "flammenwerfer-phone"
             val responseCode = connection.responseCode
             val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
 
-            val responseTextBuilder = StringBuilder()
-            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
-            val buffer = CharArray(1024)
-            var bytesRead: Int
+            val rawBytes = (inputStream ?: "".byteInputStream()).readBytes()
+            val (jsonObjects, parsedAudio) = parseMultipartRawBytes(rawBytes)
+            var audioBytes: ByteArray? = parsedAudio
 
-            while (reader.read(buffer).also { bytesRead = it } != -1) {
-                responseTextBuilder.appendRange(buffer, 0, bytesRead)
-            }
-
-            val responseText = responseTextBuilder.toString()
-            val jsonObjects = extractJsonObjects(responseText)
+            val responseText = try { String(rawBytes, Charsets.UTF_8) } catch (_: Exception) { "" }
             val formattedDisplay = if (jsonObjects.isNotEmpty()) {
                 jsonObjects.joinToString("\n---\n") { it.toString(2) }
             } else {
                 responseText.ifBlank { "(Audio or stream response)" }
             }
 
-            var audioBytes: ByteArray? = null
-            for (json in jsonObjects) {
-                if (json.has("data") && json.optString("_dataType") == "base64") {
-                    audioBytes = Base64.decode(json.getString("data"), Base64.DEFAULT)
-                    break
-                } else if (json.has("blob")) {
-                    val blobObj = json.optJSONObject("blob")
-                    if (blobObj != null && blobObj.optString("_dataType") == "base64") {
-                        audioBytes = Base64.decode(blobObj.getString("data"), Base64.DEFAULT)
+            if (audioBytes == null || audioBytes.isEmpty()) {
+                for (json in jsonObjects) {
+                    if (json.has("data") && json.optString("_dataType") == "base64") {
+                        audioBytes = Base64.decode(json.getString("data"), Base64.DEFAULT)
                         break
+                    } else if (json.has("blob")) {
+                        val blobObj = json.optJSONObject("blob")
+                        if (blobObj != null && blobObj.optString("_dataType") == "base64") {
+                            audioBytes = Base64.decode(blobObj.getString("data"), Base64.DEFAULT)
+                            break
+                        }
                     }
                 }
             }
@@ -591,8 +725,8 @@ name = "flammenwerfer-phone"
                             readTimeout = 10000
                         }
                         if (conn.responseCode in 200..299) {
-                            val rawBytes = conn.inputStream.readBytes()
-                            audioBytes = extractAudioBytesFromRawResponse(rawBytes)
+                            val blobRawBytes = conn.inputStream.readBytes()
+                            audioBytes = extractAudioBytesFromRawResponse(blobRawBytes) ?: blobRawBytes
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error fetching xblob $blobId for TTS", e)

@@ -84,7 +84,7 @@ const handleXIntentEventV0 = handleForwardingOfXChannelJsonFrame;
 const tryToForwardTheFrame = async (xchannelFrame) => {
   const { senderWin, channel, payload } = xchannelFrame;
   const actionStr = formatActionString(xchannelFrame);
-  const intent = payload?.intent;
+  const intent = payload?.intent || payload?.event || payload?.action || (payload?.data && typeof payload.data === 'object' ? (payload.data.intent || payload.data.event || payload.data.action) : undefined);
 
   let channelObj = getChannelForMessage(xchannelFrame);
   if (channelObj) {

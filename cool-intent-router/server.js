@@ -147,10 +147,12 @@ async function startRouter() {
               parsed.messageType = msgTypeName;
             }
 
+            const intentName = parsed.payload?.intent || parsed.payload?.event || parsed.payload?.action || (parsed.payload?.data && typeof parsed.payload.data === 'object' ? (parsed.payload.data.intent || parsed.payload.data.event || parsed.data?.action) : undefined);
+
             // Attach parsed message to alStorage context
             logger.setContext({
               parsedMessage: parsed,
-              intent: parsed.payload?.intent || parsed.payload?.event || parsed.payload?.action
+              intent: intentName
             });
 
             logger.info(`parsed ${frameDesc(parsed)}`, parsed);

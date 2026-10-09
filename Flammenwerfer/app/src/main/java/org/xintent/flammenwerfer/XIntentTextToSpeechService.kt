@@ -56,7 +56,13 @@ class XIntentTextToSpeechService : TextToSpeechService() {
                     val sampleRate = extractWavSampleRate(wavBytes)
                     val numChannels = extractWavChannels(wavBytes)
                     val pcmOffset = findWavDataOffset(wavBytes) ?: 44
-                    val pcmLength = (wavBytes.size - pcmOffset).coerceAtLeast(0)
+                    val subchunk2Size = if (pcmOffset >= 8 && wavBytes.size >= pcmOffset) {
+                        ((wavBytes[pcmOffset - 4].toInt() and 0xFF) or
+                        ((wavBytes[pcmOffset - 3].toInt() and 0xFF) shl 8) or
+                        ((wavBytes[pcmOffset - 2].toInt() and 0xFF) shl 16) or
+                        ((wavBytes[pcmOffset - 1].toInt() and 0xFF) shl 24)).coerceAtLeast(0)
+                    } else 0
+                    val pcmLength = if (subchunk2Size in 1..(wavBytes.size - pcmOffset)) subchunk2Size else (wavBytes.size - pcmOffset).coerceAtLeast(0)
 
                     Log.i(TAG, "Streaming $pcmLength bytes of PCM data ($sampleRate Hz, $numChannels ch, maxBuffer ${callback.maxBufferSize}) to Android TTS engine")
 

@@ -462,44 +462,6 @@ function parseXBlobAtRest(raw) {
     _dataType: dataType,
   };
 }
-  let dataType = 'text';
-  if (transferEnc && transferEnc.toLowerCase().includes('base64')) {
-    dataType = 'base64';
-  } else if (contentType.includes('application/json') || contentType.includes('+json')) {
-    dataType = 'json';
-  }
-
-  let data = bodyText;
-  let parsedJsonObject = null;
-
-  if (dataType === 'json') {
-    try {
-      parsedJsonObject = JSON.parse(bodyText);
-      data = parsedJsonObject;
-    } catch (_) {
-      data = bodyText;
-    }
-  }
-
-  const result = {
-    xblobType,
-    type: contentType,
-    size,
-    name,
-    data,
-    _dataType: dataType,
-  };
-
-  if (dataType === 'json' && parsedJsonObject && typeof parsedJsonObject === 'object' && !Array.isArray(parsedJsonObject)) {
-    for (const key of Object.keys(parsedJsonObject)) {
-      if (!(key in result)) {
-        result[key] = parsedJsonObject[key];
-      }
-    }
-  }
-
-  return result;
-}
 
 async function XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, host, version){
   if(version && typeof blobData === 'object' && blobData !== null){
@@ -627,19 +589,19 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
     4_000_000_000
   );
   if (prop && prop.data) {
-    const rawStr = prop.data.toString();
     try {
-      return parseXBlobAtRest(rawStr);
+      return parseXBlobAtRest(prop.data);
     } catch (parseErr) {
+      const rawStr = prop.data.toString('utf8');
       const snippet = rawStr.length > 200 ? rawStr.slice(0, 200) + '...' : rawStr;
       logger.setContext({
         blobAtom: widString(blobAtom),
         hostWin: widString(hostWin),
-        rawLength: rawStr.length,
+        rawLength: prop.data.length,
         rawSnippet: snippet
       });
       const err = new SyntaxError(
-        `XBlobRead Parse error at blobAtom ${widString(blobAtom)} on window ${widString(hostWin)} (raw length: ${rawStr.length} bytes, snippet: ${JSON.stringify(snippet)}): ${parseErr.message}`
+        `XBlobRead Parse error at blobAtom ${widString(blobAtom)} on window ${widString(hostWin)} (raw length: ${prop.data.length} bytes, snippet: ${JSON.stringify(snippet)}): ${parseErr.message}`
       );
       err.rawString = rawStr;
       err.blobAtom = blobAtom;
@@ -663,8 +625,12 @@ async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {
     sender: widString(senderWin),
     payloadBlob: widString(payloadBlob)
   });
-  const payload = await XBlobRead(X, routerWin, payloadBlob);
-  if (payload) {
+  const rawBlob = await XBlobRead(X, routerWin, payloadBlob);
+  let payload = rawBlob;
+  if (rawBlob && typeof rawBlob === 'object' && rawBlob.data !== undefined) {
+    payload = rawBlob.data;
+  }
+  if (payload && typeof payload === 'object') {
     const cmd = payload.intent || payload.event || payload.action;
     if (cmd) {
       logger.setContext({ command: cmd });
@@ -723,7 +689,7 @@ function frameType(msg) {
   const atomName = getAtomName(atomId);
 
   const payload = msg.payload || (typeof msg === 'object' ? msg : {});
-  const actionName = payload?.intent || payload?.event || payload?.action;
+  const actionName = payload?.intent || payload?.event || payload?.action || (payload?.data && typeof payload.data === 'object' ? (payload.data.intent || payload.data.event || payload.data.action) : undefined);
 
   if (actionName) {
     return `${atomName}:${actionName}`;

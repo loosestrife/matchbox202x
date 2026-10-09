@@ -791,6 +791,32 @@ class CardsActivity : ComponentActivity() {
             return rawBytes
         }
 
+        val sepPos = findSequence(rawBytes, "\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
+        val sepLen = if (sepPos != -1) 4 else {
+            val altPos = findSequence(rawBytes, "\n\n".toByteArray(Charsets.ISO_8859_1))
+            if (altPos != -1) 2 else -1
+        }
+
+        if (sepPos != -1) {
+            val headerText = try { String(rawBytes.copyOfRange(0, sepPos), Charsets.ISO_8859_1) } catch (_: Exception) { "" }
+            if (headerText.contains("Content-Type:", ignoreCase = true) || headerText.contains("Content-Encoding:", ignoreCase = true) || headerText.contains("Content-Transfer-Encoding:", ignoreCase = true)) {
+                val bodyBytes = rawBytes.copyOfRange(sepPos + sepLen, rawBytes.size)
+                if (bodyBytes.isEmpty()) return null
+
+                val isBase64 = headerText.contains("base64", ignoreCase = true)
+                if (isBase64) {
+                    return try {
+                        val strBody = String(bodyBytes, Charsets.UTF_8).trim()
+                        Base64.decode(strBody, Base64.DEFAULT)
+                    } catch (_: Exception) {
+                        bodyBytes
+                    }
+                }
+
+                return bodyBytes
+            }
+        }
+
         val respText = try { String(rawBytes, Charsets.UTF_8).trim() } catch (_: Exception) { "" }
 
         if (respText.startsWith("{")) {
@@ -810,26 +836,31 @@ class CardsActivity : ComponentActivity() {
             } catch (_: Exception) {
                 null
             }
-        } else if (respText.contains("Content-Type:", ignoreCase = true) || respText.contains("Content-Transfer-Encoding:", ignoreCase = true) || respText.contains("Content-Encoding:", ignoreCase = true)) {
-            val headerEnd = if (respText.contains("\r\n\r\n")) respText.indexOf("\r\n\r\n") + 4 else respText.indexOf("\n\n") + 2
-            val headerText = respText.substring(0, headerEnd)
-            val bodyText = respText.substring(headerEnd)
-            val isBase64 = headerText.contains("base64", ignoreCase = true)
-            return if (isBase64) {
-                try { Base64.decode(bodyText.trim(), Base64.DEFAULT) } catch (_: Exception) { bodyText.toByteArray(Charsets.UTF_8) }
-            } else {
-                bodyText.toByteArray(Charsets.UTF_8)
-            }
         }
 
         try {
             val decoded = Base64.decode(respText, Base64.DEFAULT)
-            if (decoded.isNotEmpty()) {
+            if (decoded.isNotEmpty() && decoded.size > 10) {
                 return decoded
             }
         } catch (_: Exception) {}
 
         return rawBytes
+    }
+
+    private fun findSequence(source: ByteArray, target: ByteArray): Int {
+        if (target.isEmpty() || source.size < target.size) return -1
+        for (i in 0..source.size - target.size) {
+            var match = true
+            for (j in target.indices) {
+                if (source[i + j] != target[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return i
+        }
+        return -1
     }
 
     fun triggerLocalPrefetch(jsonPayload: String): String {

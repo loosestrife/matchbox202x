@@ -178,17 +178,20 @@ const routeIntent = async (req, res) => {
           headersSent = true;
         }
 
-        const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'text/plain');
-        const dataType = blobData._dataType || (mimeType.includes('application/json') ? 'json' : 'text');
+        const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'application/octet-stream');
+        const dataType = blobData._dataType || (mimeType.includes('application/json') ? 'json' : 'binary');
 
-        let bodyStr = '';
-        if (blobData.data !== undefined) {
-          bodyStr = typeof blobData.data === 'object' ? JSON.stringify(blobData.data) : String(blobData.data);
+        let bodyPayload = blobData.data !== undefined ? blobData.data : blobData;
+        let bodyBuf;
+        if (Buffer.isBuffer(bodyPayload)) {
+          bodyBuf = bodyPayload;
+        } else if (typeof bodyPayload === 'object') {
+          bodyBuf = Buffer.from(JSON.stringify(bodyPayload), 'utf8');
         } else {
-          bodyStr = typeof blobData === 'object' ? JSON.stringify(blobData) : String(blobData);
+          bodyBuf = Buffer.from(String(bodyPayload), 'utf8');
         }
 
-        const bodyLen = blobData.size !== undefined ? blobData.size : Buffer.byteLength(bodyStr, 'utf8');
+        const bodyLen = blobData.size !== undefined ? blobData.size : bodyBuf.length;
 
         const headers = [
           `Content-Type: ${mimeType}`,
@@ -211,7 +214,10 @@ const routeIntent = async (req, res) => {
           headers.push(`${key}: ${val}`);
         });
 
-        res.write(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n${bodyStr}\r\n\r\n`);
+        const headerBuf = Buffer.from(`--${BOUNDARY}\r\n${headers.join('\r\n')}\r\n\r\n`, 'utf8');
+        const footerBuf = Buffer.from('\r\n\r\n', 'utf8');
+
+        res.write(Buffer.concat([headerBuf, bodyBuf, footerBuf]));
         if (typeof res.flush === 'function') {
           try { res.flush(); } catch (_) {}
         }
