@@ -7,9 +7,9 @@
 ## High-Level Architectural Description
 
 ### Executive Overview
-The modern UNIX desktop ecosystem suffers from severe fragmentation, redundant abstractions, and excessive resource overhead. Over the past two decades, traditional system interfaces have been systematically obscured by multi-layered IPC daemons (`dbus-daemon`), custom compositors, sandboxing runtimes (Flatpak, Snap), language-isolated package manifests (`package.json`, `Cargo.toml`, `pyproject.toml`), and heavy web-runtime wrappers.
+The modern UNIX desktop ecosystem suffers from severe fragmentation, redundant abstractions, and excessive resource overhead. Over the past two decades, traditional system interfaces have been systematically obscured by multi-layered IPC frameworks that nobody understands.  Despite 1995 being the the height of the one cpu paradigm, the modern desktop has lost the concept of network transparency.
 
-This specification defines a unified, lightweight desktop platform constructed entirely from proven, off-the-shelf POSIX and X11 primitives. It proves that a fully capable, sandboxed, intent-driven, mobile/tablet-friendly operating system requires zero custom IPC protocols, no dedicated system bus daemons, and no bespoke package management infrastructure.
+This specification defines a unified, lightweight desktop platform constructed entirely from proven, off-the-shelf X11 primitives.
 
 ### 0 Core Design Philosophy
 1. **Zero Invention Design** everything has already been invented
@@ -40,6 +40,7 @@ This specification defines a unified, lightweight desktop platform constructed e
 * XINTENT: intent routing through the x session, because the x session has since the 70's been the highest performance desktop bus 
 * X11: a high performance session bus and shared database with clear semantics for the past 50 years.  So if the session needs a shared database and clear semantics
 * XBLOB: adds web File/Blob/ReadableStream/MediaStream so you can ctrl-C the video lecture on user-laptop and ctrl-V it into the terminal window on user-desktop once nemo catches up and advertises XBLOB File as the copy format
+* XCHANNEL: your packet can follow the advertisements to Krispy Kreme but to come home with a donut it needs a trail of channels across bridges.  This was known in the 1970's
 * XSECURE: coping with your ex-secure system that you connected to the network. We can have iptables or aws waf or whatever deep packet inspecting firewall system we want, and use jwt's from policykit or oauth.  So the keylogger that connected from `ssh -X other-guys-computer` gets its XGrabKeyboard dropped and KeyPress dropped when it doesn't have a focused window.  Paranoid users can put a separate deep packet inspecting firewall in front of their X servers, this isnt rocket surgery, everyone knows how to firewall network protocols.
 * Android bridge app "Flammenwerfer" to send intents back and forth thus hanging your android off your X session, and load html cards with intents so you get an instant phone ui without compiling kotlin in android studio
 * Toml Package System: tps formalizes the rich command surface of intents and events, specifying how intents are written as json, command line parameters, c structures, rest commands.  Trusted .so modules can have their index.toml embedded in the elf so the module host program can dlsym the right function and run it from a single vtable, external servers can send and recieve intents and stream events over http, scripts can send and recieve intents over stdin/stdout in NNJSON format.
