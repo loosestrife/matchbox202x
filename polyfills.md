@@ -158,7 +158,7 @@ an XMessageFrame with message type `XBlobStreamChunkReceivedV0` and `data.l[1]` 
 an XBlobHost claims an atom for what numa node its on, as `XBLOB_HOST_${host}`, and progams use XGetSelection() to find their local XBlobHost.  Then `XBlobCreate` returns a bus global unique atom, but the XBLOB is actually on the window that owns the atom according to XGetSelection().
 
 ## XBlobBroadcast
-an XMessageFrame with message type `XBlobBroadcastV0`, `data.l[1]` as the blob id, `data.l[2]` as the host atom, `data.l[3]` as the version.  Broadcasts local modification to other numa nodes, linkers, soft linkers, so they can read the new contents if they want.  By the way the host atom is bus unique and must be natted, which, of course, everyone already knows.
+an XJsonFrame with message type `XBlobBroadcastV0` and its data blob being the blob id, it also carries they json payload `{hostName, version}`.  Broadcasts local modification to other numa nodes, linkers, soft linkers, so they can read the new contents if they want.
 
 # XAUDIO V0
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.  It registers itself in its MATCHBOX_TOML as
