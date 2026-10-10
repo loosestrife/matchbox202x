@@ -1,6 +1,6 @@
 Categories:
-  - Connectivity
   - System
+  - Connectivity
 License: Apache-2.0
 AuthorName: XIntent Project
 SourceCode: https://github.com/xintent/Flammenwerfer
@@ -9,16 +9,17 @@ IssueTracker: https://github.com/xintent/Flammenwerfer/issues
 AutoName: Flammenwerfer
 
 Builds:
-  - versionName: '0.1.0'
+  - versionName: '1.0'
     versionCode: 1
     commit: f2525d256222655dbbb9f8b92a17fadd6ed6a9ac
     subdir: Flammenwerfer
+    prebuild:
+      - rm -f ../package.json
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release-unsigned.apk
-    prebuild: rm -f ../package.json
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 0.1.0
+CurrentVersion: '1.0'
 CurrentVersionCode: 1

@@ -164,16 +164,145 @@ class CardsActivity : ComponentActivity() {
         }
       }
 
+      var sendLogMsg = '[XIntent HTTP ➡️] Sending ' + intentName + ' to ' + url + ' (targetApp: ' + app + ')';
+      console.log(sendLogMsg);
+      if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') {
+        window.XIntentNative.logMessage(sendLogMsg);
+      }
+
       var response = await fetch(url, {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(bodyData)
       });
+
+      var cLen = response.headers ? response.headers.get('content-length') : null;
+      var recvLogMsg = '[XIntent HTTP ⬅️] Received HTTP ' + response.status + ' response for ' + intentName + (cLen ? ' (Content-Length: ' + cLen + ' bytes)' : ' (chunked/streaming)');
+      console.log(recvLogMsg);
+      if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') {
+        window.XIntentNative.logMessage(recvLogMsg);
+      }
+
+      try {
+        response.clone().arrayBuffer().then(function(buf) {
+          var bytesCount = buf ? buf.byteLength : 0;
+          var sizeLogMsg = '[XIntent HTTP 📊] Response body payload size for ' + intentName + ': ' + bytesCount + ' bytes';
+          console.log(sizeLogMsg);
+          if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') {
+            window.XIntentNative.logMessage(sizeLogMsg);
+          }
+        }).catch(function(err) {
+          console.warn('[XIntent HTTP] Could not read cloned response buffer:', err);
+        });
+      } catch (_) {}
+
       response.parseMultipart = async function() {
-        var text = await this.text();
-        return window.xintent.parseMultipartResponse(text);
+        var totalBytes = 0;
+        var resParts = [];
+        if (typeof this.arrayBuffer === 'function') {
+          try {
+            var buf = await this.arrayBuffer();
+            totalBytes = buf ? buf.byteLength : 0;
+            resParts = window.xintent.parseMultipartArrayBuffer(buf);
+          } catch (_) {}
+        }
+        if (!resParts || resParts.length === 0) {
+          var text = await this.text();
+          totalBytes = text ? text.length : 0;
+          resParts = window.xintent.parseMultipartResponse(text);
+        }
+        var parseLogMsg = '[XIntent HTTP 📦] Parsed ' + (intentName || 'intent') + ' response body: ' + totalBytes + ' bytes (' + resParts.length + ' parts)';
+        console.log(parseLogMsg);
+        if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') {
+          window.XIntentNative.logMessage(parseLogMsg);
+        }
+        return resParts;
       };
       return response;
+    },
+
+    parseMultipartArrayBuffer: function(arrayBuffer) {
+      var parts = [];
+      if (!arrayBuffer) return parts;
+      var bytes = new Uint8Array(arrayBuffer);
+      var textDecoder = new TextDecoder('utf-8');
+
+      var headerSnippet = textDecoder.decode(bytes.subarray(0, Math.min(bytes.length, 2048)));
+      if (!headerSnippet.includes('MatchboxFrameBoundary')) {
+        try {
+          parts.push({ headers: {}, json: JSON.parse(textDecoder.decode(bytes)) });
+        } catch (_) {
+          parts.push({ headers: {}, body: arrayBuffer });
+        }
+        return parts;
+      }
+
+      var firstLineEnd = headerSnippet.indexOf('\n');
+      var boundaryStr = (firstLineEnd !== -1 ? headerSnippet.substring(0, firstLineEnd) : headerSnippet).trim();
+      var boundaryBytes = new TextEncoder().encode(boundaryStr);
+
+      var rawPartBuffers = [];
+      var start = 0;
+      while (start < bytes.length) {
+        var pos = -1;
+        for (var i = start; i <= bytes.length - boundaryBytes.length; i++) {
+          var match = true;
+          for (var j = 0; j < boundaryBytes.length; j++) {
+            if (bytes[i + j] !== boundaryBytes[j]) { match = false; break; }
+          }
+          if (match) { pos = i; break; }
+        }
+        if (pos === -1) {
+          if (start < bytes.length) rawPartBuffers.push(bytes.subarray(start));
+          break;
+        }
+        if (pos > start) rawPartBuffers.push(bytes.subarray(start, pos));
+        start = pos + boundaryBytes.length;
+      }
+
+      for (var k = 0; k < rawPartBuffers.length; k++) {
+        var pBytes = rawPartBuffers[k];
+        if (pBytes.length === 0) continue;
+
+        var sepPos = -1;
+        var sepLen = 4;
+        for (var m = 0; m <= pBytes.length - 4; m++) {
+          if (pBytes[m] === 13 && pBytes[m+1] === 10 && pBytes[m+2] === 13 && pBytes[m+3] === 10) {
+            sepPos = m; sepLen = 4; break;
+          }
+        }
+        if (sepPos === -1) {
+          for (var m2 = 0; m2 <= pBytes.length - 2; m2++) {
+            if (pBytes[m2] === 10 && pBytes[m2+1] === 10) {
+              sepPos = m2; sepLen = 2; break;
+            }
+          }
+        }
+        if (sepPos === -1) continue;
+
+        var headerText = textDecoder.decode(pBytes.subarray(0, sepPos));
+        var bodyBytes = pBytes.subarray(sepPos + sepLen);
+
+        var headers = {};
+        headerText.split(/\r?\n/).forEach(function(line) {
+          var colon = line.indexOf(':');
+          if (colon !== -1) {
+            headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+          }
+        });
+
+        var contentType = headers['content-type'] || '';
+        if (contentType.includes('application/json') || contentType.includes('+json')) {
+          try {
+            var jsonStr = textDecoder.decode(bodyBytes);
+            var json = JSON.parse(jsonStr);
+            parts.push({ headers: headers, json: json, body: bodyBytes.buffer });
+            continue;
+          } catch (_) {}
+        }
+        parts.push({ headers: headers, body: bodyBytes.buffer });
+      }
+      return parts;
     },
 
     parseMultipartResponse: function(responseText) {
@@ -1135,6 +1264,12 @@ class XIntentJSBridge(private val activity: CardsActivity) {
     @JavascriptInterface
     fun handleLocalSaveAs(jsonPayload: String): String {
         return activity.triggerLocalSaveAs(jsonPayload)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun logMessage(msg: String) {
+        XIntentClient.addLog(msg)
     }
 
     @Suppress("unused")

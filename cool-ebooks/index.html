@@ -870,29 +870,62 @@ document.getElementById('xintent-pick').addEventListener('click', async () => {
         parts = window.xintent.parseMultipartResponse(await res.text());
       }
 
-      const blobPart = parts.find(p => p.json && p.json.blob);
-      if (blobPart && blobPart.json.blob.data) {
-        let base64Data = blobPart.json.blob.data;
-        let fileName = blobPart.json.blob.name || 'xintent-book.epub';
+      let fileBuffer = null;
+      let fileName = 'xintent-book.epub';
+      let base64Str = null;
 
-        const binaryStr = atob(base64Data);
-        const len = binaryStr.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
+      // 1. Check if binary/base64 file attachment was returned in Part 2 (p.body)
+      const binaryPart = parts.find(p => p.body && (p.body.byteLength > 0 || p.body.length > 0) && !p.json);
+      if (binaryPart && binaryPart.body) {
+        if (typeof binaryPart.body === 'string') {
+          base64Str = binaryPart.body;
+          try {
+            const binaryStr = atob(binaryPart.body.trim());
+            const len = binaryStr.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binaryStr.charCodeAt(i);
+            fileBuffer = bytes.buffer;
+          } catch (_) {
+            const encoder = new TextEncoder();
+            fileBuffer = encoder.encode(binaryPart.body).buffer;
+          }
+        } else if (binaryPart.body instanceof ArrayBuffer) {
+          fileBuffer = binaryPart.body;
         }
+        if (binaryPart.headers && binaryPart.headers['content-disposition']) {
+          const m = binaryPart.headers['content-disposition'].match(/filename\s*=\s*"?([^";]+)"?/i);
+          if (m) fileName = m[1];
+        }
+      }
 
-        try {
-          localStorage.setItem('cool_ebooks_book_data', base64Data);
-          localStorage.setItem('cool_ebooks_book_name', fileName);
-          localStorage.removeItem('cool_ebooks_location');
-          localStorage.removeItem('cool_ebooks_page');
-        } catch (err) {
-          console.warn('Could not store EPUB in localStorage:', err);
+      // 2. Fallback to inline json.blob.data structure
+      if (!fileBuffer) {
+        const blobPart = parts.find(p => p.json && (p.json.blob || p.json.data_blob));
+        if (blobPart && blobPart.json && blobPart.json.blob && blobPart.json.blob.data) {
+          base64Str = blobPart.json.blob.data;
+          fileName = blobPart.json.blob.name || fileName;
+          const binaryStr = atob(base64Str);
+          const len = binaryStr.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) bytes[i] = binaryStr.charCodeAt(i);
+          fileBuffer = bytes.buffer;
         }
-        loadBookFromData(bytes.buffer, fileName);
+      }
+
+      if (fileBuffer) {
+        if (base64Str) {
+          try {
+            localStorage.setItem('cool_ebooks_book_data', base64Str);
+            localStorage.setItem('cool_ebooks_book_name', fileName);
+            localStorage.removeItem('cool_ebooks_location');
+            localStorage.removeItem('cool_ebooks_page');
+          } catch (err) {
+            console.warn('Could not store EPUB in localStorage:', err);
+          }
+        }
+        loadBookFromData(fileBuffer, fileName);
       } else {
-         console.log("No file data received (or user cancelled).");
+        console.log("No file data received (or user cancelled).");
       }
     }
   } catch (err) {

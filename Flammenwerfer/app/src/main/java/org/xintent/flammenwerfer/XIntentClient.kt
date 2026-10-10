@@ -249,6 +249,7 @@ name = "flammenwerfer-phone"
     }
 
     fun addLog(entry: String) {
+        Log.i(TAG, entry)
         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         val formattedEntry = "[$timeStr] $entry"
         val listenersCopy: List<() -> Unit>

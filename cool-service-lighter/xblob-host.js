@@ -22,6 +22,7 @@ const pickFilePath = async xiIntent => {
     targetWin: xintent.routerWin,
     senderWin: lighterWin,
     channel: xiIntent.channel,
+    controlWord: 2, // FIN = 2 (XChannel FIN flag)
     payload: {
       event: "fs.PickFileResponse",
       disposition: "final",
@@ -50,6 +51,7 @@ const pickFile = async (xiIntent) => {
     targetWin: xintent.routerWin,
     senderWin: lighterWin,
     channel: xiIntent.channel,
+    controlWord: 2, // FIN = 2 (XChannel FIN flag)
     payload: {
       event: "fs.PickFileResponse",
       disposition: "final",

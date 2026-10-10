@@ -263,7 +263,14 @@ X.on('event', async (ev) => {
 });
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ noServer: true });
+const wss = new WebSocket.Server({
+  noServer: true,
+  handleProtocols: (protocols) => {
+    if (protocols && protocols.has && protocols.has('message/http')) return 'message/http';
+    if (protocols && Array.isArray(protocols) && protocols.includes('message/http')) return 'message/http';
+    return false;
+  }
+});
 
 wss.on('connection', (ws, request) => {
   const sinkParam = ws.xaudioSink;
