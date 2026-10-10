@@ -9,55 +9,86 @@ const xintent = require("../x11-promises/xintent");
 const softLinks = {};
 
 const pickFilePath = async xiIntent => {
-  const payload = xiIntent.payload;
-  const pathname = await execShell("zenity --file-selection");
-  const dataBlob = await xintent.XBlobCreate(X, xintent.routerWin, lighterWin, {
-    xblobType: "Blob",
-    type: "text/pathname",
-    _dataType: "text",
-    data: pathname,
-  });
-  xintent.XBlobTransfer(X, xintent.routerWin, lighterWin, dataBlob, xintent.routerWin);
-  await xintent.sendXIntentEventV0(X, xintent.routerWin, {
-    targetWin: xintent.routerWin,
-    senderWin: lighterWin,
-    channel: xiIntent.channel,
-    controlWord: 2, // FIN = 2 (XChannel FIN flag)
-    payload: {
-      event: "fs.PickFileResponse",
-      disposition: "final",
-    },
-    dataBlob,
-  });
-};
-const pickFile = async (xiIntent) => {
-  const payload = xiIntent.payload;
-  const pathname = await execShell("zenity --file-selection");
-  const data = fs.readFileSync(pathname);
-  const isText = isUtf8(data);
-  const dataBlob = await xintent.XBlobCreate(X, xintent.routerWin, lighterWin, {
-    xblobType: "File",
-    name: path.basename(pathname),
-    type: isText ? "text/plain" : "application/octet-stream",
-    _dataType: isText ? "text" : "base64",
-    data: isText ? data.toString("utf-8") : data.toString("base64"),
-  });
-  if (payload.holdOpenForWrites) {
-    xintent.XBlobSoftLink(X, xintent.routerWin, lighterWin, dataBlob);
-    softLinks[dataBlob] = pathname; // hey thats not a fd...
+  try {
+    const payload = xiIntent.payload;
+    const pathname = await execShell("zenity --file-selection");
+    if (!pathname) throw new Error("File selection cancelled");
+    const dataBlob = await xintent.XBlobCreate(X, xintent.routerWin, lighterWin, {
+      xblobType: "Blob",
+      type: "text/pathname",
+      _dataType: "text",
+      data: pathname,
+    });
+    xintent.XBlobTransfer(X, xintent.routerWin, lighterWin, dataBlob, xintent.routerWin);
+    await xintent.sendXIntentEventV0(X, xintent.routerWin, {
+      targetWin: xintent.routerWin,
+      senderWin: lighterWin,
+      channel: xiIntent.channel,
+      controlWord: 2, // FIN = 2
+      payload: {
+        event: "fs.PickFileResponse",
+        disposition: "final",
+      },
+      dataBlob,
+    });
+  } catch (err) {
+    await xintent.sendXIntentEventV0(X, xintent.routerWin, {
+      targetWin: xintent.routerWin,
+      senderWin: lighterWin,
+      channel: xiIntent.channel,
+      controlWord: 2, // FIN = 2
+      payload: {
+        event: "http.500InternalServerError",
+        disposition: "error",
+        message: err.message || "File selection cancelled",
+      },
+    });
   }
-  xintent.XBlobTransfer(X, xintent.routerWin, lighterWin, dataBlob, xintent.routerWin);
-  await xintent.sendXIntentEventV0(X, xintent.routerWin, {
-    targetWin: xintent.routerWin,
-    senderWin: lighterWin,
-    channel: xiIntent.channel,
-    controlWord: 2, // FIN = 2 (XChannel FIN flag)
-    payload: {
-      event: "fs.PickFileResponse",
-      disposition: "final",
-    },
-    dataBlob,
-  });
+};
+
+const pickFile = async (xiIntent) => {
+  try {
+    const payload = xiIntent.payload;
+    const pathname = await execShell("zenity --file-selection");
+    if (!pathname) throw new Error("File selection cancelled");
+    const data = fs.readFileSync(pathname);
+    const isText = isUtf8(data);
+    const dataBlob = await xintent.XBlobCreate(X, xintent.routerWin, lighterWin, {
+      xblobType: "File",
+      name: path.basename(pathname),
+      type: isText ? "text/plain" : "application/octet-stream",
+      _dataType: isText ? "text" : "base64",
+      data: isText ? data.toString("utf-8") : data.toString("base64"),
+    });
+    if (payload.holdOpenForWrites) {
+      xintent.XBlobSoftLink(X, xintent.routerWin, lighterWin, dataBlob);
+      softLinks[dataBlob] = pathname;
+    }
+    xintent.XBlobTransfer(X, xintent.routerWin, lighterWin, dataBlob, xintent.routerWin);
+    await xintent.sendXIntentEventV0(X, xintent.routerWin, {
+      targetWin: xintent.routerWin,
+      senderWin: lighterWin,
+      channel: xiIntent.channel,
+      controlWord: 2, // FIN = 2
+      payload: {
+        event: "fs.PickFileResponse",
+        disposition: "final",
+      },
+      dataBlob,
+    });
+  } catch (err) {
+    await xintent.sendXIntentEventV0(X, xintent.routerWin, {
+      targetWin: xintent.routerWin,
+      senderWin: lighterWin,
+      channel: xiIntent.channel,
+      controlWord: 2, // FIN = 2
+      payload: {
+        event: "http.500InternalServerError",
+        disposition: "error",
+        message: err.message || "File selection cancelled",
+      },
+    });
+  }
 };
 
 const xblobBroadcast = async message => {
