@@ -360,6 +360,7 @@ name = "flammenwerfer-phone"
         val responseBody: String = "",
         val replacementText: String? = null,
         val errorMessage: String? = null,
+        val rawBytes: ByteArray = ByteArray(0),
     )
 
     fun extractJsonObjects(text: String): List<JSONObject> {
@@ -476,6 +477,42 @@ name = "flammenwerfer-phone"
         }
 
         return Pair(jsonList, extractedAudio)
+    }
+
+    fun extractFileFromPickFileResponse(rawBytes: ByteArray): Pair<String, ByteArray>? {
+        if (rawBytes.isEmpty()) return null
+        val rawStr = try { String(rawBytes, Charsets.ISO_8859_1) } catch (_: Exception) { "" }
+        val boundaryLine = rawStr.lines().firstOrNull { it.contains("MatchboxFrameBoundary") }?.trim() ?: ""
+        var boundary = boundaryLine
+        if (boundary.startsWith("--")) boundary = boundary.substring(2)
+        if (boundary.endsWith("--")) boundary = boundary.substring(0, boundary.length - 2)
+        boundary = boundary.trim()
+
+        if (boundary.isNotBlank()) {
+            val boundaryBytes = ("--" + boundary).toByteArray(Charsets.ISO_8859_1)
+            val parts = splitBytesByDelimiter(rawBytes, boundaryBytes)
+            var foundFileName = "picked_desktop_file"
+
+            for (partBytes in parts) {
+                if (partBytes.isEmpty()) continue
+                val headerSep = findSequence(partBytes, "\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
+                val headerSepLen = if (headerSep != -1) 4 else 2
+                if (headerSep != -1) {
+                    val headerText = String(partBytes.copyOfRange(0, headerSep), Charsets.UTF_8)
+                    val bodyBytes = partBytes.copyOfRange(headerSep + headerSepLen, partBytes.size)
+
+                    if (headerText.contains("filename=", ignoreCase = true)) {
+                        val m = Regex("""filename\s*=\s*"?([^";]+)"?""", RegexOption.IGNORE_CASE).find(headerText)
+                        if (m != null) foundFileName = m.groupValues[1]
+                    }
+
+                    if (!headerText.contains("application/json", ignoreCase = true) && bodyBytes.isNotEmpty()) {
+                        return Pair(foundFileName, bodyBytes)
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun findSequence(source: ByteArray, target: ByteArray): Int {
@@ -800,18 +837,9 @@ name = "flammenwerfer-phone"
             val responseCode = connection.responseCode
             val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
 
-            val responseTextBuilder = StringBuilder()
-            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
-            val buffer = CharArray(1024)
-            var bytesRead: Int
+            val rawBytes = inputStream?.readBytes() ?: ByteArray(0)
+            val responseText = try { String(rawBytes, Charsets.UTF_8) } catch (_: Exception) { "" }
 
-            while (reader.read(buffer).also { bytesRead = it } != -1) {
-                responseTextBuilder.appendRange(buffer, 0, bytesRead)
-                val currentText = responseTextBuilder.toString().trim()
-                if (currentText.startsWith("{") && currentText.endsWith("}")) break
-            }
-
-            val responseText = responseTextBuilder.toString()
             val jsonObjects = extractJsonObjects(responseText)
             val formattedDisplay = if (jsonObjects.isNotEmpty()) {
                 jsonObjects.joinToString("\n---\n") { it.toString(2) }
@@ -819,14 +847,14 @@ name = "flammenwerfer-phone"
                 responseText.ifBlank { "(Empty response body)" }
             }
 
-            Log.i(TAG, "Sent fs.PickFile to $targetApp [$responseCode]: $responseText")
+            Log.i(TAG, "Sent fs.PickFile to $targetApp [$responseCode]: ${rawBytes.size} bytes received")
 
             if (responseCode in 200..299) {
-                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
-                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+                addLog("$logPrefix SUCCESS ($responseCode): ${rawBytes.size} bytes received\n$formattedDisplay")
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay, rawBytes = rawBytes)
             } else {
                 addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
-                Result(success = false, statusCode = responseCode, responseBody = formattedDisplay, errorMessage = "HTTP $responseCode")
+                Result(success = false, statusCode = responseCode, responseBody = formattedDisplay, errorMessage = "HTTP $responseCode", rawBytes = rawBytes)
             }
         } catch (e: Exception) {
             val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"

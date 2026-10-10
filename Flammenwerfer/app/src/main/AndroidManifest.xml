@@ -46,8 +46,15 @@
         <activity
             android:name=".SendIntentActivity"
             android:exported="true"
-            android:label="Save to Desktop (XIntent)"
+            android:label="XIntent Desktop (Pick / Save)"
+            android:icon="@mipmap/ic_launcher"
             android:theme="@style/Theme.ProcessTextTranslucent">
+            <intent-filter>
+                <action android:name="android.intent.action.GET_CONTENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -61,10 +68,22 @@
         </activity>
 
         <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="org.xintent.flammenwerfer.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <provider
             android:name=".XIntentDocumentsProvider"
             android:authorities="org.xintent.flammenwerfer.documents"
             android:exported="true"
             android:grantUriPermissions="true"
+            android:label="XIntent Desktop"
+            android:icon="@mipmap/ic_launcher"
             android:permission="android.permission.MANAGE_DOCUMENTS">
             <intent-filter>
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
@@ -76,6 +95,8 @@
             android:authorities="org.xintent.flammenwerfer.documents.holdopen"
             android:exported="true"
             android:grantUriPermissions="true"
+            android:label="XIntent Desktop (Hold Open)"
+            android:icon="@mipmap/ic_launcher"
             android:permission="android.permission.MANAGE_DOCUMENTS">
             <intent-filter>
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />

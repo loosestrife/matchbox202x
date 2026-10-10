@@ -8,10 +8,12 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class SendIntentActivity : ComponentActivity() {
 
@@ -21,7 +23,9 @@ class SendIntentActivity : ComponentActivity() {
         val action = intent?.action
         val type = intent?.type
 
-        if (action == Intent.ACTION_SEND) {
+        if (action == Intent.ACTION_GET_CONTENT || action == Intent.ACTION_OPEN_DOCUMENT) {
+            handleGetContent()
+        } else if (action == Intent.ACTION_SEND) {
             val streamUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
             } else {
@@ -124,6 +128,47 @@ class SendIntentActivity : ComponentActivity() {
                 Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
             } else {
                 Toast.makeText(applicationContext, "Failed to read file from URI", Toast.LENGTH_SHORT).show()
+            }
+            finish()
+        }
+    }
+
+    private fun handleGetContent() {
+        Toast.makeText(applicationContext, "Pick file on Desktop PC...", Toast.LENGTH_SHORT).show()
+
+        lifecycleScope.launch {
+            val targetApp = XIntentClient.getTargetApp(applicationContext, 1)
+            val res = XIntentClient.sendPickFileIntent(applicationContext, targetApp = targetApp)
+
+            if (res.success && res.rawBytes.isNotEmpty()) {
+                val fileData = withContext(Dispatchers.IO) {
+                    XIntentClient.extractFileFromPickFileResponse(res.rawBytes)
+                }
+
+                if (fileData != null && fileData.second.isNotEmpty()) {
+                    val (fileName, bytes) = fileData
+                    val cacheFile = File(cacheDir, fileName)
+                    cacheFile.writeBytes(bytes)
+
+                    val fileUri = FileProvider.getUriForFile(
+                        applicationContext,
+                        "${packageName}.fileprovider",
+                        cacheFile
+                    )
+
+                    val resultIntent = Intent().apply {
+                        data = fileUri
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    setResult(RESULT_OK, resultIntent)
+                    Toast.makeText(applicationContext, "Picked $fileName from desktop!", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(applicationContext, "No file content received from desktop", Toast.LENGTH_SHORT).show()
+                    setResult(RESULT_CANCELED)
+                }
+            } else {
+                Toast.makeText(applicationContext, "Desktop file pick cancelled or failed", Toast.LENGTH_SHORT).show()
+                setResult(RESULT_CANCELED)
             }
             finish()
         }

@@ -58,9 +58,9 @@ abstract class BaseXIntentDocumentsProvider(
             DocumentsContract.Root.COLUMN_FLAGS,
             DocumentsContract.Root.FLAG_SUPPORTS_CREATE or
                     DocumentsContract.Root.FLAG_SUPPORTS_RECENTS or
-                    DocumentsContract.Root.FLAG_SUPPORTS_SEARCH,
+                    DocumentsContract.Root.FLAG_SUPPORTS_SEARCH
         )
-        row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*")
+        row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*\nimage/*\nvideo/*\naudio/*\napplication/*")
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ic_launcher)
         return result
     }
