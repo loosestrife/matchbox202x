@@ -103,6 +103,8 @@ const routeIntent = async (req, res) => {
   const preferReqHeader = (req.headers['prefer'] || '').toLowerCase();
   if (preferReqHeader.includes('return=minimal')) {
     payload.Prefer = 'return=minimal';
+    payload.headers = payload.headers || {};
+    payload.headers['Prefer'] = req.headers['prefer'];
   }
 
   // Store intent context in AsyncLocalStorage so all error logs include the intent JSON

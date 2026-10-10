@@ -377,6 +377,18 @@ function formatXBlobAtRest(blobData) {
   }
   headers.push(`X-XBlob-Type: ${xblobType}`);
 
+  if (typeof blobData === 'object' && blobData !== null) {
+    const extraHeaders = blobData.headers || blobData.messageHeaders;
+    if (extraHeaders && typeof extraHeaders === 'object') {
+      Object.entries(extraHeaders).forEach(([k, v]) => {
+        const lowerK = k.toLowerCase();
+        if (!['content-type', 'content-length', 'content-encoding', 'content-disposition', 'x-xblob-type'].includes(lowerK)) {
+          headers.push(`${k}: ${v}`);
+        }
+      });
+    }
+  }
+
   const headerBuf = Buffer.from(headers.join('\r\n') + '\r\n\r\n', 'utf8');
   return Buffer.concat([headerBuf, bodyBuf]);
 }
@@ -388,6 +400,7 @@ function parseXBlobAtRest(raw) {
       type: 'text/plain',
       size: 0,
       name: null,
+      headers: {},
       data: Buffer.alloc(0),
       _dataType: 'text',
     };
@@ -460,6 +473,7 @@ function parseXBlobAtRest(raw) {
     type: contentType,
     size,
     name,
+    headers,
     data,
     _dataType: dataType,
   };
@@ -630,6 +644,7 @@ async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {
   });
   const rawBlob = await XBlobRead(X, routerWin, payloadBlob);
   let payload = rawBlob;
+  const headers = rawBlob?.headers || {};
   if (rawBlob && typeof rawBlob === 'object' && rawBlob.data !== undefined) {
     payload = rawBlob.data;
   }
@@ -642,11 +657,11 @@ async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {
   if(unlinkPayloadBlob){
     XBlobUnlink(X, routerWin, ev.wid, payloadBlob);
   }
-  return { targetWin: ev.wid, senderWin, payload, payloadBlob };
+  return { targetWin: ev.wid, senderWin, payload, payloadBlob, headers };
 }
 
 async function parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob = true} = {}) {
-  const { senderWin, payload, payloadBlob } = await parseJsonFrame(
+  const { senderWin, payload, payloadBlob, headers } = await parseJsonFrame(
     X,
     routerWin,
     ev,
@@ -656,7 +671,7 @@ async function parseXIntentIntentV0(X, routerWin, ev, {unlinkPayloadBlob = true}
   const controlWord = ev.data[2];
   const dataBlob = ev.data[4];
   const messageTypeAtom = ev.message_type;
-  return { targetWin: ev.wid, senderWin, channel, controlWord, payload, payloadBlob, dataBlob, messageTypeAtom };
+  return { targetWin: ev.wid, senderWin, channel, controlWord, payload, payloadBlob, dataBlob, messageTypeAtom, headers };
 }
 
 function parseXBlobBroadcastFrame(X, routerWin, ev){

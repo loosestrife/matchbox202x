@@ -710,8 +710,7 @@ class CardsActivity : ComponentActivity() {
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
                 try {
                     val intent = Intent(
-                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:$packageName")
+                        Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
                     )
                     startActivity(intent)
                 } catch (e: Exception) {
