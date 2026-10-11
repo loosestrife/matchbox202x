@@ -9,7 +9,7 @@ IssueTracker: https://github.com/xintent/Flammenwerfer/issues
 AutoName: Flammenwerfer
 
 Builds:
-  - versionName: '1.0'
+  - versionName: '0.1.3'
     versionCode: 1
     commit: f2525d256222655dbbb9f8b92a17fadd6ed6a9ac
     subdir: Flammenwerfer
@@ -21,5 +21,5 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: '1.0'
+CurrentVersion: '0.1.3'
 CurrentVersionCode: 1
