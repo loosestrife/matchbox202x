@@ -40,9 +40,16 @@ object XIntentClient {
     private const val KEY_LOCAL_CLIPBOARD = "use_local_clipboard"
     private const val KEY_LOCAL_TTS = "use_local_tts"
     private const val KEY_LOCAL_AUDIO = "use_local_audio"
+    private const val KEY_DEFAULT_REMOTE_DEVICE = "default_remote_device"
+    private const val KEY_AUDIO_ROUTING_MODE = "audio_routing_mode"
+    private const val KEY_TTS_ROUTING_MODE = "tts_routing_mode"
+    private const val KEY_CLIPBOARD_ROUTING_MODE = "clipboard_routing_mode"
+    private const val KEY_FS_ROUTING_MODE = "fs_routing_mode"
+
     const val DEFAULT_SERVER_URL = "http://10.0.2.2:12345"
     const val DEFAULT_HOSTNAME = "user-phone"
     const val DEFAULT_UDP_PORT = 12346
+    const val DEFAULT_REMOTE_DEVICE = "user-desktop"
 
     enum class WebSocketState {
         DISCONNECTED,
@@ -395,44 +402,94 @@ name = "$advertisedName"
     private val logListeners = mutableSetOf<() -> Unit>()
     private val logEntries = mutableListOf<String>()
 
-    fun isLocalAudioEnabled(context: Context): Boolean {
+    fun getDefaultRemoteDevice(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getBoolean(KEY_LOCAL_AUDIO, true)
+        return prefs.getString(KEY_DEFAULT_REMOTE_DEVICE, DEFAULT_REMOTE_DEVICE) ?: DEFAULT_REMOTE_DEVICE
+    }
+
+    fun setDefaultRemoteDevice(context: Context, device: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_DEFAULT_REMOTE_DEVICE, device.ifBlank { DEFAULT_REMOTE_DEVICE }).apply()
+    }
+
+    fun getAudioRoutingMode(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_AUDIO_ROUTING_MODE, null)
+        if (saved != null) return saved
+        return if (prefs.getBoolean(KEY_LOCAL_AUDIO, true)) "doLocalAudioCapture" else "normal"
+    }
+
+    fun setAudioRoutingMode(context: Context, mode: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_AUDIO_ROUTING_MODE, mode).apply()
+    }
+
+    fun getTtsRoutingMode(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_TTS_ROUTING_MODE, null)
+        if (saved != null) return saved
+        return if (prefs.getBoolean(KEY_LOCAL_TTS, false)) "doLocalTtsCapture" else "normal"
+    }
+
+    fun setTtsRoutingMode(context: Context, mode: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_TTS_ROUTING_MODE, mode).apply()
+    }
+
+    fun getClipboardRoutingMode(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_CLIPBOARD_ROUTING_MODE, null)
+        if (saved != null) return saved
+        return if (prefs.getBoolean(KEY_LOCAL_CLIPBOARD, false)) "doLocalClipboardCapture" else "normal"
+    }
+
+    fun setClipboardRoutingMode(context: Context, mode: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_CLIPBOARD_ROUTING_MODE, mode).apply()
+    }
+
+    fun getFsRoutingMode(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_FS_ROUTING_MODE, null)
+        if (saved != null) return saved
+        return if (prefs.getBoolean(KEY_LOCAL_FS, false)) "doLocalFsCapture" else "normal"
+    }
+
+    fun setFsRoutingMode(context: Context, mode: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_FS_ROUTING_MODE, mode).apply()
+    }
+
+    fun isLocalAudioEnabled(context: Context): Boolean {
+        return getAudioRoutingMode(context) == "doLocalAudioCapture"
     }
 
     fun setLocalAudioEnabled(context: Context, enabled: Boolean) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_LOCAL_AUDIO, enabled).apply()
+        setAudioRoutingMode(context, if (enabled) "doLocalAudioCapture" else "normal")
     }
 
     fun isLocalTtsEnabled(context: Context): Boolean {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getBoolean(KEY_LOCAL_TTS, false)
+        return getTtsRoutingMode(context) == "doLocalTtsCapture"
     }
 
     fun setLocalTtsEnabled(context: Context, enabled: Boolean) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_LOCAL_TTS, enabled).apply()
+        setTtsRoutingMode(context, if (enabled) "doLocalTtsCapture" else "normal")
     }
 
     fun isLocalClipboardEnabled(context: Context): Boolean {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getBoolean(KEY_LOCAL_CLIPBOARD, false)
+        return getClipboardRoutingMode(context) == "doLocalClipboardCapture"
     }
 
     fun setLocalClipboardEnabled(context: Context, enabled: Boolean) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_LOCAL_CLIPBOARD, enabled).apply()
+        setClipboardRoutingMode(context, if (enabled) "doLocalClipboardCapture" else "normal")
     }
 
     fun isLocalFsEnabled(context: Context): Boolean {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getBoolean(KEY_LOCAL_FS, false)
+        return getFsRoutingMode(context) == "doLocalFsCapture"
     }
 
     fun setLocalFsEnabled(context: Context, enabled: Boolean) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_LOCAL_FS, enabled).apply()
+        setFsRoutingMode(context, if (enabled) "doLocalFsCapture" else "normal")
     }
 
     fun getLogHistory(): String {

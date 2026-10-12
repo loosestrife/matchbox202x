@@ -67,10 +67,11 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var action1App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 1)) }
     var action2App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 2)) }
     var action3App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 3)) }
-    var localFsEnabled by remember { mutableStateOf(XIntentClient.isLocalFsEnabled(context)) }
-    var localClipboardEnabled by remember { mutableStateOf(XIntentClient.isLocalClipboardEnabled(context)) }
-    var localTtsEnabled by remember { mutableStateOf(XIntentClient.isLocalTtsEnabled(context)) }
-    var localAudioEnabled by remember { mutableStateOf(XIntentClient.isLocalAudioEnabled(context)) }
+    var defaultRemoteDevice by remember { mutableStateOf(XIntentClient.getDefaultRemoteDevice(context)) }
+    var audioRoutingMode by remember { mutableStateOf(XIntentClient.getAudioRoutingMode(context)) }
+    var ttsRoutingMode by remember { mutableStateOf(XIntentClient.getTtsRoutingMode(context)) }
+    var clipboardRoutingMode by remember { mutableStateOf(XIntentClient.getClipboardRoutingMode(context)) }
+    var fsRoutingMode by remember { mutableStateOf(XIntentClient.getFsRoutingMode(context)) }
 
     var cardAppInput by remember { mutableStateOf("intent-test-card") }
     var cardNameInput by remember { mutableStateOf("index") }
@@ -236,73 +237,62 @@ fun MainScreen(modifier: Modifier = Modifier) {
             singleLine = true,
         )
 
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        OutlinedTextField(
+            value = defaultRemoteDevice,
+            onValueChange = { defaultRemoteDevice = it },
+            label = { Text("Default Remote Device Target") },
+            placeholder = { Text("user-desktop") },
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Checkbox(
-                checked = localFsEnabled,
-                onCheckedChange = {
-                    localFsEnabled = it
-                    XIntentClient.setLocalFsEnabled(context, it)
-                },
-            )
-            Text(
-                text = "Redirect Web Card fs.PickFile & fs.SaveAs to Local Android Storage (SAF)",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+            singleLine = true,
+        )
 
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Checkbox(
-                checked = localClipboardEnabled,
-                onCheckedChange = {
-                    localClipboardEnabled = it
-                    XIntentClient.setLocalClipboardEnabled(context, it)
-                },
-            )
-            Text(
-                text = "Redirect Web Card ui.Copy & ui.Paste to Local Android Clipboard",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        RoutingModeSelector(
+            title = "🎵 Audio Output Routing Policy (xaudio)",
+            currentMode = audioRoutingMode,
+            localOption = "doLocalAudioCapture",
+            normalOption = "normal",
+            remoteOption = "doRemoteAudioCapture",
+            onModeSelected = {
+                audioRoutingMode = it
+                XIntentClient.setAudioRoutingMode(context, it)
+            }
+        )
 
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Checkbox(
-                checked = localTtsEnabled,
-                onCheckedChange = {
-                    localTtsEnabled = it
-                    XIntentClient.setLocalTtsEnabled(context, it)
-                },
-            )
-            Text(
-                text = "Redirect Web Card ui.TextToSpeech to Local Android Phone Speech Engine (Cave Mode)",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        RoutingModeSelector(
+            title = "🗣️ Text to Speech Routing Policy (ui.TextToSpeech)",
+            currentMode = ttsRoutingMode,
+            localOption = "doLocalTtsCapture",
+            normalOption = "normal",
+            remoteOption = "doRemoteTtsCapture",
+            onModeSelected = {
+                ttsRoutingMode = it
+                XIntentClient.setTtsRoutingMode(context, it)
+            }
+        )
 
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Checkbox(
-                checked = localAudioEnabled,
-                onCheckedChange = {
-                    localAudioEnabled = it
-                    XIntentClient.setLocalAudioEnabled(context, it)
-                },
-            )
-            Text(
-                text = "Play Web Card XAudio (xaudio.PlaySoundBlob) directly through Phone Speaker",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        RoutingModeSelector(
+            title = "📋 Clipboard Routing Policy (ui.Copy / ui.Paste)",
+            currentMode = clipboardRoutingMode,
+            localOption = "doLocalClipboardCapture",
+            normalOption = "normal",
+            remoteOption = "doRemoteClipboardCapture",
+            onModeSelected = {
+                clipboardRoutingMode = it
+                XIntentClient.setClipboardRoutingMode(context, it)
+            }
+        )
+
+        RoutingModeSelector(
+            title = "📁 File System Routing Policy (fs.PickFile / fs.SaveAs)",
+            currentMode = fsRoutingMode,
+            localOption = "doLocalFsCapture",
+            normalOption = "normal",
+            remoteOption = "doRemoteFsCapture",
+            onModeSelected = {
+                fsRoutingMode = it
+                XIntentClient.setFsRoutingMode(context, it)
+            }
+        )
 
         Button(
             onClick = {
@@ -312,11 +302,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 XIntentClient.setTargetApp(context, 1, action1App)
                 XIntentClient.setTargetApp(context, 2, action2App)
                 XIntentClient.setTargetApp(context, 3, action3App)
-                XIntentClient.setLocalFsEnabled(context, localFsEnabled)
-                XIntentClient.setLocalClipboardEnabled(context, localClipboardEnabled)
-                XIntentClient.setLocalTtsEnabled(context, localTtsEnabled)
-                XIntentClient.setLocalAudioEnabled(context, localAudioEnabled)
-                Toast.makeText(context, "Saved Settings & Target Apps!", Toast.LENGTH_SHORT).show()
+                XIntentClient.setDefaultRemoteDevice(context, defaultRemoteDevice)
+                XIntentClient.setAudioRoutingMode(context, audioRoutingMode)
+                XIntentClient.setTtsRoutingMode(context, ttsRoutingMode)
+                XIntentClient.setClipboardRoutingMode(context, clipboardRoutingMode)
+                XIntentClient.setFsRoutingMode(context, fsRoutingMode)
+                Toast.makeText(context, "Saved Routing Policies & Settings!", Toast.LENGTH_SHORT).show()
                 refreshApiTags()
             },
             modifier = Modifier.fillMaxWidth(),
@@ -750,6 +741,70 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         .padding(12.dp)
                         .verticalScroll(rememberScrollState()),
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun RoutingModeSelector(
+    title: String,
+    currentMode: String,
+    localOption: String,
+    normalOption: String,
+    remoteOption: String,
+    onModeSelected: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            val isLocal = currentMode.contains("Local", ignoreCase = true)
+            val isRemote = currentMode.contains("Remote", ignoreCase = true)
+            val isNormal = !isLocal && !isRemote
+
+            Button(
+                onClick = { onModeSelected(localOption) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isLocal) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (isLocal) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Local", style = MaterialTheme.typography.bodySmall)
+            }
+
+            Button(
+                onClick = { onModeSelected(normalOption) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isNormal) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (isNormal) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Normal", style = MaterialTheme.typography.bodySmall)
+            }
+
+            Button(
+                onClick = { onModeSelected(remoteOption) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isRemote) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (isRemote) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Remote", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
