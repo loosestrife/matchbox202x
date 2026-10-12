@@ -185,11 +185,13 @@ ui.TextProcessResponse({replacementText})
 ui.TextToSpeech({text, voice, [mimeType]})
 ui.TextToSpeechResponse({BlobId})
 sys.RerouteIntent({ChannelId, recieverName, recieverHost})
+bridge.Peer({host}) // host from the whatwg url spec, instructs the bridge to peer with that host
+bridge.Unpeer({host})
 ```
 
 So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-service-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` or whatever user set the intent rerouting hotkey to and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-service-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  Because firefox currently only reads uri's, the blob has to be stowed to /tmp/xblob-bounce-buffers 
 
-
+Bridges open a proxy window when they get a `bridge.Advertise` and close the proxy window when they get a `bridge.Deadvertise`.  The stuff behind the bridge gets tagged labeled `${host}:${app.id}` instead of just `${app.id}`.
 
 ### 3.3 Canonical HTTP translation
 The usual case of xintent is `{intent: ui.Copy, Accept: *}` and a stream of `{event: ui.Paste}`.  However, for anything that COULD require anything special, xintent SHALL use the nearest http equivalent.  
