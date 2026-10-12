@@ -453,6 +453,18 @@ class CardsActivity : ComponentActivity() {
         return responseString.ifBlank { "{\"status\":\"ok\"}" }
     }
 
+    override fun onResume() {
+        super.onResume()
+        cardWebView?.onResume()
+        cardWebView?.resumeTimers()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        cardWebView?.onResume()
+        cardWebView?.resumeTimers()
+    }
+
     override fun onPause() {
         super.onPause()
         if (!isPinned) {
