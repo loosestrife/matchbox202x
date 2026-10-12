@@ -12,13 +12,23 @@ let clientWin, X, root;
  */
 const fetchAggregateToml = async () => {
   const targetWin = xintent.routerWin;
-  const atom = xintent.atoms.AGGREGATE_TOML || xintent.atoms.XINTENT_AGGREGATE_TOML;
+  if (!targetWin) return null;
+
+  let atom = xintent.atoms.AGGREGATE_TOML || xintent.atoms.XINTENT_AGGREGATE_TOML;
+  if (!atom && X) {
+    try {
+      atom = await X.InternAtom(false, 'AGGREGATE_TOML');
+      xintent.atoms.AGGREGATE_TOML = atom;
+    } catch (_) {}
+  }
+  if (!atom) return null;
 
   try {
-    logger.info('tryna get AGGREGATE_TOML');
     const prop = await X.GetProperty(0, targetWin, atom, 0, 0, 1000000);
     if (prop && prop.data && prop.data.length > 0) {
-      return prop.data.toString('utf8');
+      const rawToml = prop.data.toString('utf8');
+      logger.info(`[AGGREGATE TOML] Raw aggregate TOML:\n${rawToml}`);
+      return rawToml;
     }
   } catch (err) {
     logger.error(`[AGGREGATE TOML] Failed to fetch aggregate property: ${err.message}`);
@@ -31,11 +41,13 @@ const fetchAggregateToml = async () => {
  * Supports returning raw TOML or parsed JSON based on headers/query parameters.
  */
 const getAggregateToml = async (req, res) => {
-  console.log('call to get aggregate toml');
+  logger.info('Call to get aggregate TOML');
   const rawToml = await fetchAggregateToml();
 
   if (!rawToml) {
-    throw new HttpError(503, 'Aggregate intents manifest not available');
+    res.setHeader('Matchbox-Bridge', '1.0');
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(200).json({ intents: {} });
   }
 
   res.setHeader('Matchbox-Bridge', '1.0');
@@ -63,8 +75,13 @@ const getAggregateToml = async (req, res) => {
 
 const aggregateTomlAsObject = async () => {
   const rawToml = await fetchAggregateToml();
-  const parsedManifest = TOML.parse(rawToml);
-  return parsedManifest;
+  if (!rawToml) return { intents: {} };
+  try {
+    return TOML.parse(rawToml);
+  } catch (err) {
+    logger.error(`[AGGREGATE TOML] Failed to parse TOML string: ${err.message}`);
+    return { intents: {} };
+  }
 };
 
 const routeIntent = async (req, res) => {
@@ -117,9 +134,12 @@ const routeIntent = async (req, res) => {
   logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, logPayload);
 
   if (targetApp) {
-    const hostOrIp = server.lastKnownDeviceIps[targetApp] || (targetApp.includes(':') ? targetApp.split(':')[0] : targetApp);
-    if (hostOrIp && hostOrIp !== 'localhost' && hostOrIp !== '127.0.0.1') {
-      server.sendUdpWakePing(hostOrIp, 12346);
+    const deviceName = targetApp.includes(':') ? targetApp.split(':')[0] : targetApp;
+    const knownIpOrHost = server.lastKnownDeviceIps[deviceName] || server.lastKnownDeviceIps[targetApp];
+    const isIpAddress = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(deviceName);
+    const hostToPing = knownIpOrHost || (isIpAddress ? deviceName : null);
+    if (hostToPing && hostToPing !== 'localhost' && hostToPing !== '127.0.0.1') {
+      server.sendUdpWakePing(hostToPing, 12346);
     }
   }
 

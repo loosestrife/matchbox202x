@@ -252,9 +252,12 @@ X.on('event', async (ev) => {
         session = createWebSocketXChannel(txId, targetWs, targetSink, payload, controlWord);
         serverGlobals.channelNatTable[txId] = session;
       } else {
-        // WebSocket connection dropped or inactive: send UDP wake ping to wake up flammenwerfer!
-        const hostOrIp = serverGlobals.lastKnownDeviceIps[targetSink] || (targetSink.includes(':') ? targetSink.split(':')[0] : targetSink);
-        if (hostOrIp) {
+        // WebSocket connection dropped or inactive: send UDP wake ping if target device is a known remote IP/host
+        const deviceName = targetSink.includes(':') ? targetSink.split(':')[0] : targetSink;
+        const knownIpOrHost = serverGlobals.lastKnownDeviceIps[deviceName] || serverGlobals.lastKnownDeviceIps[targetSink];
+        const isIpAddress = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(deviceName);
+        const hostOrIp = knownIpOrHost || (isIpAddress ? deviceName : null);
+        if (hostOrIp && hostOrIp !== 'localhost' && hostOrIp !== '127.0.0.1') {
           logger.info(`[UDP 🔔] Target WebSocket '${targetSink}' inactive. Sending UDP wake ping to ${hostOrIp}:12346...`);
           serverGlobals.sendUdpWakePing(hostOrIp, 12346);
         }
@@ -388,7 +391,7 @@ wss.on('connection', (ws, request) => {
             8,
             Buffer.from(msg.manifest, 'utf8')
           );
-          logger.info(`Registered MATCHBOX_TOML manifest on proxy window ${widHex} for '${appName}' (XAudioSink: ${ws.xaudioSink})`);
+          logger.info(`Registered MATCHBOX_TOML raw manifest on proxy window ${widHex} for '${appName}' (XAudioSink: ${ws.xaudioSink}):\n${msg.manifest}`);
         }
       } else if (msg.event === 'sys.Deadvertise' || msg.intent === 'sys.Deadvertise') {
         const appName = msg.app || ws.appName || 'user-phone:flammenwerfer';

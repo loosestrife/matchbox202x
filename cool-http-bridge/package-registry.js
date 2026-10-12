@@ -28,7 +28,9 @@ function registerPackage(tomlPath) {
       return;
     }
     parsed._path = path.dirname(tomlPath);
+    parsed._rawToml = rawContent;
     packageRegistry[appId] = parsed;
+    logger.info(`Loaded app package '${appId}' raw TOML from ${tomlPath}:\n${rawContent}`);
   } catch (err) {
     logger.error(`Failed to parse TOML at ${tomlPath}:`, err.message);
   }

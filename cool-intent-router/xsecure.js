@@ -13,24 +13,27 @@ const rules = [
   {action: 'XIntent.sys.RerouteIntent', user: '*', policy: 'drop'},
 ];
 
-const checkXSecurePolicy = async (context, parsed, ev) => {
+const checkXSecurePolicy = async (context, parsed, ev, options = {}) => {
+  const XClient = options.X || context?.X;
+  const atomMap = options.atoms || context?.atoms || atoms;
   let user;
-  if (context.source.window) {
+  if (context?.source?.window && XClient && atomMap?._NET_WM_PID) {
     user = 'window';
-    // TODO: make the x11 npm module return the BadWindow to the await here
-    const prop = await X.GetProperty(0, context.source.window, atoms._NET_WM_PID, atoms.CARDINAL, 0, 100000000);
-    if (prop && prop.data && prop.data.length >= 4) {
-      context.source.pid = prop.data.readUInt32LE(0);
-      try {
-        context.source.cli = fs.readFileSync(`/proc/${context.source.pid}/cmdline`).toString('utf8');
-        user = authentication[context.source.cli] || user;
-      } catch (err) {
-        logger.warn(`Window ${widString(context.source.window)} has PID ${context.source.pid} but /proc/cmdline unreadable: ${err.message}`);
+    try {
+      const prop = await XClient.GetProperty(0, context.source.window, atomMap._NET_WM_PID, atomMap.CARDINAL, 0, 100000000);
+      if (prop && prop.data && prop.data.length >= 4) {
+        context.source.pid = prop.data.readUInt32LE(0);
+        try {
+          context.source.cli = fs.readFileSync(`/proc/${context.source.pid}/cmdline`).toString('utf8');
+          user = authentication[context.source.cli] || user;
+        } catch (err) {
+          logger.warn(`Window ${widString(context.source.window)} has PID ${context.source.pid} but /proc/cmdline unreadable: ${err.message}`);
+        }
+      } else {
+        const actionName = context.action || parsed?.payload?.intent || parsed?.payload?.event || parsed?.payload?.action || (parsed?.payload?.data && typeof parsed.payload.data === 'object' ? (parsed.payload.data.intent || parsed.payload.data.event || parsed.payload.data.action) : undefined) || 'unknown';
+        logger.warn(`Window ${widString(context.source.window)} sent request '${actionName}' without valid _NET_WM_PID property`);
       }
-    } else {
-      const actionName = context.action || parsed?.payload?.intent || parsed?.payload?.event || parsed?.payload?.action || (parsed?.payload?.data && typeof parsed.payload.data === 'object' ? (parsed.payload.data.intent || parsed.payload.data.event || parsed.payload.data.action) : undefined) || 'unknown';
-      logger.warn(`Window ${widString(context.source.window)} sent request '${actionName}' without valid _NET_WM_PID property`);
-    }
+    } catch (_) {}
   } else {
     user = 'rando';
   }

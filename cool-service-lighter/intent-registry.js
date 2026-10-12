@@ -27,6 +27,7 @@ function registerPackage(tomlPath) {
       return;
     };
     parsed._path = path.dirname(tomlPath);
+    parsed._rawToml = rawContent;
     packageRegistry[packageId] = parsed;
     if (parsed.intents) {
       for(const intentName of Object.keys(parsed.intents)){
@@ -69,7 +70,7 @@ function buildRegistries() {
       }
     }
   }
-  logger.info('Package registry built:', { intentRegistry, packageRegistry });
+  logger.info('Package registry built:', { intentRegistry, packages: Object.keys(packageRegistry) });
 }
 
 buildRegistries();

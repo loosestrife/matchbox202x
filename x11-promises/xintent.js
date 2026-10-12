@@ -31,7 +31,10 @@ const widString = (wid) => "0x" + wid.toString(16);
 
 async function getRouterWin(X, root) {
   try {
-    const candidateRouterWin = await X.GetSelectionOwner(atoms.XINTENT);
+    let candidateRouterWin = atoms.XCHANNEL ? await X.GetSelectionOwner(atoms.XCHANNEL) : 0;
+    if (!candidateRouterWin && atoms.XINTENT) {
+      candidateRouterWin = await X.GetSelectionOwner(atoms.XINTENT);
+    }
     if (!candidateRouterWin) {
       module.exports.routerWin = undefined;
       return null;
@@ -43,13 +46,10 @@ async function getRouterWin(X, root) {
       atoms.WM_NAME,
       atoms.STRING,
       0,
-      14
+      20
     );
-    if (
-      !nameProp ||
-      !nameProp.data ||
-      nameProp.data.toString("utf8").trim() !== "XINTENT_ROUTER"
-    ) {
+    const wName = nameProp && nameProp.data ? nameProp.data.toString("utf8").trim() : "";
+    if (wName !== "XCHANNEL_BUSMASTER" && wName !== "XINTENT_ROUTER") {
       module.exports.routerWin = undefined;
       return null;
     }
@@ -62,10 +62,10 @@ async function getRouterWin(X, root) {
 }
 
 async function connectToRouter(X, root) {
-  const requiredAtoms = ["XINTENT", "XINTENT_INTENT_V0"];
+  const requiredAtoms = ["XCHANNEL", "XINTENT", "XINTENT_INTENT_V0"];
   const requiredResults = await Promise.all(
     requiredAtoms.map(async (atomName) => {
-      const atom = await X.InternAtom(true, atomName);
+      const atom = await X.InternAtom(false, atomName);
       if (!atom) {
         logger.warn(`required atom ${atomName} not on server`);
       }

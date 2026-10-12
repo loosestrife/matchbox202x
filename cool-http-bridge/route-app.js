@@ -32,7 +32,7 @@ module.exports.routeApp = (req, res) => {
 
   logger.debug('packages are', Object.keys(packageRegistry));
   const package = packageRegistry[appName];
-  logger.debug('package is', package);
+  logger.debug('package raw TOML is', package?._rawToml || package);
   if (!package) throw new HttpError(400, `package ${appName} not found`);
   const app = package.app;
   logger.debug('package.app', app);

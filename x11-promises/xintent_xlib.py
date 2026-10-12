@@ -338,6 +338,7 @@ class XIntentXlibClient:
     """
 
     PROTOCOL_ATOMS = [
+        "XCHANNEL",
         "XINTENT",
         "XINTENT_INTENT_V0",
         "XINTENT_EVENT_V0",
@@ -380,14 +381,24 @@ class XIntentXlibClient:
             self.atoms[atom_name] = self.x11.intern_atom(atom_name)
 
     def connect_to_router(self) -> int:
-        """Finds xintent-router window ID from X11 selection owner for XINTENT."""
-        atom_xintent = self.atoms["XINTENT"]
-        candidate_id = self.x11.get_selection_owner(atom_xintent)
+        """Finds xintent-router or xbus-daemon window ID from X11 selection owner for XCHANNEL / XINTENT."""
+        candidate_id = 0
+        if "XCHANNEL" in self.atoms:
+            candidate_id = self.x11.get_selection_owner(self.atoms["XCHANNEL"])
+        if not candidate_id and "XINTENT" in self.atoms:
+            candidate_id = self.x11.get_selection_owner(self.atoms["XINTENT"])
+
         if candidate_id:
-            wm_name = self.x11.get_window_property_string(candidate_id, Xatom.WM_NAME)
-            if wm_name and wm_name.strip() == "XINTENT_ROUTER":
-                self.router_win_id = candidate_id
-                return candidate_id
+            try:
+                wm_name = self.x11.get_window_property_string(candidate_id, Xatom.WM_NAME)
+                if wm_name:
+                    name_clean = wm_name.strip()
+                    if name_clean in ("XCHANNEL_BUSMASTER", "XINTENT_ROUTER"):
+                        self.router_win_id = candidate_id
+                        return candidate_id
+            except Exception:
+                pass
+
         self.router_win_id = 0
         return 0
 
@@ -408,7 +419,7 @@ class XIntentXlibClient:
         if self.router_win_id:
             try:
                 wm_name = self.x11.get_window_property_string(self.router_win_id, Xatom.WM_NAME)
-                if wm_name == "XINTENT_ROUTER":
+                if wm_name and wm_name.strip() in ("XCHANNEL_BUSMASTER", "XINTENT_ROUTER"):
                     return self.router_win_id
             except Exception:
                 pass
@@ -444,18 +455,23 @@ class XIntentXlibClient:
             while self.x11.disp.pending_events():
                 events_to_check.append(self.x11.disp.next_event())
 
-            for event in events_to_check:
+            matched_idx = -1
+            for idx, event in enumerate(events_to_check):
                 if event.type == X.ClientMessage and int(event.client_type) == atom_resp:
                     data32 = _extract_event_data(event)
                     if data32 and len(data32) >= 3 and (int(data32[2]) & 0xFFFFFFFF) == (cookie & 0xFFFFFFFF):
                         blob_atom = data32[1]
+                        matched_idx = idx
                         break
 
-                # Preserve non-matching events so they are processed in order by the main event loop
-                self.pending_events_queue.append(event)
-
-            if blob_atom:
+            if matched_idx >= 0:
+                for idx, event in enumerate(events_to_check):
+                    if idx != matched_idx:
+                        self.pending_events_queue.append(event)
                 break
+            else:
+                self.pending_events_queue.extend(events_to_check)
+
             time.sleep(0.01)
 
         if not blob_atom:

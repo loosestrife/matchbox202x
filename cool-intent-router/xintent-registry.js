@@ -102,7 +102,7 @@ async function updateAggregateToml() {
       8,
       Buffer.from(tomlString, "utf8"),
     );
-    logger.info(`Updated aggregate digest TOML property on router window ${widString(routerWin)}`);
+    logger.info(`Updated aggregate digest raw TOML property on router window ${widString(routerWin)}:\n${tomlString}`);
   } catch (err) {
     logger.error("Failed to update aggregate TOML property:", err.message);
   }
@@ -134,9 +134,10 @@ async function parseWindowToml(wid) {
       1000000,
     );
     if (prop && prop.data && prop.data.length > 0) {
-      const matchboxToml = TOML.parse(prop.data.toString("utf8"));
+      const rawToml = prop.data.toString("utf8");
+      const matchboxToml = TOML.parse(rawToml);
       windowRegistry[wid] = matchboxToml;
-      logger.info(`Discovered service window ${widString(wid)} (${matchboxToml.app?.id || 'service'})`);
+      logger.info(`Discovered service window ${widString(wid)} (${matchboxToml.app?.id || 'service'}) raw TOML:\n${rawToml}`);
       let updated = false;
 
       if (matchboxToml.intents) {

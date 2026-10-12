@@ -1,21 +1,21 @@
 // cool-service-lighter/index.js
 const { spawn } = require('child_process');
+const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
 const util = require('util');
 const TOML = require('@iarna/toml');
-const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
 const x11 = require('../x11-promises/x11-promises');
 const xintent = require('../x11-promises/xintent');
 const {Logger, alStorage} = require('../server-tools');
 const pickFiles = require('./xblob-host');
 const xaudioNode = require('./xaudio-node');
-
-xintent.init({logger: new Logger({module: 'libxintent'})});
 const logger = new Logger({module: 'index.js'});
+xintent.init({logger: new Logger({module: 'libxintent'})});
 logger.setProjectName('cool-service-lighter')
 
+const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifesto} = require('./intent-registry');
 logger.info('got manifesto', TOML.stringify(xintentServicesManifesto));
 
 const hostname = os.hostname();
@@ -116,22 +116,64 @@ function spawnRuntime(cmdFile, workingDir) {
   }
 }
 
-async function ensureXIntentRouter(X, root) {
+async function ensureXBusDaemon(X, root) {
   let routerWin = await xintent.connectToRouter(X, root);
   if (!routerWin) {
-    logger.info('[cool-service-lighter] cool-intent-router not detected. Auto-launching cool-intent-router...');
-    const routerDir = path.join(__dirname, '../cool-intent-router');
-    const entryFile = path.join(routerDir, 'index.js');
+    logger.info('[cool-service-lighter] xbus-daemon not detected on XCHANNEL atom. Auto-launching xbus-daemon...');
+    const busDir = path.join(__dirname, '../xbus-daemon');
+    const busEntryFile = path.join(busDir, 'index.js');
 
-    spawnRuntime(entryFile, routerDir);
-    routerWin = await xintent.connectToRouter(X, root);
+    if (fs.existsSync(busEntryFile)) {
+      spawnRuntime(busEntryFile, busDir);
+    } else {
+      const routerDir = path.join(__dirname, '../cool-intent-router');
+      const entryFile = path.join(routerDir, 'index.js');
+      spawnRuntime(entryFile, routerDir);
+    }
+
+    // Event-driven wait: listen for X11 PropertyNotify on root window when xbus-daemon claims XCHANNEL
+    routerWin = await new Promise((resolve) => {
+      const eventHandler = async (ev) => {
+        if (ev.name === 'PropertyNotify' && ev.wid === root) {
+          const win = await xintent.connectToRouter(X, root);
+          if (win) {
+            X.removeListener('event', eventHandler);
+            resolve(win);
+          }
+        }
+      };
+
+      X.on('event', eventHandler);
+
+      // Safety fallback timeout in case process fails to launch
+      setTimeout(async () => {
+        X.removeListener('event', eventHandler);
+        resolve(await xintent.connectToRouter(X, root));
+      }, 3000);
+    });
+
     if (routerWin) {
-      logger.info(`[cool-service-lighter] Connected to auto-launched cool-intent-router (0x${routerWin.toString(16)})`);
+      logger.info(`[cool-service-lighter] Connected to auto-launched xbus-daemon (0x${routerWin.toString(16)})`);
+    } else {
+      logger.warn('[cool-service-lighter] xbus-daemon startup timed out.');
     }
   } else {
-    logger.info(`[cool-service-lighter] Connected to existing cool-intent-router (0x${routerWin.toString(16)})`);
+    logger.info(`[cool-service-lighter] Connected to existing xbus-daemon (0x${routerWin.toString(16)})`);
   }
+
+  // Once xbus-daemon is confirmed active, auto-launch cool-intent-router Policy Engine
+  const routerDir = path.join(__dirname, '../cool-intent-router');
+  const routerEntryFile = path.join(routerDir, 'index.js');
+  if (fs.existsSync(routerEntryFile)) {
+    logger.info('[cool-service-lighter] Auto-launching cool-intent-router Policy Engine...');
+    spawnRuntime(routerEntryFile, routerDir);
+  }
+
   return routerWin;
+}
+
+async function ensureXIntentRouter(X, root) {
+  return ensureXBusDaemon(X, root);
 }
 
 async function ensureHttpBridge() {
