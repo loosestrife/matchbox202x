@@ -115,6 +115,14 @@ const routeIntent = async (req, res) => {
   });
 
   logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, logPayload);
+
+  if (targetApp) {
+    const hostOrIp = server.lastKnownDeviceIps[targetApp] || (targetApp.includes(':') ? targetApp.split(':')[0] : targetApp);
+    if (hostOrIp && hostOrIp !== 'localhost' && hostOrIp !== '127.0.0.1') {
+      server.sendUdpWakePing(hostOrIp, 12346);
+    }
+  }
+
   const txId = server.getNextTxId();
   let reqControlWord = payload.controlWord;
   if (channelControlHeader) {

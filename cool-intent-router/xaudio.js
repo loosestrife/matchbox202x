@@ -6,7 +6,15 @@ const { X, root, routerWin } = require('./index.js');
 const { activeChannels, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage } = require('./xchannel');
 const { lighterAudioRegistry, windowRegistry } = require('./xintent-registry');
 
-function findXAudioSinkWindow() {
+async function findXAudioSinkWindow() {
+  if (atoms.SESSION_SPEAKERS) {
+    try {
+      const speakersOwner = await X.GetSelectionOwner(atoms.SESSION_SPEAKERS);
+      if (speakersOwner) {
+        return speakersOwner;
+      }
+    } catch (_) {}
+  }
   const lighterEntries = lighterAudioRegistry ? Object.values(lighterAudioRegistry) : [];
   const lighterEntry = lighterEntries[0];
   if (lighterEntry && lighterEntry.wid) {
@@ -70,7 +78,7 @@ const handleXAudioPlayV0 = {
       channelObj = newChannel(senderWin, channel, parsed);
     }
 
-    const sinkWin = findXAudioSinkWindow();
+    const sinkWin = await findXAudioSinkWindow();
     if (!sinkWin) {
       logger.error(`XAudioPlay: No active XAudioSink window found for sender ${widString(senderWin)}`);
       return;
@@ -105,7 +113,7 @@ const handleXAudioControlV0 = {
     const { senderWin, channel, controlWord = 1, payload, payloadBlob, dataBlob } = parsed;
 
     let channelObj = getChannelForMessage(parsed);
-    const sinkWin = (channelObj && channelObj.handlerWin) ? channelObj.handlerWin : findXAudioSinkWindow();
+    const sinkWin = (channelObj && channelObj.handlerWin) ? channelObj.handlerWin : await findXAudioSinkWindow();
 
     if (sinkWin) {
       logger.info(`[xaudio] Routing ${frameDesc(parsed)} to sink window ${widString(sinkWin)}`);

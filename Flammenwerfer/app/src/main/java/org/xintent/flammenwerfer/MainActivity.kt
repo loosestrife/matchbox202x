@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,6 +62,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
     val coroutineScope = rememberCoroutineScope()
 
     var serverUrl by remember { mutableStateOf(XIntentClient.getServerUrl(context)) }
+    var hostname by remember { mutableStateOf(XIntentClient.getHostname(context)) }
+    var udpPort by remember { mutableIntStateOf(XIntentClient.getUdpPort(context)) }
     var action1App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 1)) }
     var action2App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 2)) }
     var action3App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 3)) }
@@ -73,6 +76,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var cardNameInput by remember { mutableStateOf("index") }
 
     var testText by remember { mutableStateOf("In the beginning God created the heavens and the earth.") }
+    var peerHost by remember { mutableStateOf("user-laptop:12346") }
     var canReplace by remember { mutableStateOf(true) }
     var tagsDisplay by remember { mutableStateOf("Tap 'Fetch /api/tags' to query active desktop intents & apps.") }
     var discoveredAppCards by remember { mutableStateOf<List<XIntentClient.AppCardModel>>(emptyList()) }
@@ -80,6 +84,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var logText by remember { mutableStateOf(XIntentClient.getLogHistory()) }
     var isSending by remember { mutableStateOf(false) }
     var webSocketState by remember { mutableStateOf(XIntentClient.webSocketState) }
+    var udpState by remember { mutableStateOf(XIntentClient.udpState) }
 
     DisposableEffect(Unit) {
         val listener = {
@@ -88,11 +93,19 @@ fun MainScreen(modifier: Modifier = Modifier) {
         val wsListener = { state: XIntentClient.WebSocketState ->
             webSocketState = state
         }
+        val udpListener = { state: XIntentClient.UdpState ->
+            udpState = state
+        }
         XIntentClient.addLogListener(listener)
         XIntentClient.addWebSocketStateListener(wsListener)
+        XIntentClient.addUdpStateListener(udpListener)
+        if (XIntentClient.udpState == XIntentClient.UdpState.DISCONNECTED) {
+            XIntentClient.startUdpWakeListener(context)
+        }
         onDispose {
             XIntentClient.removeLogListener(listener)
             XIntentClient.removeWebSocketStateListener(wsListener)
+            XIntentClient.removeUdpStateListener(udpListener)
         }
     }
 
@@ -174,6 +187,26 @@ fun MainScreen(modifier: Modifier = Modifier) {
             label = { Text("Matchbox HTTP Bridge URL") },
             placeholder = { Text(XIntentClient.DEFAULT_SERVER_URL) },
             modifier = Modifier.fillMaxWidth(),
+        )
+
+        OutlinedTextField(
+            value = hostname,
+            onValueChange = { hostname = it },
+            label = { Text("Host Name") },
+            placeholder = { Text(XIntentClient.DEFAULT_HOSTNAME) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+
+        OutlinedTextField(
+            value = if (udpPort == 0) "" else udpPort.toString(),
+            onValueChange = { input ->
+                udpPort = input.filter { it.isDigit() }.toIntOrNull() ?: 0
+            },
+            label = { Text("UDP Wake-Up Port") },
+            placeholder = { Text(XIntentClient.DEFAULT_UDP_PORT.toString()) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
         )
 
         OutlinedTextField(
@@ -274,6 +307,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
         Button(
             onClick = {
                 XIntentClient.setServerUrl(context, serverUrl)
+                XIntentClient.setHostname(context, hostname)
+                XIntentClient.setUdpPort(context, if (udpPort == 0) XIntentClient.DEFAULT_UDP_PORT else udpPort)
                 XIntentClient.setTargetApp(context, 1, action1App)
                 XIntentClient.setTargetApp(context, 2, action2App)
                 XIntentClient.setTargetApp(context, 3, action3App)
@@ -306,7 +341,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     XIntentClient.WebSocketState.CONNECTED -> "🟢 Connected to Remote Intents (ws://${XIntentClient.getServerUrl(context).removePrefix("http://").removePrefix("https://")}/ws)"
                     XIntentClient.WebSocketState.CONNECTING -> "🟡 Connecting to ws://${XIntentClient.getServerUrl(context).removePrefix("http://").removePrefix("https://")}/ws..."
                     XIntentClient.WebSocketState.ERROR -> "🔴 Connection Error / Re-trying..."
-                    XIntentClient.WebSocketState.DISCONNECTED -> "⚪ Disconnected from Remote Intents"
+                    XIntentClient.WebSocketState.DISCONNECTED -> "⚪ Disconnected from Remote Intents (Zero Active WebSockets)"
                 }
                 val btnText = when (webSocketState) {
                     XIntentClient.WebSocketState.CONNECTED -> "Disconnect WebSocket"
@@ -327,7 +362,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 Button(
                     onClick = {
                         if (webSocketState == XIntentClient.WebSocketState.CONNECTED || webSocketState == XIntentClient.WebSocketState.CONNECTING) {
-                            XIntentClient.disconnectWebSocket()
+                            XIntentClient.disconnectWebSocket(context)
                         } else {
                             XIntentClient.connectWebSocket(context)
                         }
@@ -336,6 +371,45 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(btnText)
+                }
+            }
+        }
+
+        // UDP On-Demand Wake-Up Listener Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "📻 UDP On-Demand Wake-Up Listener",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                val currentPort = XIntentClient.getUdpPort(context)
+                val udpStatusText = when (udpState) {
+                    XIntentClient.UdpState.LISTENING -> "🟢 Listening for UDP wake-up pings on port $currentPort (Zero active WebSockets when idle)"
+                    XIntentClient.UdpState.ERROR -> "🔴 UDP Listener Error on port $currentPort"
+                    XIntentClient.UdpState.DISCONNECTED -> "⚪ UDP Wake Listener Disconnected"
+                }
+
+                Text(
+                    text = udpStatusText,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(
+                    onClick = {
+                        if (udpState == XIntentClient.UdpState.LISTENING) {
+                            XIntentClient.stopUdpWakeListener()
+                        } else {
+                            XIntentClient.startUdpWakeListener(context)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (udpState == XIntentClient.UdpState.LISTENING) "Stop UDP Wake Listener" else "Start UDP Wake Listener")
                 }
             }
         }
@@ -580,6 +654,64 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Test fs.SaveAs Blob Intent (--app ${action1App.ifBlank { "cool-clips" }})")
+            }
+        }
+
+        // Bridge Peering Section
+        Text(
+            text = "Bridge Peering (bridge.Peer / bridge.Unpeer)",
+            style = MaterialTheme.typography.titleMedium,
+        )
+
+        OutlinedTextField(
+            value = peerHost,
+            onValueChange = { peerHost = it },
+            label = { Text("Peer Host (e.g. user-laptop:12346)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = {
+                    if (peerHost.isNotBlank()) {
+                        isSending = true
+                        coroutineScope.launch {
+                            XIntentClient.sendBridgePeerIntent(
+                                context = context,
+                                peerHost = peerHost,
+                            )
+                            isSending = false
+                        }
+                    }
+                },
+                enabled = !isSending && peerHost.isNotBlank(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Send bridge.Peer")
+            }
+
+            Button(
+                onClick = {
+                    if (peerHost.isNotBlank()) {
+                        isSending = true
+                        coroutineScope.launch {
+                            XIntentClient.sendBridgeUnpeerIntent(
+                                context = context,
+                                peerHost = peerHost,
+                            )
+                            isSending = false
+                        }
+                    }
+                },
+                enabled = !isSending && peerHost.isNotBlank(),
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text("Send bridge.Unpeer")
             }
         }
 

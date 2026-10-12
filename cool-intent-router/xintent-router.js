@@ -32,6 +32,8 @@ const {activeChannels, txidToChannel, newChannel, closeChannel, getChannel, getC
 const {
   intentRegistry,
   lighterRegistry,
+  windowRegistry,
+  lighterAudioRegistry,
   getAllMatchboxToml,
   parseWindowToml,
   parseWindowLighterToml,
@@ -246,7 +248,35 @@ async function sendXIntentIntentV0(
  * and handling active channel lifecycles.
  */
 const xintentUnregisterWindow = async (destroyedWin) => {
-  logger.info(`Unregistering window ${widString(destroyedWin)}`);
+  const hasRegisteredIntents = Object.values(intentRegistry).some((entries) =>
+    entries.some((entry) => entry.wid === destroyedWin)
+  );
+  const hasLighterIntents = Object.values(lighterRegistry).some((entries) =>
+    entries.some((entry) => entry.wid === destroyedWin)
+  );
+  const hasWindowToml = Boolean(windowRegistry[destroyedWin]);
+  const hasLighterAudio = Object.values(lighterAudioRegistry).some(
+    (entry) => entry.wid === destroyedWin
+  );
+  const hasQueuedIntents = Object.values(intentsAwaitingServicesQueue).some(
+    (queue) => queue.some((xintent) => xintent.senderWin == destroyedWin)
+  );
+  const hasActiveChannels = Object.values(activeChannels).some(
+    (channelObj) =>
+      channelObj.senderWin === destroyedWin || channelObj.handlerWin === destroyedWin
+  );
+
+  const hasRegistrations =
+    hasRegisteredIntents ||
+    hasLighterIntents ||
+    hasWindowToml ||
+    hasLighterAudio ||
+    hasQueuedIntents ||
+    hasActiveChannels;
+
+  if (hasRegistrations) {
+    logger.info(`Unregistering window ${widString(destroyedWin)}`);
+  }
   let registryChanged = false;
 
   // 1. Remove window from intentRegistry

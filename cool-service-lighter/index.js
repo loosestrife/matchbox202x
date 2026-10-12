@@ -77,7 +77,7 @@ process.on('SIGTERM', () => forwardSignalAndExit('SIGTERM'));
 
 function checkHttpBridge(port = 12345) {
   return new Promise((resolve) => {
-    const req = http.get(`http://localhost:${port}/api/tags`, { timeout: 1000 }, (res) => {
+    const req = http.get(`http://localhost:${port}/api/tags`, { timeout: 200 }, (res) => {
       resolve(res.statusCode >= 200 && res.statusCode < 500);
     });
     req.on('error', () => resolve(false));
@@ -124,14 +124,9 @@ async function ensureXIntentRouter(X, root) {
     const entryFile = path.join(routerDir, 'index.js');
 
     spawnRuntime(entryFile, routerDir);
-
-    for (let i = 0; i < 20; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      routerWin = await xintent.connectToRouter(X, root);
-      if (routerWin) {
-        logger.info(`[cool-service-lighter] Connected to auto-launched cool-intent-router (0x${routerWin.toString(16)})`);
-        break;
-      }
+    routerWin = await xintent.connectToRouter(X, root);
+    if (routerWin) {
+      logger.info(`[cool-service-lighter] Connected to auto-launched cool-intent-router (0x${routerWin.toString(16)})`);
     }
   } else {
     logger.info(`[cool-service-lighter] Connected to existing cool-intent-router (0x${routerWin.toString(16)})`);
@@ -186,6 +181,8 @@ async function startLighter() {
   const xblobBroadcastAtom = await X.InternAtom(false, 'XBLOB_BROADCAST_V0');
   const xblobCreateResponseAtom = await X.InternAtom(false, 'XBLOB_CREATE_RESPONSE_V0');
 
+  const sessionSpeakersAtom = await X.InternAtom(false, 'SESSION_SPEAKERS');
+
   const xaudioPlaySoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PLAY_V0');
   const xaudioPrefetchSoundBlobAtom = await X.InternAtom(false, 'XAUDIO_PREFETCH_SOUND_BLOB_V0');
   const xaudioPlayStreamAtom = await X.InternAtom(false, 'XAUDIO_PLAY_STREAM_V0');
@@ -200,6 +197,9 @@ async function startLighter() {
 
   X.ChangeProperty(0, lighterWin, serviceManifestTomlAtom, X.atoms.STRING, 8, TOML.stringify(xintentServicesManifesto));
 
+  X.SetSelectionOwner(lighterWin, sessionSpeakersAtom, 0);
+  logger.info(`Claimed SESSION_SPEAKERS selection for lighterWin (0x${lighterWin.toString(16)})`);
+
 
   const pidBuf = Buffer.alloc(4);
   pidBuf.writeUInt32LE(process.pid, 0);
@@ -207,8 +207,10 @@ async function startLighter() {
   X.ChangeProperty(0, blobHostWin, netWmPidAtom, X.atoms.CARDINAL, 32, pidBuf);
   logger.info(`Registered services (0x${lighterWin.toString(16)}) and dedicated XBlobHost window (0x${blobHostWin.toString(16)})`);
 
-  await ensureXIntentRouter(X, root);
-  await ensureHttpBridge();
+  await Promise.all([
+    ensureXIntentRouter(X, root),
+    ensureHttpBridge(),
+  ]);
 
   // 4. Handle Direct Start Signals & XAudio Commands from xintent-router
   rawX.on('event', async (ev) => {

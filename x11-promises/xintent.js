@@ -107,6 +107,8 @@ async function connectToRouter(X, root) {
     "XAUDIO_SEEK_STREAM_V0",
     "XAUDIO_GET_AUDIO_OUTPUTS_V0",
 
+    "SESSION_SPEAKERS",
+
     "message/http",
   ];
 

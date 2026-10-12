@@ -84,6 +84,8 @@ app.get('/api/tags', async (req, res) => {
 app.get('/api/debug/xaudio', (req, res) => {
   res.json({
     activeStreams: getActiveAudioStreams(),
+    deviceProxyWindows: serverGlobals.deviceProxyWindows,
+    proxyWindowToDevice: serverGlobals.proxyWindowToDevice,
     activeXChannels: Object.entries(serverGlobals.channelNatTable).map(([txId, session]) => ({
       txId: Number(txId),
       type: session.type || (session.ws ? 'websocket' : 'http'),
@@ -249,6 +251,13 @@ X.on('event', async (ev) => {
       if (targetWs) {
         session = createWebSocketXChannel(txId, targetWs, targetSink, payload, controlWord);
         serverGlobals.channelNatTable[txId] = session;
+      } else {
+        // WebSocket connection dropped or inactive: send UDP wake ping to wake up flammenwerfer!
+        const hostOrIp = serverGlobals.lastKnownDeviceIps[targetSink] || (targetSink.includes(':') ? targetSink.split(':')[0] : targetSink);
+        if (hostOrIp) {
+          logger.info(`[UDP 🔔] Target WebSocket '${targetSink}' inactive. Sending UDP wake ping to ${hostOrIp}:12346...`);
+          serverGlobals.sendUdpWakePing(hostOrIp, 12346);
+        }
       }
     }
 
@@ -265,19 +274,49 @@ X.on('event', async (ev) => {
 const server = http.createServer(app);
 const wss = new WebSocket.Server({
   noServer: true,
-  handleProtocols: (protocols) => {
-    if (protocols && protocols.has && protocols.has('message/http')) return 'message/http';
-    if (protocols && Array.isArray(protocols) && protocols.includes('message/http')) return 'message/http';
-    return false;
+  handleProtocols: (protocols, req) => {
+    const list = protocols ? (Array.isArray(protocols) ? protocols : Array.from(protocols)) : [];
+    logger.info(`[handleProtocols] Negotiating subprotocols for ${req?.url}: ${JSON.stringify(list)}`);
+    for (const p of list) {
+      if (typeof p === 'string' && (p.trim() === 'message-http' || p.trim() === 'message/http')) return p;
+    }
+    return list[0] || false;
   }
 });
 
+wss.on('wsClientError', (err, socket, request) => {
+  const url = request?.url || 'unknown';
+  const clientIp = request?.socket?.remoteAddress ? request.socket.remoteAddress.replace(/^.*:/, '') : 'unknown';
+  const errMsg = err?.message || 'WebSocket upgrade failed';
+  const headersJson = JSON.stringify(request?.headers || {});
+
+  logger.warn(`[WebSocket 400] Rejected upgrade request from ${clientIp} on ${url}: ${errMsg} Headers: ${headersJson}`);
+
+  if (socket.writable) {
+    const body = String(errMsg);
+    const response =
+      `HTTP/1.1 400 Bad Request\r\n` +
+      `Connection: close\r\n` +
+      `Content-Type: text/plain; charset=utf-8\r\n` +
+      `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n` +
+      body;
+    try { socket.write(response); } catch (_) {}
+  }
+  try { socket.destroy(); } catch (_) {}
+});
+
 wss.on('connection', (ws, request) => {
+  const clientIp = request?.socket?.remoteAddress ? request.socket.remoteAddress.replace(/^.*:/, '') : null;
+  if (clientIp) {
+    ws.clientIp = clientIp;
+    if (ws.xaudioSink) serverGlobals.lastKnownDeviceIps[ws.xaudioSink] = clientIp;
+  }
+
   const sinkParam = ws.xaudioSink;
   if (ws.isXAudio || sinkParam) {
-    logger.info(`Remote XAudio WebSocket client connected (XAudioSink: ${sinkParam || 'default'})`);
+    logger.info(`Remote XAudio WebSocket client connected (XAudioSink: ${sinkParam || 'default'}, IP: ${clientIp || 'unknown'})`);
   } else {
-    logger.info('Remote WebSocket client connected');
+    logger.info(`Remote WebSocket client connected (IP: ${clientIp || 'unknown'})`);
   }
   wsClients.add(ws);
 
@@ -299,6 +338,9 @@ wss.on('connection', (ws, request) => {
       if (msg.event === 'sys.Advertise' || msg.intent === 'sys.Advertise') {
         const appName = msg.app || 'flammenwerfer-phone';
         ws.appName = appName;
+        if (ws.clientIp) {
+          serverGlobals.lastKnownDeviceIps[appName] = ws.clientIp;
+        }
         if (msg.manifest) {
           if (msg.manifest.includes('XAudioSink')) {
             const match = msg.manifest.match(/\[XAudioSink\]\s*\n\s*name\s*=\s*"([^"]+)"/);
@@ -308,16 +350,63 @@ wss.on('connection', (ws, request) => {
               ws.xaudioSink = appName;
             }
           }
+          if (ws.clientIp && ws.xaudioSink) {
+            serverGlobals.lastKnownDeviceIps[ws.xaudioSink] = ws.clientIp;
+          }
+          // Reuse existing proxy window if preserved during idle disconnect
+          const existingRecord = serverGlobals.deviceProxyWindows[appName];
+          if (!ws.proxyWin) {
+            if (existingRecord && existingRecord.wid) {
+              ws.proxyWin = existingRecord.wid;
+              logger.info(`Re-attached existing proxy X11 window ${xintent.widString(ws.proxyWin)} for '${appName}'`);
+            } else {
+              ws.proxyWin = await xintent.createClientWindow(X, root, appName);
+              logger.info(`Allocated dedicated proxy X11 window ${xintent.widString(ws.proxyWin)} for '${appName}'`);
+            }
+          }
+
+          const widHex = xintent.widString(ws.proxyWin);
+          const deviceRecord = {
+            wid: ws.proxyWin,
+            widHex,
+            appName,
+            xaudioSink: ws.xaudioSink || appName,
+            clientIp: ws.clientIp || null,
+            updatedAt: Date.now(),
+          };
+          serverGlobals.deviceProxyWindows[appName] = deviceRecord;
+          if (ws.xaudioSink) {
+            serverGlobals.deviceProxyWindows[ws.xaudioSink] = deviceRecord;
+          }
+          serverGlobals.proxyWindowToDevice[widHex] = appName;
+
           await X.ChangeProperty(
             0,
-            clientWin,
+            ws.proxyWin,
             xintent.atoms.MATCHBOX_TOML,
             xintent.atoms.STRING,
             8,
             Buffer.from(msg.manifest, 'utf8')
           );
-          await xintent.getAllMatchboxToml();
-          logger.info(`Registered MATCHBOX_TOML manifest for '${appName}' (XAudioSink: ${ws.xaudioSink})`);
+          logger.info(`Registered MATCHBOX_TOML manifest on proxy window ${widHex} for '${appName}' (XAudioSink: ${ws.xaudioSink})`);
+        }
+      } else if (msg.event === 'sys.Deadvertise' || msg.intent === 'sys.Deadvertise') {
+        const appName = msg.app || ws.appName || 'user-phone:flammenwerfer';
+        logger.info(`Received sys.Deadvertise for '${appName}'`);
+        ws.explicitDeadvertise = true;
+        if (ws.proxyWin) {
+          const widHex = xintent.widString(ws.proxyWin);
+          delete serverGlobals.proxyWindowToDevice[widHex];
+          if (appName) delete serverGlobals.deviceProxyWindows[appName];
+          if (ws.xaudioSink) delete serverGlobals.deviceProxyWindows[ws.xaudioSink];
+
+          try {
+            X.DestroyWindow(ws.proxyWin);
+            logger.info(`Destroyed dedicated proxy X11 window ${widHex} on sys.Deadvertise for '${appName}'`);
+          } catch (err) {
+            logger.error(`Error destroying proxy window for '${appName}' on sys.Deadvertise: ${err.message}`);
+          }
+          ws.proxyWin = null;
         }
       } else if (msg.event === 'XAudioPlayResponseV0' || msg.intent === 'XAudioPlayResponseV0') {
         const txId = msg.txId || msg.channel;
@@ -326,7 +415,7 @@ wss.on('connection', (ws, request) => {
           const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
 
           await sendResponseFn(X, routerWin, {
-            senderWin: clientWin,
+            senderWin: ws.proxyWin || clientWin,
             txId,
             controlWord: msg.controlWord || 1,
             payload: msg,
@@ -370,7 +459,7 @@ wss.on('connection', (ws, request) => {
         const reqDataBlob = msg.dataBlob || msg.sample || msg.blob || msg.blobId || msg.BlobId;
 
         await dispatchFn(X, routerWin, {
-          senderWin: clientWin,
+          senderWin: ws.proxyWin || clientWin,
           payload: msg,
           txId,
           controlWord: msg.controlWord || 1,
@@ -389,6 +478,23 @@ wss.on('connection', (ws, request) => {
   ws.on('close', async () => {
     logger.info(`WebSocket client disconnected (XAudioSink: ${ws.xaudioSink || ws.appName || 'none'})`);
     wsClients.delete(ws);
+
+    if (ws.proxyWin && ws.explicitDeadvertise) {
+      const widHex = xintent.widString(ws.proxyWin);
+      delete serverGlobals.proxyWindowToDevice[widHex];
+      if (ws.appName) delete serverGlobals.deviceProxyWindows[ws.appName];
+      if (ws.xaudioSink) delete serverGlobals.deviceProxyWindows[ws.xaudioSink];
+
+      try {
+        X.DestroyWindow(ws.proxyWin);
+        logger.info(`Destroyed dedicated proxy X11 window ${widHex} for '${ws.appName || 'remote-device'}' on explicit deadvertise`);
+      } catch (err) {
+        logger.error(`Error destroying proxy window for '${ws.appName}': ${err.message}`);
+      }
+      ws.proxyWin = null;
+    } else if (ws.proxyWin) {
+      logger.info(`Preserving proxy X11 window ${xintent.widString(ws.proxyWin)} for '${ws.appName || 'remote-device'}' during idle disconnect (available for UDP wake)`);
+    }
 
     for (const [txIdStr, session] of Object.entries(serverGlobals.channelNatTable)) {
       if (session.ws === ws) {
@@ -419,8 +525,19 @@ wss.on('connection', (ws, request) => {
 });
 
 server.on('upgrade', (request, socket, head) => {
+  const clientIp = (request?.socket?.remoteAddress || '').replace(/^.*:/, '');
+  const headersJson = JSON.stringify(request?.headers || {});
+  logger.info(`[WebSocket Upgrade] Incoming upgrade request from ${clientIp || 'unknown'} for URL: ${request.url} Headers: ${headersJson}`);
+
+  // RFC 6455 / RFC 2616 prohibits '/' in Sec-WebSocket-Protocol token names.
+  // Sanitize 'message/http' -> 'message-http' so Node 'ws' parser passes tokenRegex validation.
+  if (request.headers && typeof request.headers['sec-websocket-protocol'] === 'string') {
+    request.headers['sec-websocket-protocol'] = request.headers['sec-websocket-protocol'].replace(/message\/http/g, 'message-http');
+  }
+
   try {
-    const parsedUrl = new URL(request.url, `http://${request.headers.host}`);
+    const hostHeader = request.headers.host || 'localhost:12345';
+    const parsedUrl = new URL(request.url, `http://${hostHeader}`);
     const pathname = parsedUrl.pathname;
     if (pathname === '/ws' || pathname === '/remote-intents' || pathname === '/xaudio') {
       wss.handleUpgrade(request, socket, head, (ws) => {
@@ -431,9 +548,14 @@ server.on('upgrade', (request, socket, head) => {
         wss.emit('connection', ws, request);
       });
     } else {
+      logger.warn(`Rejected WebSocket upgrade for unknown path: ${pathname} from ${clientIp}`);
+      if (socket.writable) {
+        socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nPath not found');
+      }
       socket.destroy();
     }
-  } catch (_) {
+  } catch (err) {
+    logger.error(`Error during WebSocket upgrade from ${clientIp}: ${err.message}`);
     socket.destroy();
   }
 });

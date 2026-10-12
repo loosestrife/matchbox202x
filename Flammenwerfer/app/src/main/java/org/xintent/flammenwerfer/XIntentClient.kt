@@ -3,7 +3,13 @@ package org.xintent.flammenwerfer
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,6 +21,8 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -26,16 +34,26 @@ object XIntentClient {
     private const val TAG = "XIntentClient"
     private const val PREFS_NAME = "xintent_prefs"
     private const val KEY_SERVER_URL = "server_url"
+    private const val KEY_HOSTNAME = "hostname"
+    private const val KEY_UDP_PORT = "udp_wake_port"
     private const val KEY_LOCAL_FS = "use_local_fs"
     private const val KEY_LOCAL_CLIPBOARD = "use_local_clipboard"
     private const val KEY_LOCAL_TTS = "use_local_tts"
     private const val KEY_LOCAL_AUDIO = "use_local_audio"
     const val DEFAULT_SERVER_URL = "http://10.0.2.2:12345"
+    const val DEFAULT_HOSTNAME = "user-phone"
+    const val DEFAULT_UDP_PORT = 12346
 
     enum class WebSocketState {
         DISCONNECTED,
         CONNECTING,
         CONNECTED,
+        ERROR
+    }
+
+    enum class UdpState {
+        DISCONNECTED,
+        LISTENING,
         ERROR
     }
 
@@ -72,8 +90,114 @@ object XIntentClient {
         copy.forEach { it(newState) }
     }
 
+    var udpState = UdpState.DISCONNECTED
+        private set
+
+    private val udpStateListeners = mutableSetOf<(UdpState) -> Unit>()
+
+    fun addUdpStateListener(listener: (UdpState) -> Unit) {
+        synchronized(udpStateListeners) {
+            udpStateListeners.add(listener)
+        }
+        listener(udpState)
+    }
+
+    fun removeUdpStateListener(listener: (UdpState) -> Unit) {
+        synchronized(udpStateListeners) {
+            udpStateListeners.remove(listener)
+        }
+    }
+
+    private fun updateUdpState(newState: UdpState) {
+        udpState = newState
+        val copy: List<(UdpState) -> Unit>
+        synchronized(udpStateListeners) {
+            copy = udpStateListeners.toList()
+        }
+        copy.forEach { it(newState) }
+    }
+
+    fun getUdpPort(context: Context): Int {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getInt(KEY_UDP_PORT, DEFAULT_UDP_PORT)
+    }
+
+    fun setUdpPort(context: Context, port: Int) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putInt(KEY_UDP_PORT, port).apply()
+        startUdpWakeListener(context)
+    }
+
+    private var udpSocket: DatagramSocket? = null
+    private var udpJob: Job? = null
+    private val udpScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    fun startUdpWakeListener(context: Context) {
+        stopUdpWakeListener()
+        val port = getUdpPort(context)
+
+        udpJob = udpScope.launch {
+            try {
+                val socket = DatagramSocket(port)
+                udpSocket = socket
+                updateUdpState(UdpState.LISTENING)
+                addLog("[UDP 🟢] Listening for wake-up pings on UDP port $port...")
+
+                val buffer = ByteArray(1024)
+                while (isActive && !socket.isClosed) {
+                    val packet = DatagramPacket(buffer, buffer.size)
+                    socket.receive(packet)
+                    val msg = String(packet.data, 0, packet.length, Charsets.UTF_8).trim()
+                    val senderIp = packet.address?.hostAddress ?: "unknown"
+
+                    addLog("[UDP 🔔] Received wake-up ping from $senderIp:$port: ${msg.ifBlank { "ping" }}")
+
+                    if (webSocketState != WebSocketState.CONNECTED && webSocketState != WebSocketState.CONNECTING) {
+                        addLog("[UDP 🔔] Opening WebSocket to bridge on demand...")
+                        withContext(Dispatchers.Main) {
+                            connectWebSocket(context.applicationContext)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (isActive) {
+                    Log.e(TAG, "UDP wake listener error", e)
+                    updateUdpState(UdpState.ERROR)
+                    addLog("[UDP 🔴] Listener error on port $port: ${e.message ?: "Socket error"}")
+                }
+            } finally {
+                updateUdpState(UdpState.DISCONNECTED)
+            }
+        }
+    }
+
+    fun stopUdpWakeListener() {
+        try {
+            udpSocket?.close()
+        } catch (_: Exception) {}
+        udpSocket = null
+        udpJob?.cancel()
+        udpJob = null
+        updateUdpState(UdpState.DISCONNECTED)
+    }
+
+    private var wsIdleJob: Job? = null
+
+    private fun resetWsIdleTimer(context: Context) {
+        wsIdleJob?.cancel()
+        wsIdleJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(60000) // 60s idle timeout
+            if (webSocketState == WebSocketState.CONNECTED) {
+                addLog("[WebSocket ⏱] Idle timeout (60s without traffic). Closing WebSocket to maintain 0 active WebSockets.")
+                withContext(Dispatchers.Main) {
+                    disconnectWebSocket()
+                }
+            }
+        }
+    }
+
     const val FLAMMENWERFER_MANIFEST = """[app]
-id = "flammenwerfer-phone"
+id = "user-phone:flammenwerfer"
 
 [intents]
 "ui.Copy" = true
@@ -82,26 +206,64 @@ id = "flammenwerfer-phone"
 "fs.SaveAs" = true
 
 [XAudioSink]
-name = "flammenwerfer-phone"
+name = "user-phone:flammenwerfer"
 """
 
-    fun sendSysAdvertise(webSocket: WebSocket) {
+    fun getHostname(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_HOSTNAME, DEFAULT_HOSTNAME) ?: DEFAULT_HOSTNAME
+        return saved.ifBlank { DEFAULT_HOSTNAME }
+    }
+
+    fun setHostname(context: Context, hostname: String) {
+        val cleanHostname = hostname.trim()
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_HOSTNAME, cleanHostname).apply()
+    }
+
+    fun getAdvertisedName(context: Context): String {
+        val host = getHostname(context)
+        return "$host:flammenwerfer"
+    }
+
+    fun getManifest(context: Context): String {
+        val advertisedName = getAdvertisedName(context)
+        return """[app]
+id = "$advertisedName"
+
+[intents]
+"ui.Copy" = true
+"ui.Paste" = true
+"fs.PickFile" = true
+"fs.SaveAs" = true
+
+[XAudioSink]
+name = "$advertisedName"
+"""
+    }
+
+    fun sendBridgeAdvertise(context: Context, webSocket: WebSocket) {
         try {
+            val advertisedName = getAdvertisedName(context)
+            val manifest = getManifest(context)
             val advertiseJson = JSONObject().apply {
-                put("event", "sys.Advertise")
-                put("app", "flammenwerfer-phone")
-                put("manifest", FLAMMENWERFER_MANIFEST)
+                put("event", "bridge.Advertise")
+                put("app", advertisedName)
+                put("manifest", manifest)
             }
             webSocket.send(advertiseJson.toString())
-            addLog("[sys.Advertise] Advertised flammenwerfer-phone capabilities (ui.Copy, ui.Paste, fs.PickFile, fs.SaveAs, XAudioNode)")
-            Log.i(TAG, "Sent sys.Advertise over WebSocket")
+            addLog("[bridge.Advertise] Advertised $advertisedName capabilities (ui.Copy, ui.Paste, fs.PickFile, fs.SaveAs, XAudioNode)")
+            Log.i(TAG, "Sent bridge.Advertise over WebSocket for $advertisedName")
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending sys.Advertise", e)
-            addLog("[sys.Advertise 🔴] Failed to send advertisement: ${e.message}")
+            Log.e(TAG, "Error sending bridge.Advertise", e)
+            addLog("[bridge.Advertise 🔴] Failed to send advertisement: ${e.message}")
         }
     }
 
+    fun sendSysAdvertise(context: Context, webSocket: WebSocket) = sendBridgeAdvertise(context, webSocket)
+
     private fun handleWebSocketRawBytes(webSocket: WebSocket, rawBytes: ByteArray, context: Context) {
+        resetWsIdleTimer(context)
         val (jsonList, audio) = parseMultipartRawBytes(rawBytes)
         for (json in jsonList) {
             val intentName = json.optString("intent", json.optString("event", ""))
@@ -143,22 +305,24 @@ name = "flammenwerfer-phone"
         }
 
         val httpUrl = getServerUrl(context)
-        val wsUrl = httpUrl.replace("http://", "ws://").replace("https://", "wss://") + "/xaudio?XAudioSink=flammenwerfer-phone"
+        val advertisedName = getAdvertisedName(context)
+        val wsUrl = httpUrl.replace("http://", "ws://").replace("https://", "wss://") + "/xaudio?XAudioSink=$advertisedName"
 
         addLog("[WebSocket] Connecting to Remote Intents at $wsUrl...")
         updateWebSocketState(WebSocketState.CONNECTING)
 
         val request = Request.Builder()
             .url(wsUrl)
-            .addHeader("Sec-WebSocket-Protocol", "message/http")
+            .addHeader("Sec-WebSocket-Protocol", "message-http")
             .build()
 
         activeWebSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i(TAG, "WebSocket connected to $wsUrl with message/http subprotocol")
-                addLog("[WebSocket 🟢] Connected to $wsUrl (message/http)")
+                Log.i(TAG, "WebSocket connected to $wsUrl with message-http subprotocol")
+                addLog("[WebSocket 🟢] Connected to $wsUrl (message-http)")
                 updateWebSocketState(WebSocketState.CONNECTED)
-                sendSysAdvertise(webSocket)
+                sendBridgeAdvertise(context, webSocket)
+                resetWsIdleTimer(context)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -182,15 +346,48 @@ name = "flammenwerfer-phone"
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}", t)
-                addLog("[WebSocket 🔴] Connection failed: ${t.message ?: "Network error"}")
+                val bodyStr = try {
+                    response?.body?.string()?.trim()
+                } catch (_: Exception) {
+                    null
+                }
+                val details = if (!bodyStr.isNullOrBlank()) {
+                    "${t.message ?: "Network error"} | Server Response Body: $bodyStr"
+                } else {
+                    t.message ?: "Network error"
+                }
+                addLog("[WebSocket 🔴] Connection failed: $details")
                 updateWebSocketState(WebSocketState.ERROR)
             }
         })
     }
 
-    fun disconnectWebSocket() {
+    fun sendBridgeDeadvertise(context: Context, webSocket: WebSocket) {
+        try {
+            val advertisedName = getAdvertisedName(context)
+            val deadvertiseJson = JSONObject().apply {
+                put("event", "bridge.Deadvertise")
+                put("app", advertisedName)
+            }
+            webSocket.send(deadvertiseJson.toString())
+            addLog("[bridge.Deadvertise] Sent deadvertise for $advertisedName")
+            Log.i(TAG, "Sent bridge.Deadvertise over WebSocket for $advertisedName")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending bridge.Deadvertise", e)
+            addLog("[bridge.Deadvertise 🔴] Failed to send deadvertise: ${e.message}")
+        }
+    }
+
+    fun sendSysDeadvertise(context: Context, webSocket: WebSocket) = sendBridgeDeadvertise(context, webSocket)
+
+    fun disconnectWebSocket(context: Context? = null) {
         addLog("[WebSocket ⏹] Disconnecting...")
-        activeWebSocket?.close(1000, "User requested disconnect")
+        activeWebSocket?.let { ws ->
+            if (context != null) {
+                sendBridgeDeadvertise(context, ws)
+            }
+            ws.close(1000, "User requested disconnect")
+        }
         activeWebSocket = null
         updateWebSocketState(WebSocketState.DISCONNECTED)
     }
@@ -1167,6 +1364,112 @@ name = "flammenwerfer-phone"
                 success = false,
                 errorMessage = errorDetail,
             )
+        }
+    }
+
+    suspend fun sendBridgePeerIntent(
+        context: Context,
+        peerHost: String,
+        targetApp: String = "cool-http-bridge",
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/bridge/Peer?app=$targetApp"
+
+        val logPrefix = "[bridge.Peer -> $peerHost]"
+        addLog("$logPrefix Peering bridge with $peerHost")
+
+        try {
+            val jsonBody = JSONObject().apply {
+                put("intent", "bridge.Peer")
+                put("host", peerHost)
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8000
+                readTimeout = 15000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val responseText = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8")).readText()
+
+            Log.i(TAG, "Sent bridge.Peer [$responseCode]: $responseText")
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode): $responseText")
+                Result(success = true, statusCode = responseCode, responseBody = responseText)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode): $responseText")
+                Result(success = false, statusCode = responseCode, responseBody = responseText, errorMessage = "HTTP $responseCode: $responseText")
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending bridge.Peer to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            Result(success = false, errorMessage = errorDetail)
+        }
+    }
+
+    suspend fun sendBridgeUnpeerIntent(
+        context: Context,
+        peerHost: String,
+        targetApp: String = "cool-http-bridge",
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/bridge/Unpeer?app=$targetApp"
+
+        val logPrefix = "[bridge.Unpeer -> $peerHost]"
+        addLog("$logPrefix Unpeering bridge with $peerHost")
+
+        try {
+            val jsonBody = JSONObject().apply {
+                put("intent", "bridge.Unpeer")
+                put("host", peerHost)
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8000
+                readTimeout = 15000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val responseText = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8")).readText()
+
+            Log.i(TAG, "Sent bridge.Unpeer [$responseCode]: $responseText")
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode): $responseText")
+                Result(success = true, statusCode = responseCode, responseBody = responseText)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode): $responseText")
+                Result(success = false, statusCode = responseCode, responseBody = responseText, errorMessage = "HTTP $responseCode: $responseText")
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending bridge.Unpeer to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            Result(success = false, errorMessage = errorDetail)
         }
     }
 }

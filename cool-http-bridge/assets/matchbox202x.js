@@ -374,11 +374,19 @@
       const wsUrl = `${wsProtocol}//${window.location.host}/xaudio?XAudioSink=${encodeURIComponent(sinkName)}`;
 
       try {
-        const ws = new WebSocket(wsUrl, 'message/http');
+        const ws = new WebSocket(wsUrl, 'message-http');
         this._ws = ws;
 
-        ws.onopen = () => {
-          console.log('[xaudio] Real-time message/http WebSocket connected to /xaudio');
+        ws.onerror = (errEv) => {
+          const details = [];
+          if (errEv) {
+            if (errEv.message) details.push(`message=${errEv.message}`);
+            if (errEv.name) details.push(`name=${errEv.name}`);
+            if (errEv.code) details.push(`code=${errEv.code}`);
+            if (errEv.type) details.push(`type=${errEv.type}`);
+          }
+          const detailStr = details.length > 0 ? details.join(', ') : String(errEv);
+          console.warn(`[xaudio] WebSocket error on ${wsUrl}: ${detailStr}`, errEv);
         };
 
         ws.onmessage = (event) => {
@@ -409,7 +417,15 @@
 
         return ws;
       } catch (err) {
-        console.warn('[xaudio] Could not establish /xaudio WebSocket:', err);
+        const errDetails = [];
+        if (err) {
+          if (err.message) errDetails.push(`message=${err.message}`);
+          if (err.name) errDetails.push(`name=${err.name}`);
+          if (err.code) errDetails.push(`code=${err.code}`);
+          if (err.stack) errDetails.push(`stack=${err.stack}`);
+        }
+        const errStr = errDetails.length > 0 ? errDetails.join(', ') : String(err);
+        console.warn(`[xaudio] Could not establish /xaudio WebSocket to ${wsUrl}: ${errStr}`, err);
         return null;
       }
     },

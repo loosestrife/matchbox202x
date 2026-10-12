@@ -183,18 +183,9 @@ class CardsActivity : ComponentActivity() {
         window.XIntentNative.logMessage(recvLogMsg);
       }
 
-      try {
-        response.clone().arrayBuffer().then(function(buf) {
-          var bytesCount = buf ? buf.byteLength : 0;
-          var sizeLogMsg = '[XIntent HTTP 📊] Response body payload size for ' + intentName + ': ' + bytesCount + ' bytes';
-          console.log(sizeLogMsg);
-          if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') {
-            window.XIntentNative.logMessage(sizeLogMsg);
-          }
-        }).catch(function(err) {
-          console.warn('[XIntent HTTP] Could not read cloned response buffer:', err);
-        });
-      } catch (_) {}
+      response.readMultipartStream = async function(onFrame) {
+        return window.xintent.readMultipartStream(this, onFrame);
+      };
 
       response.parseMultipart = async function() {
         var totalBytes = 0;
@@ -350,6 +341,119 @@ class CardsActivity : ComponentActivity() {
         }
       }
       return parts;
+    },
+
+    readMultipartStream: async function(response, onFrame) {
+      if (!response || !response.body) return;
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder('utf-8');
+      var buffer = '';
+      var boundary = null;
+      var totalBytesReceived = 0;
+      var chunkCount = 0;
+
+      response.getBytesReceived = function() { return totalBytesReceived; };
+      response.getChunkCount = function() { return chunkCount; };
+      window.xintent.lastStreamMetrics = {
+        getBytesReceived: function() { return totalBytesReceived; },
+        getChunkCount: function() { return chunkCount; }
+      };
+
+      while (true) {
+        var res = await reader.read();
+        if (res.value) {
+          totalBytesReceived += res.value.byteLength;
+          chunkCount++;
+          buffer += decoder.decode(res.value, { stream: true });
+        }
+
+        if (!boundary && buffer.includes('MatchboxFrameBoundary')) {
+          var lines = buffer.split(/\r?\n/);
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (line.includes('MatchboxFrameBoundary')) {
+              var b = line.trim();
+              if (b.startsWith('--')) b = b.slice(2);
+              if (b.endsWith('--')) b = b.slice(0, -2);
+              boundary = b;
+              break;
+            }
+          }
+        }
+
+        if (boundary) {
+          var delimiter = '--' + boundary;
+          var parts = buffer.split(delimiter);
+          var remainingBuffer = parts.pop() || '';
+
+          for (var j = 0; j < parts.length; j++) {
+            var part = parts[j];
+            var trimmed = part.trim();
+            if (!trimmed || trimmed === '--' || trimmed.startsWith('--')) continue;
+
+            var headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
+            if (headerEnd === -1) continue;
+
+            var headerText = part.slice(0, headerEnd);
+            var bodyText = part.slice(headerEnd).trim();
+
+            var headers = {};
+            headerText.split(/\r?\n/).forEach(function(l) {
+              var colon = l.indexOf(':');
+              if (colon !== -1) {
+                headers[l.slice(0, colon).trim().toLowerCase()] = l.slice(colon + 1).trim();
+              }
+            });
+
+            var json = null;
+            try { json = JSON.parse(bodyText); } catch (_) {}
+
+            if (typeof onFrame === 'function') {
+              onFrame({ headers: headers, json: json, body: bodyText });
+            }
+          }
+
+          var remainingTrimmed = remainingBuffer.trim();
+          if (remainingTrimmed && remainingTrimmed !== '--' && !remainingTrimmed.startsWith('--')) {
+            var hEnd = remainingBuffer.indexOf('\r\n\r\n') !== -1 ? remainingBuffer.indexOf('\r\n\r\n') : remainingBuffer.indexOf('\n\n');
+            if (hEnd !== -1) {
+              var hText = remainingBuffer.slice(0, hEnd);
+              var bText = remainingBuffer.slice(hEnd).trim();
+              var rJson = null;
+              try {
+                rJson = JSON.parse(bText);
+                if (rJson) {
+                  var rHeaders = {};
+                  hText.split(/\r?\n/).forEach(function(l) {
+                    var colon = l.indexOf(':');
+                    if (colon !== -1) {
+                      rHeaders[l.slice(0, colon).trim().toLowerCase()] = l.slice(colon + 1).trim();
+                    }
+                  });
+                  if (typeof onFrame === 'function') {
+                    onFrame({ headers: rHeaders, json: rJson, body: bText });
+                  }
+                  remainingBuffer = '';
+                }
+              } catch (_) {}
+            }
+          }
+
+          buffer = remainingBuffer;
+        }
+
+        if (res.done) {
+          if (buffer.trim()) {
+            var finalParts = window.xintent.parseMultipartResponse(buffer);
+            for (var m = 0; m < finalParts.length; m++) {
+              if (typeof onFrame === 'function') {
+                try { onFrame(finalParts[m]); } catch(_) {}
+              }
+            }
+          }
+          break;
+        }
+      }
     }
   };
 
@@ -366,16 +470,28 @@ class CardsActivity : ComponentActivity() {
 
       var wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
       var host = window.location.host || 'localhost:12345';
-      var sink = sinkName || 'user-desktop-speakers';
+      var sink = (sinkName && sinkName !== 'default') ? sinkName : 'user-desktop-speakers';
       var wsUrl = wsProtocol + '//' + host + '/xaudio?XAudioSink=' + encodeURIComponent(sink);
 
       try {
-        var ws = new WebSocket(wsUrl, 'message/http');
+        var ws = new WebSocket(wsUrl, 'message-http');
         this._ws = ws;
         var self = this;
 
         ws.onopen = function() {
           console.log('[xaudio] Real-time message/http WebSocket connected to ' + wsUrl);
+        };
+
+        ws.onerror = function(errEv) {
+          var details = [];
+          if (errEv) {
+            if (errEv.message) details.push('message=' + errEv.message);
+            if (errEv.name) details.push('name=' + errEv.name);
+            if (errEv.code) details.push('code=' + errEv.code);
+            if (errEv.type) details.push('type=' + errEv.type);
+          }
+          var detailStr = details.length > 0 ? details.join(', ') : String(errEv);
+          console.warn('[xaudio] WebSocket error on ' + wsUrl + ': ' + detailStr, errEv);
         };
 
         ws.onmessage = function(event) {
@@ -406,7 +522,15 @@ class CardsActivity : ComponentActivity() {
 
         return ws;
       } catch (err) {
-        console.warn('[xaudio] Could not establish WebSocket:', err);
+        var errDetails = [];
+        if (err) {
+          if (err.message) errDetails.push('message=' + err.message);
+          if (err.name) errDetails.push('name=' + err.name);
+          if (err.code) errDetails.push('code=' + err.code);
+          if (err.stack) errDetails.push('stack=' + err.stack);
+        }
+        var errStr = errDetails.length > 0 ? errDetails.join(', ') : String(err);
+        console.warn('[xaudio] Could not establish WebSocket to ' + wsUrl + ': ' + errStr, err);
         return null;
       }
     },

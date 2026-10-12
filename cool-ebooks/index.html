@@ -178,7 +178,8 @@
       <div style="display: flex; align-items: center; gap: 6px;">
         <label for="xaudio-node-select">🔊 Audio Sink:</label>
         <select id="xaudio-node-select">
-          <option value="user-desktop-speakers" selected>user-desktop-speakers (Desktop Speaker)</option>
+          <option value="default" selected>Default (SESSION_SPEAKERS)</option>
+          <option value="user-desktop-speakers">user-desktop-speakers (Desktop Speaker)</option>
           <option value="flammenwerfer-phone">flammenwerfer-phone (Phone Speaker)</option>
         </select>
       </div>
@@ -335,17 +336,26 @@ async function populateTagsOptions() {
 
       // 2. Populate XAudioSink / XAudioNode options
       const sinks = Object.keys(tags.XAudioSink || tags.XAudioNode || {});
-      if (sinks.length > 0 && xaudioNodeSelect) {
-        const currentSink = xaudioNodeSelect.value;
+      if (xaudioNodeSelect) {
+        const currentSink = xaudioNodeSelect.value || 'default';
         xaudioNodeSelect.innerHTML = '';
+
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = 'default';
+        defaultOpt.textContent = 'Default (SESSION_SPEAKERS)';
+        xaudioNodeSelect.appendChild(defaultOpt);
+
         sinks.forEach(s => {
           const opt = document.createElement('option');
           opt.value = s;
           opt.textContent = `${s} ${s.includes('phone') ? '(Phone Speaker)' : '(Desktop Speaker)'}`;
           xaudioNodeSelect.appendChild(opt);
         });
-        if (sinks.includes(currentSink)) {
+
+        if (['default', ...sinks].includes(currentSink)) {
           xaudioNodeSelect.value = currentSink;
+        } else {
+          xaudioNodeSelect.value = 'default';
         }
       }
     }
@@ -367,7 +377,7 @@ function handleXAudioFrame(frameData, source = 'ws') {
   if (evt === 'XAudioPlayResponseV0' || evt === 'xaudio.PlaySoundBlobResponse' || json.seqnum !== undefined) {
     const seqnum = json.seqnum;
     if (seqnum !== undefined && chunkPlaybackResolvers.has(seqnum)) {
-      const targetNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'user-desktop-speakers' : 'user-desktop-speakers';
+      const targetNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'default' : 'default';
       logDebug(`[XAudioPlayResponse (${source})] ${targetNode} confirmed playback for seq #${seqnum + 1}`);
       const resolveFn = chunkPlaybackResolvers.get(seqnum);
       chunkPlaybackResolvers.delete(seqnum);
@@ -421,7 +431,7 @@ window.coolEbooks = {
 // Dispatch a single chunk to ui.TextToSpeech and stream audio to XAudioSink
 async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
   const targetTtsApp = ttsAppSelect ? ttsAppSelect.value || 'cool-tts' : 'cool-tts';
-  const targetXAudioNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'user-desktop-speakers' : 'user-desktop-speakers';
+  const targetXAudioNode = xaudioNodeSelect ? xaudioNodeSelect.value || 'default' : 'default';
 
   const wordCount = (text || '').trim().split(/\s+/).filter(Boolean).length;
   const startTime = performance.now();
@@ -498,8 +508,7 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
           transferBlob: true
         });
 
-        if (playRes && typeof playRes.readMultipartStream === 'function' && !sessionMasterStream) {
-          sessionMasterStream = playRes;
+        if (playRes && typeof playRes.readMultipartStream === 'function') {
           listenToSessionMasterStream(playRes, targetXAudioNode);
         }
 

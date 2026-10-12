@@ -165,6 +165,9 @@ async function parseWindowToml(wid) {
       }
     }
   } catch (err) {
+    if (err?.message?.toLowerCase().includes("bad window") || err?.message?.toLowerCase().includes("badwindow")) {
+      return;
+    }
     logger.error(
       `Failed parsing TOML on window ${widString(wid)}:`,
       err.message,
@@ -186,11 +189,12 @@ async function parseWindowLighterToml(wid) {
     if (!prop || !prop.data || prop.data.length === 0) {
       return;
     }
-    const toml = TOML.parse(prop.data.toString("utf8"));
+    const rawToml = prop.data.toString("utf8");
+    const toml = TOML.parse(rawToml);
     logger.info(
       "got SERVICE_MANIFEST_TOML from window",
       widString(wid),
-      toml,
+      rawToml,
     );
     const computer = toml.computer;
     let updated = false;
@@ -223,6 +227,9 @@ async function parseWindowLighterToml(wid) {
       await updateAggregateToml();
     }
   } catch (err) {
+    if (err?.message?.toLowerCase().includes("bad window") || err?.message?.toLowerCase().includes("badwindow")) {
+      return;
+    }
     logger.error(
       `Failed parsing lighter TOML on window ${widString(wid)}:`,
       err.message,
