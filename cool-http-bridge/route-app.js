@@ -31,7 +31,8 @@ module.exports.routeApp = (req, res) => {
   }
 
   logger.debug('packages are', Object.keys(packageRegistry));
-  const package = packageRegistry[appName];
+  const package = packageRegistry[appName] ||
+    Object.values(packageRegistry).find(p => p.app?.id === appName || path.basename(p._path) === appName || path.basename(p._path).replace(/s$/, '') === appName.replace(/s$/, ''));
   logger.debug('package raw TOML is', package?._rawToml || package);
   if (!package) throw new HttpError(400, `package ${appName} not found`);
   const app = package.app;

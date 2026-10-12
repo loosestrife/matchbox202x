@@ -124,6 +124,12 @@ const routeIntent = async (req, res) => {
     payload.headers['Prefer'] = req.headers['prefer'];
   }
 
+  const connectionReqHeader = req.headers['connection'];
+  if (connectionReqHeader) {
+    payload.headers = payload.headers || {};
+    payload.headers['Connection'] = connectionReqHeader;
+  }
+
   // Store intent context in AsyncLocalStorage so all error logs include the intent JSON
   logger.setContext({
     intent,

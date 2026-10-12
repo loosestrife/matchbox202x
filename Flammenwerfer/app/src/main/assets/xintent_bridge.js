@@ -64,6 +64,40 @@
       return await res.json();
     },
 
+    readMultipartStream: async function(response, onFrame) {
+      if (!response || !response.body) return;
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder('utf-8');
+      var buffer = '';
+      while (true) {
+        var res = await reader.read();
+        if (res.done) break;
+        buffer += decoder.decode(res.value, { stream: true });
+        var lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (line) {
+            try {
+              var frame = JSON.parse(line);
+              if (onFrame) onFrame(frame);
+            } catch (_) {}
+          }
+        }
+      }
+    },
+
+    parseMultipartResponse: function(text) {
+      var parts = [];
+      if (!text) return parts;
+      try {
+        parts.push({ headers: {}, json: JSON.parse(text) });
+      } catch (_) {
+        parts.push({ headers: {}, body: text });
+      }
+      return parts;
+    },
+
     intent: async function(intentName, payload, targetApp) {
       var audioMode = window.xintent.getAudioMode();
       var ttsMode = window.xintent.getTtsMode();
@@ -132,7 +166,7 @@
       }
 
       if (intentName === 'fs.PickFile') {
-        if (fsMode === 'doLocalFsCapture') {
+        if (fsMode === 'doLocalFsCapture' || targetApp === 'flammenwerfer-phone' || (window.XIntentNative && fsMode !== 'doRemoteFsCapture')) {
           var logMsg = '[XIntent Local 📁] Handling fs.PickFile locally via Android document picker';
           console.log(logMsg);
           if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') window.XIntentNative.logMessage(logMsg);
@@ -186,6 +220,13 @@
         if (ctrlStrings.length > 0) {
           headers['X-Channel-Control'] = ctrlStrings.join(',');
         }
+      }
+
+      if (payload && payload.headers && typeof payload.headers === 'object') {
+        Object.assign(headers, payload.headers);
+      }
+      if (payload && (payload.Connection || payload.connection)) {
+        headers['Connection'] = payload.Connection || payload.connection;
       }
 
       var sendLogMsg = '[XIntent HTTP ➡️] Sending ' + intentName + ' to ' + url + ' (targetApp: ' + app + ')';

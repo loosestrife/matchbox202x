@@ -47,16 +47,33 @@ async function resolveBlobToFilePath(blobAtom) {
   return filePath;
 }
 
-function stopProcess(cookie) {
-  if (playbackQueues.has(cookie)) {
-    playbackQueues.delete(cookie);
+function stopProcess(cookie, channel = 0) {
+  const keysToStop = new Set();
+  if (cookie) keysToStop.add(cookie);
+
+  if (channel > 0) {
+    for (const [k, q] of playbackQueues.entries()) {
+      if (q.channel === channel) keysToStop.add(k);
+      for (const item of q.pending.values()) {
+        if (item.channel === channel) keysToStop.add(k);
+      }
+    }
   }
-  if (activeProcesses.has(cookie)) {
-    const proc = activeProcesses.get(cookie);
-    try {
-      proc.kill('SIGTERM');
-    } catch (_) {}
-    activeProcesses.delete(cookie);
+
+  if (!playbackQueues.has(cookie) && !activeProcesses.has(cookie) && keysToStop.size <= 1) {
+    for (const k of playbackQueues.keys()) keysToStop.add(k);
+    for (const k of activeProcesses.keys()) keysToStop.add(k);
+  }
+
+  for (const k of keysToStop) {
+    playbackQueues.delete(k);
+    if (activeProcesses.has(k)) {
+      const proc = activeProcesses.get(k);
+      try {
+        proc.kill('SIGTERM');
+      } catch (_) {}
+      activeProcesses.delete(k);
+    }
   }
 }
 
@@ -119,11 +136,13 @@ async function processQueue(cookie) {
       try {
         if (senderWin) {
           const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
+          const isQueueEmpty = queue.pending.size === 0;
+          const responseControlWord = (isQueueEmpty && !queue.lastKeepAlive) ? 2 : 1; // 2 = FIN if queue empty & no keep-alive
           await sendResponseFn(X, xintent.routerWin, {
             targetWin: senderWin,
             senderWin: lighterWin,
             channel: channel || 0,
-            controlWord: 1, // SYN (keep channel open for subsequent stream chunks)
+            controlWord: responseControlWord,
             payload: {
               event: 'XAudioPlayResponseV0',
               intent: 'XAudioPlayResponseV0',
@@ -165,11 +184,18 @@ async function playSoundBlob(payload, senderWin, dataBlob, channel = 0) {
     playbackQueues.set(cookie, {
       nextSeqnum: seqnum !== null ? seqnum : 0,
       pending: new Map(),
-      isPlaying: false
+      isPlaying: false,
+      lastKeepAlive: false,
+      channel: channel
     });
   }
 
+  const reqHeaders = payload.headers || {};
+  const connHeader = (reqHeaders['Connection'] || reqHeaders['connection'] || payload.Connection || payload.connection || '').toLowerCase();
+  const isKeepAlive = connHeader === 'keep-alive' || payload.keepAlive === true;
+
   const queue = playbackQueues.get(cookie);
+  queue.lastKeepAlive = isKeepAlive;
   const targetSeqnum = seqnum !== null ? seqnum : (queue.pending.size + queue.nextSeqnum + (queue.isPlaying ? 1 : 0));
 
   if (targetSeqnum < queue.nextSeqnum) {
@@ -225,14 +251,18 @@ async function playStream(payload, senderWin) {
   return playSoundBlob(payload, senderWin);
 }
 
-async function controlStream(payload) {
+async function controlStream(payload, channel = 0, controlWord = 0) {
   const { command, cookie, Cookie, OutputId, outputId, BlobId, streamId } = payload;
   const key = cookie || Cookie || OutputId || outputId || (streamId ? String(streamId) : null) || String(BlobId) || 'default';
-  logger.info(`[XAudioSink] XAudioControlStream command=${command} for key=${key}`);
+  const reqControlWord = controlWord || payload.controlWord || 0;
+  const isFin = (reqControlWord & 2) !== 0 ||
+    String(payload.headers?.['x-channel-control'] || payload.headers?.['X-Channel-Control'] || '').includes('FIN');
 
-  if (command === 'stop' || command === 'pause') {
-    stopProcess(key);
-    return { status: 'ok', command };
+  logger.info(`[XAudioSink] XAudioControlStream command=${command} for key=${key} (channel=${channel}, controlWord=${reqControlWord}, isFin=${isFin})`);
+
+  if (command === 'stop' || command === 'pause' || isFin) {
+    stopProcess(key, channel);
+    return { status: 'ok', command: command || 'stop', isFin };
   }
   return { status: 'ok', command };
 }

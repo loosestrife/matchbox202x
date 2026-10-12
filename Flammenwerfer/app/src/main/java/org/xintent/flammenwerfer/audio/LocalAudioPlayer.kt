@@ -22,6 +22,7 @@ data class LocalAudioChunk(
     val cookie: String,
     val tempAudioFile: File,
     val sizeBytes: Int,
+    val keepAlive: Boolean = false,
 )
 
 class LocalAudioPlayer(
@@ -131,7 +132,14 @@ class LocalAudioPlayer(
 
             if (tempAudioFile != null && tempAudioFile.exists()) {
                 val fileSize = tempAudioFile.length().toInt()
-                val chunk = LocalAudioChunk(seqnum, streamId, cookie, tempAudioFile, fileSize)
+                val headersObj = json.optJSONObject("headers")
+                val connHeader = headersObj?.optString("Connection")
+                    ?: headersObj?.optString("connection")
+                    ?: json.optString("Connection")
+                    ?: json.optString("connection")
+                val keepAlive = connHeader.equals("keep-alive", ignoreCase = true) || json.optBoolean("keepAlive", false)
+
+                val chunk = LocalAudioChunk(seqnum, streamId, cookie, tempAudioFile, fileSize, keepAlive)
                 localAudioQueue.add(chunk)
 
                 XIntentClient.addLog("[xaudio.PlaySoundBlob] Queued phone speaker audio seq #$seqnum ($fileSize bytes). Queue size: ${localAudioQueue.size}")
@@ -221,6 +229,9 @@ class LocalAudioPlayer(
                 setOnCompletionListener { _ ->
                     XIntentClient.addLog("[xaudio.PlaySoundBlob] Finished playing seq #${chunk.seqnum} on phone speaker")
 
+                    val isQueueEmpty = localAudioQueue.isEmpty()
+                    val controlWord = if (isQueueEmpty && !chunk.keepAlive) 2 else 1 // 2 = FIN if queue empty & no keep-alive
+
                     val responseJson = JSONObject().apply {
                         put("event", "XAudioPlayResponseV0")
                         put("intent", "XAudioPlayResponseV0")
@@ -229,6 +240,7 @@ class LocalAudioPlayer(
                         put("OutputId", chunk.cookie)
                         put("streamId", chunk.streamId)
                         put("seqnum", chunk.seqnum)
+                        put("controlWord", controlWord)
                     }
 
                     onDispatchJsResponse(responseJson)

@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -16,6 +17,7 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.util.Log
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -385,7 +387,10 @@ class CardsActivity : ComponentActivity() {
             try {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
-                    type = acceptMime
+                    type = "*/*"
+                    if (acceptMime.isNotBlank() && acceptMime != "*/*") {
+                        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(acceptMime, "application/octet-stream", "application/zip", "*/*"))
+                    }
                 }
                 pendingPickCallback = { res ->
                     responseString = res
@@ -472,10 +477,6 @@ class CardsActivity : ComponentActivity() {
 
         cardWebView?.apply {
             stopLoading()
-            clearHistory()
-            clearCache(true)
-            loadUrl("about:blank")
-            onPause()
             removeAllViews()
             destroy()
         }
@@ -566,6 +567,11 @@ fun CardScreen(
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
                             view?.evaluateJavascript(jsBridgeScript, null)
+                        }
+
+                        @SuppressLint("WebViewClientOnReceivedSslError")
+                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                            handler?.proceed()
                         }
                     }
                     webChromeClient = WebChromeClient()

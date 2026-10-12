@@ -4,6 +4,21 @@ let book;
 let rendition;
 let isFlipping = false;
 
+// Helper to construct a valid IDPF EPUB CFI Range string from start and end CFIs
+function makeCfiRange(startCfi, endCfi) {
+  if (!startCfi || !endCfi) return startCfi;
+  try {
+    const s = startCfi.replace(/^epubcfi\(/, '').replace(/\)$/, '');
+    const e = endCfi.replace(/^epubcfi\(/, '').replace(/\)$/, '');
+    const sParts = s.split('!');
+    const eParts = e.split('!');
+    if (sParts.length === 2 && eParts.length === 2 && sParts[0] === eParts[0]) {
+      return `epubcfi(${sParts[0]}!,${sParts[1]},${eParts[1]})`;
+    }
+  } catch (_) {}
+  return startCfi;
+}
+
 // Extract text starting from top of visible page
 function getVisiblePageText() {
   if (!rendition) return "";
@@ -18,17 +33,55 @@ function getVisiblePageText() {
     const viewportHeight = iframeWin.innerHeight || doc.documentElement.clientHeight;
     const viewportWidth = iframeWin.innerWidth || doc.documentElement.clientWidth;
 
-    // Extract text from text elements visible in current viewport, starting from top
+    // 1. Primary: Use EPUB CFI Range constructed from rendition.currentLocation()
+    const location = rendition.currentLocation();
+    if (location && location.start && location.start.cfi && location.end && location.end.cfi) {
+      try {
+        const cfiRangeStr = makeCfiRange(location.start.cfi, location.end.cfi);
+        const range = contents.range(cfiRangeStr);
+        if (range) {
+          const rangeText = range.toString().replace(/\s+/g, ' ').trim();
+          if (rangeText) return rangeText;
+        }
+      } catch (err) {
+        console.warn('[cool-ebooks] cfiRange extraction error:', err);
+      }
+    }
+
+    // 2. Secondary: Query Chromium layout engine at screen points (start: 30,30; end: bottom-right)
+    if (typeof doc.caretRangeFromPoint === 'function') {
+      try {
+        const startRange = doc.caretRangeFromPoint(30, 30);
+        let endRange = null;
+        for (let y = viewportHeight - 20; y >= 50; y -= 30) {
+          endRange = doc.caretRangeFromPoint(viewportWidth - 30, y);
+          if (endRange && endRange.startContainer && endRange.startContainer !== doc.body) {
+            break;
+          }
+        }
+        if (startRange && startRange.startContainer && endRange && endRange.startContainer) {
+          const pageRange = doc.createRange();
+          pageRange.setStart(startRange.startContainer, startRange.startOffset);
+          pageRange.setEnd(endRange.startContainer, endRange.startOffset);
+          const text = pageRange.toString().replace(/\s+/g, ' ').trim();
+          if (text && text.length > 5) return text;
+        }
+      } catch (err) {
+        console.warn('[cool-ebooks] caretRangeFromPoint error:', err);
+      }
+    }
+
+    // 3. Fallback: Extract text from DOM elements visible in current viewport bounds
     const elements = doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
     const visibleTexts = [];
 
     elements.forEach(el => {
       const rect = el.getBoundingClientRect();
       const isVisible = (
-        rect.top >= -30 &&
-        rect.left >= -30 &&
-        rect.top <= (viewportHeight + 30) &&
-        rect.left <= (viewportWidth + 30) &&
+        rect.right > 10 &&
+        rect.bottom > 10 &&
+        rect.left < (viewportWidth - 10) &&
+        rect.top < (viewportHeight - 10) &&
         rect.width > 0 && rect.height > 0
       );
 
@@ -42,26 +95,6 @@ function getVisiblePageText() {
 
     if (visibleTexts.length > 0) {
       return visibleTexts.join(' ');
-    }
-
-    // Fallback: epub.js range extraction
-    const location = rendition.currentLocation();
-    if (location && location.start && location.start.cfi) {
-      let range = null;
-      if (location.end && location.end.cfi) {
-        try { range = contents.range(location.start.cfi, location.end.cfi); } catch (e) {}
-      }
-      if (!range || !range.toString().trim()) {
-        try { range = contents.range(location.start.cfi); } catch (e) {}
-      }
-      if (range) {
-        const rangeText = range.toString().replace(/\s+/g, ' ').trim();
-        if (rangeText) return rangeText;
-      }
-    }
-
-    if (doc.body) {
-      return (doc.body.innerText || doc.body.textContent || "").replace(/\s+/g, ' ').trim();
     }
   } catch (err) {
     console.warn('[cool-ebooks] getVisiblePageText error:', err);

@@ -202,12 +202,17 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
         });
 
         const playRes = await xaudio.XAudioPlay({
+          cookie: cookie,
+          OutputId: cookie,
           app: targetXAudioNode,
           streamId: 1,
           seqnum: seqnum,
           sample: blobId,
           blob: blobId,
           controlWord: window.xintent ? window.xintent.SYN : 1,
+          headers: {
+            'Connection': 'keep-alive'
+          },
           transferBlob: true
         });
 
@@ -326,9 +331,24 @@ async function stopTts(sendControlStop = true) {
   if (wasActive && sendControlStop) {
     const cookieToStop = currentTtsCookie;
     if (window.xaudio && typeof window.xaudio.controlStream === 'function') {
-      window.xaudio.controlStream({ command: 'stop', cookie: cookieToStop, streamId: 1 }).catch(() => {});
+      window.xaudio.controlStream({
+        command: 'stop',
+        cookie: cookieToStop,
+        streamId: 1,
+        controlWord: window.xintent ? window.xintent.FIN : 2,
+        headers: {
+          'X-Channel-Control': 'FIN'
+        }
+      }).catch(() => {});
     } else if (window.xintent && typeof window.xintent.intent === 'function') {
-      window.xintent.intent('xaudio.ControlStream', { command: 'stop', cookie: cookieToStop }).catch(() => {});
+      window.xintent.intent('xaudio.ControlStream', {
+        command: 'stop',
+        cookie: cookieToStop,
+        controlWord: window.xintent ? window.xintent.FIN : 2,
+        headers: {
+          'X-Channel-Control': 'FIN'
+        }
+      }).catch(() => {});
     }
   }
 

@@ -33,6 +33,9 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 // Ensure deterministic ZIP/APK entry ordering and timestamps for F-Droid Reproducible Builds

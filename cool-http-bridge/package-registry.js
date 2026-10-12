@@ -23,14 +23,16 @@ function registerPackage(tomlPath) {
     if (!isHtmlCardApp(parsed)) return;
 
     const appId = parsed.app.id;
-    if (packageRegistry[appId]) {
-      logger.warn(`Duplicate app ${appId}`, packageRegistry[appId]._path, tomlPath);
-      return;
-    }
+    const folderName = path.basename(path.dirname(tomlPath));
     parsed._path = path.dirname(tomlPath);
     parsed._rawToml = rawContent;
-    packageRegistry[appId] = parsed;
-    logger.info(`Loaded app package '${appId}' raw TOML from ${tomlPath}:\n${rawContent}`);
+    if (!packageRegistry[appId]) {
+      packageRegistry[appId] = parsed;
+    }
+    if (folderName && !packageRegistry[folderName]) {
+      packageRegistry[folderName] = parsed;
+    }
+    logger.info(`Loaded app package '${appId}' (folder '${folderName}') raw TOML from ${tomlPath}`);
   } catch (err) {
     logger.error(`Failed to parse TOML at ${tomlPath}:`, err.message);
   }

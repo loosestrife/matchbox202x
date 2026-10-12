@@ -1,6 +1,8 @@
 (function(window) {
   'use strict';
 
+  if (window.xintent && typeof window.xintent.readMultipartStream === 'function' && typeof window.xintent.getFsMode === 'function') return;
+
   function getForwardedByHeader(existingHeader = null) {
     let forwardedBy = 'matchbox202x.js';
     try {
@@ -64,6 +66,12 @@
       }
       if (payload.Prefer) {
         headers['Prefer'] = payload.Prefer;
+      }
+      if (payload.headers && typeof payload.headers === 'object') {
+        Object.assign(headers, payload.headers);
+      }
+      if (payload.Connection || payload.connection) {
+        headers['Connection'] = payload.Connection || payload.connection;
       }
       headers['X-Forwarded-By'] = getForwardedByHeader(payload['X-Forwarded-By']);
 

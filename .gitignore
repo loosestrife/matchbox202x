@@ -3,8 +3,14 @@
 Thumbs.db
 *.swp
 
+# Python
+__pycache__/
+*.pyc
+
 # Node / JS
 node_modules/
+bun.lock
+package-lock.json
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
