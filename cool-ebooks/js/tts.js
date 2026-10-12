@@ -125,7 +125,7 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
   const xintent = await ensureXIntent();
   if (xintent && typeof xintent.intent === 'function') {
     try {
-      const response = await xintent.intent('ui.TextToSpeech', {
+      const ttsPayload = {
         intent: 'ui.TextToSpeech',
         app: targetTtsApp,
         text: text,
@@ -134,7 +134,18 @@ async function dispatchTtsChunk(text, seqnum = 0, cookie = currentTtsCookie) {
         controlWord: xintent.SYN,
         receive_data: false,
         Accept: 'audio/wav'
-      }, targetTtsApp);
+      };
+
+      let response = null;
+      try {
+        response = await xintent.intent('ui.TextToSpeech', ttsPayload, targetTtsApp);
+      } catch (firstErr) {
+        if (!isTtsActive) return false;
+        console.warn(`[cool-ebooks] Initial TTS request for chunk #${seqnum + 1} failed (${firstErr.message}), retrying...`);
+        await new Promise(r => setTimeout(r, 600));
+        if (!isTtsActive) return false;
+        response = await xintent.intent('ui.TextToSpeech', ttsPayload, targetTtsApp);
+      }
 
       const endTime = performance.now();
       const rttMs = Math.round(endTime - startTime);

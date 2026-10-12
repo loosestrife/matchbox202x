@@ -475,11 +475,6 @@ class CardsActivity : ComponentActivity() {
         localAudioPlayer?.release()
         localAudioPlayer = null
 
-        cardWebView?.apply {
-            stopLoading()
-            removeAllViews()
-            destroy()
-        }
         cardWebView = null
 
         if (instance == this) {
@@ -585,15 +580,17 @@ fun CardScreen(
                         mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     }
 
-                    activity?.let {
-                        it.cardWebView = this
-                        addJavascriptInterface(XIntentJSBridge(it), "XIntentNative")
-                    }
+                    activity?.cardWebView = this
+                    addJavascriptInterface(XIntentJSBridge(activity ?: CardsActivity()), "XIntentNative")
 
                     loadUrl(cardUrl)
                     webViewRef = this
-                    activity?.cardWebView = this
                 }
+            },
+            onRelease = { webView ->
+                webView.stopLoading()
+                webView.removeAllViews()
+                webView.destroy()
             },
             modifier = Modifier.fillMaxSize(),
         )
