@@ -74,7 +74,7 @@ app.get('/matchbox202x.js', (req, res) => {
   res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, 'assets', 'matchbox202x.js'));
 });
-app.get('/apps/:app{/:card}', routeApp);
+app.get(['/apps/:app', '/apps/:app/*path'], routeApp);
 app.get('/api/tags', async (req, res) => {
   res.json({
     ...await aggregateTomlAsObject(),

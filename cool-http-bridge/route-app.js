@@ -6,17 +6,24 @@ const {packageRegistry} = require('./package-registry');
 const logger = new Logger({module: 'route-app'});
 
 module.exports.routeApp = (req, res) => {
-  logger.info(`request for app ${req.params.app} card ${req.params.card}`);
+  const appName = req.params.app;
+  let rawTargetPath = req.params.path || req.params[0] || req.params.card || req.params['0'];
+  if (Array.isArray(rawTargetPath)) {
+    rawTargetPath = rawTargetPath.join('/');
+  }
+  const targetPath = (typeof rawTargetPath === 'string') ? rawTargetPath : '';
 
-  if (req.params.app === 'favicon.ico') {
+  logger.info(`request for app ${appName} path ${targetPath || '(main)'}`);
+
+  if (appName === 'favicon.ico') {
     return res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
   }
 
-  if (req.params.card === 'favicon.ico') {
-    const package = packageRegistry[req.params.app];
-    if (package && package._path) {
-      const localFavicon = path.join(package._path, 'favicon.ico');
-      if (fs.existsSync(localFavicon)) {
+  if (targetPath === 'favicon.ico') {
+    const pkg = packageRegistry[appName];
+    if (pkg && pkg._path) {
+      const localFavicon = path.join(pkg._path, 'favicon.ico');
+      if (fs.existsSync(localFavicon) && fs.statSync(localFavicon).isFile()) {
         return res.sendFile(localFavicon);
       }
     }
@@ -24,29 +31,49 @@ module.exports.routeApp = (req, res) => {
   }
 
   logger.debug('packages are', Object.keys(packageRegistry));
-  const package = packageRegistry[req.params.app];
+  const package = packageRegistry[appName];
   logger.debug('package is', package);
-  const appName = req.params.app;
-  if(!package) throw new HttpError(400, `package ${appName} not found`);
+  if (!package) throw new HttpError(400, `package ${appName} not found`);
   const app = package.app;
   logger.debug('package.app', app);
-  if(!app) throw new HttpError(400, `package ${appName} is not an app`);
-  let cardId;
-  if (req.params.card) {
-    cardId = req.params.card;
-  } else {
-    cardId = app.main?.card || (package.cards && package.cards[0]?.id);
+  if (!app) throw new HttpError(400, `package ${appName} is not an app`);
+
+  // 1. Determine relative path or card
+  let subPath = targetPath;
+  if (!subPath) {
+    const cardId = app.main?.card || (package.cards && package.cards[0]?.id);
     if (!cardId) throw new HttpError(400, `no main card configured for ${appName}`);
+    const card = (package.cards || []).find(c => c.id == cardId);
+    if (!card) throw new HttpError(404, `card ${cardId} not found in package ${appName}`);
+    subPath = card.path;
+  } else {
+    // Check if targetPath matches a card ID first (e.g. "main")
+    const card = (package.cards || []).find(c => c.id == subPath);
+    if (card) {
+      subPath = card.path;
+    }
   }
-  const card = (package.cards || []).find(c => c.id == cardId);
-  if(!card) throw new HttpError(404, `card ${cardId} not found in package ${appName}`);
-  let cardPath = card.path;
-  if(!(card.path.startsWith('/'))){
-    cardPath = path.join(package._path, cardPath);
+
+  // 2. Resolve target file path relative to package directory
+  let filePath = subPath;
+  if (!path.isAbsolute(filePath)) {
+    filePath = path.join(package._path, filePath);
   }
-  logger.info(`sending ${cardPath}`)
-  res.sendFile(cardPath);
-}
+
+  // Prevent directory traversal outside package._path
+  const resolvedPackagePath = path.resolve(package._path);
+  const resolvedFilePath = path.resolve(filePath);
+  if (!resolvedFilePath.startsWith(resolvedPackagePath)) {
+    throw new HttpError(403, `Access denied: path outside app directory`);
+  }
+
+  if (fs.existsSync(resolvedFilePath) && fs.statSync(resolvedFilePath).isFile()) {
+    logger.info(`sending ${resolvedFilePath}`);
+    return res.sendFile(resolvedFilePath);
+  }
+
+  throw new HttpError(404, `File or card '${targetPath}' not found in package ${appName}`);
+};
 
 module.exports.getApps = () => Object.fromEntries(
   Object.entries(packageRegistry).map(([appId, pkg]) => [
