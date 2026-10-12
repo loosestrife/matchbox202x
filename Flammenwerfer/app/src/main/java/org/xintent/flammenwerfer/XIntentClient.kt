@@ -1054,7 +1054,7 @@ name = "$advertisedName"
     suspend fun sendPickFileIntent(
         context: Context,
         holdOpenForWrite: Boolean = true,
-        targetApp: String = "cool-clips",
+        targetApp: String = getDefaultRemoteDevice(context),
     ): Result = withContext(Dispatchers.IO) {
         val baseUrl = getServerUrl(context)
         val fullUrl = "$baseUrl/intent/fs/PickFile?app=$targetApp"

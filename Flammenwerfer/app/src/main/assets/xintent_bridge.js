@@ -138,8 +138,8 @@
           if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') window.XIntentNative.logMessage(logMsg);
           var rawRes = window.XIntentNative.handleLocalPickFile(JSON.stringify(payload || {}));
           return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
-        } else if (fsMode === 'doRemoteFsCapture') {
-          targetApp = defaultRemote;
+        } else {
+          targetApp = targetApp || (payload && payload.app) || defaultRemote;
         }
       }
 
@@ -150,8 +150,8 @@
           if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') window.XIntentNative.logMessage(logMsg);
           var rawRes = window.XIntentNative.handleLocalSaveAs(JSON.stringify(payload || {}));
           return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
-        } else if (fsMode === 'doRemoteFsCapture') {
-          targetApp = defaultRemote;
+        } else {
+          targetApp = targetApp || (payload && payload.app) || defaultRemote;
         }
       }
 

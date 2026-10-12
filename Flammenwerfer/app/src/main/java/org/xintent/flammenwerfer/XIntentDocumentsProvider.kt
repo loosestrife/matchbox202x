@@ -144,11 +144,17 @@ abstract class BaseXIntentDocumentsProvider(
         if (!isWrite && file.length() == 0L) {
             // Trigger fs.PickFile over HTTP bridge with defaultHoldOpenForWrite
             runBlocking {
-                val res = XIntentClient.sendPickFileIntent(ctx, holdOpenForWrite = defaultHoldOpenForWrite)
-                if (res.success && res.responseBody.isNotBlank()) {
-                    val extracted = XIntentClient.extractReplacementText(res.responseBody)
-                    if (!extracted.isNullOrBlank()) {
-                        file.writeText(extracted)
+                val targetApp = XIntentClient.getDefaultRemoteDevice(ctx)
+                val res = XIntentClient.sendPickFileIntent(ctx, holdOpenForWrite = defaultHoldOpenForWrite, targetApp = targetApp)
+                if (res.success && res.rawBytes.isNotEmpty()) {
+                    val fileData = XIntentClient.extractFileFromPickFileResponse(res.rawBytes)
+                    if (fileData != null && fileData.second.isNotEmpty()) {
+                        file.writeBytes(fileData.second)
+                    } else {
+                        val extracted = XIntentClient.extractReplacementText(res.responseBody)
+                        if (!extracted.isNullOrBlank()) {
+                            file.writeText(extracted)
+                        }
                     }
                 }
             }
