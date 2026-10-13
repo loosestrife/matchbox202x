@@ -190,6 +190,31 @@ async function ensureHttpBridge() {
   }
 }
 
+async function ensureXdgPortalBridge() {
+  const portalBridgeDir = path.join(__dirname, '../xdg-portal-bridge');
+  const entryFile = path.join(portalBridgeDir, 'xintent-portal-daemon.py');
+
+  if (fs.existsSync(entryFile)) {
+    logger.info('[cool-service-lighter] Auto-launching xdg-portal-bridge...');
+    try {
+      const pyprojectFile = path.join(portalBridgeDir, 'pyproject.toml');
+      const hasUv = fs.existsSync(pyprojectFile);
+      const cmd = hasUv ? 'uv' : 'python3';
+      const args = hasUv ? ['run', 'xintent-portal-daemon.py'] : ['xintent-portal-daemon.py'];
+
+      const proc = spawn(cmd, args, {
+        cwd: portalBridgeDir,
+        stdio: 'inherit',
+        detached: true,
+      });
+      trackChild(proc);
+      logger.info(`[cool-service-lighter] Auto-launched xdg-portal-bridge service using ${cmd}.`);
+    } catch (err) {
+      logger.error('[cool-service-lighter] Failed to launch xdg-portal-bridge:', err);
+    }
+  }
+}
+
 async function startLighter() {
   const { X, rawX, root } = await x11.createClientWithPromises();
 
@@ -252,6 +277,7 @@ async function startLighter() {
   await Promise.all([
     ensureXIntentRouter(X, root),
     ensureHttpBridge(),
+    ensureXdgPortalBridge(),
   ]);
 
   // 4. Handle Direct Start Signals & XAudio Commands from xintent-router

@@ -1,0 +1,4 @@
+[Portal]
+DBusName=org.freedesktop.impl.portal.desktop.xintent
+Interfaces=org.freedesktop.impl.portal.FileChooser
+UseIn=xintent;GNOME;KDE;X-Cinnamon;XFCE;LXQt;Wayland;

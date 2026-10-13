@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xdg-portal-bridge"
+version = "0.1.0"
+description = "XIntent XDG Desktop Portal Bridge"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "dbus-python>=1.3.2",
+    "python-xlib>=0.33",
+]
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "xintent-portal-daemon.py"
+]
+
+[project.scripts]
+xdg-portal-bridge = "xintent-portal-daemon:main"

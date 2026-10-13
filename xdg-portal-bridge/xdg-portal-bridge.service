@@ -1,0 +1,16 @@
+[Unit]
+Description=XIntent XDG Desktop Portal Bridge
+After=cool-http-bridge.service network.target
+Wants=cool-http-bridge.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xintent-portal-daemon.py
+Restart=on-failure
+RestartSec=3
+Environment="XINTENT_BUS_URL=http://localhost:8080"
+Environment="XINTENT_TARGET_APP=flammenwerfer-phone"
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=default.target
