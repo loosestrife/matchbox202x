@@ -19,6 +19,8 @@ const {intentRegistry, packageRegistry, buildRegistries, xintentServicesManifest
 logger.info('got manifesto', TOML.stringify(xintentServicesManifesto));
 
 const hostname = os.hostname();
+const sinkName = `${hostname}-speakers`;
+
 const matchboxToml = `
 [app]
 id = "cool-service-lighter"
@@ -29,7 +31,7 @@ id = "cool-service-lighter"
 "fs.PickFilePath" = true
 
 [XAudioSink]
-name = "${hostname}-speakers"
+name = "${sinkName}"
 `;
 
 const blobhostMatchboxToml = `
@@ -117,7 +119,7 @@ function spawnRuntime(cmdFile, workingDir) {
 }
 
 async function ensureXBusDaemon(X, root) {
-  let routerWin = await xintent.connectToRouter(X, root);
+  let routerWin = await xintent.connectToRouter(X, root, 0);
   if (!routerWin) {
     logger.info('[cool-service-lighter] xbus-daemon not detected on XCHANNEL atom. Auto-launching xbus-daemon...');
     const busDir = path.join(__dirname, '../xbus-daemon');
@@ -135,7 +137,7 @@ async function ensureXBusDaemon(X, root) {
     routerWin = await new Promise((resolve) => {
       const eventHandler = async (ev) => {
         if (ev.name === 'PropertyNotify' && ev.wid === root) {
-          const win = await xintent.connectToRouter(X, root);
+          const win = await xintent.connectToRouter(X, root, 0);
           if (win) {
             X.removeListener('event', eventHandler);
             resolve(win);
@@ -148,7 +150,7 @@ async function ensureXBusDaemon(X, root) {
       // Safety fallback timeout in case process fails to launch
       setTimeout(async () => {
         X.removeListener('event', eventHandler);
-        resolve(await xintent.connectToRouter(X, root));
+        resolve(await xintent.connectToRouter(X, root, 0));
       }, 3000);
     });
 
@@ -233,7 +235,7 @@ async function startLighter() {
   );
 
   pickFiles.init({X, lighterWin, blobHostWin, trackChild});
-  xaudioNode.init({X, lighterWin, trackChild});
+  xaudioNode.init({X, lighterWin, sinkName, trackChild});
 
   const serviceManifestTomlAtom = await X.InternAtom(false, 'SERVICE_MANIFEST_TOML');
   const matchboxTomlAtom = await X.InternAtom(false, 'MATCHBOX_TOML');
@@ -298,7 +300,7 @@ async function startLighter() {
             if (ev.message_type == xintentIntentV0Atom || ev.message_type == xintentEventV0Atom) {
               const xintentIntent = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev, { unlinkPayloadBlob: false });
               const payload = xintentIntent.payload;
-              const intentName = payload.intent || payload.action || payload.event;
+              const intentName = payload?.intent || payload?.action || payload?.event || (payload?.data && typeof payload.data === 'object' ? (payload.data.intent || payload.data.action || payload.data.event) : undefined);
               logger.setContext({
                 intent: intentName,
                 sender: xintent.widString(xintentIntent.senderWin),
@@ -306,11 +308,12 @@ async function startLighter() {
               });
 
               if (intentName === "sys.Launch") {
-                const pakName = payload.package;
+                const pakName = payload.package || (payload.data && payload.data.package);
                 const package = packageRegistry[pakName];
-                const intent = package.intents[payload.intendedIntent];
-                logger.setContext({ package: pakName, intendedIntent: payload.intendedIntent });
-                logger.info(`Got request to load ${pakName} for ${payload.intendedIntent}`, intent);
+                const intendedIntent = payload.intendedIntent || (payload.data && payload.data.intendedIntent);
+                const intent = package ? package.intents[intendedIntent] : undefined;
+                logger.setContext({ package: pakName, intendedIntent: intendedIntent });
+                logger.info(`Got request to load ${pakName} for ${intendedIntent}`, intent);
 
                 const proc = spawn(intent.exec, {shell: true, cwd: package._path || process.cwd(), stdio: 'inherit'});
                 trackChild(proc);

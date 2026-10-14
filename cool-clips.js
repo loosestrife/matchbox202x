@@ -266,12 +266,13 @@ invocation = "X11"
           const clipPayload = await getActiveClipboardData(X, daemonWin);
           const dataBlob = await XBlobCreate(X, xintent.routerWin, daemonWin, clipPayload);
 
-          await sendXIntentIntentV0(X, xintent.routerWin, {
+          await sendXIntentEventV0(X, xintent.routerWin, {
             senderWin: daemonWin,
             channel,
+            controlWord: 2, // FIN bit to close channel stream
             dataBlob,
             payload: {
-              intent: 'ui.PasteResponse',
+              event: 'ui.PasteResponse',
               disposition: 'final',
             }
           });

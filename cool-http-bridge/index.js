@@ -58,10 +58,17 @@ app.post('/intent/:namespace/:action', routeIntent);
 app.post('/xblob/XBlobCreate', routeXBlobCreate);
 app.post('/xblob/XBlobRead', routeXBlobRead);
 app.get('/xblob/:blobId', routeXBlobRead);
+app.get('/blobs/:blobId', routeXBlobRead);
 app.post('/xblob/XBlobTransfer', routeXBlobTransfer);
 app.post('/xblob/XBlobGrant', routeXBlobGrant);
 app.post('/xblob/XBlobUnlink', routeXBlobUnlink);
+app.delete('/xblob/XBlobUnlink', routeXBlobUnlink);
+app.delete('/blobs/:blobId', routeXBlobUnlink);
+app.delete('/xblob/:blobId', routeXBlobUnlink);
+app.delete('/xblob', routeXBlobUnlink);
 app.post('/xblob/XBlobBroadcast', routeXBlobBroadcast);
+app.post('/blobs/:blobId/broadcast', routeXBlobBroadcast);
+app.post('/xblob/:blobId/broadcast', routeXBlobBroadcast);
 const serveFavicon = (req, res) => {
   res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
 };

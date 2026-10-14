@@ -94,7 +94,14 @@ class XIntentServer:
         """Registers a handler function for an intent."""
         self.handlers[intent_name] = handler
         if self.x11_client:
-            self.x11_client.on_intent(intent_name)(handler)
+            if hasattr(self.x11_client, "register_handler"):
+                self.x11_client.register_handler(intent_name, handler)
+            elif hasattr(self.x11_client, "on_intent"):
+                self.x11_client.on_intent(intent_name)(handler)
+            else:
+                if not hasattr(self.x11_client, "handlers"):
+                    self.x11_client.handlers = {}
+                self.x11_client.handlers[intent_name] = handler
 
     def send_event(
         self,

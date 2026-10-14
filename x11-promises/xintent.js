@@ -1,4 +1,6 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const http = require("http");
 const os = require("os");
 const x11 = require("./x11-promises");
 let Logger, alStorage;
@@ -61,7 +63,7 @@ async function getRouterWin(X, root) {
   }
 }
 
-async function connectToRouter(X, root) {
+async function connectToRouter(X, root, timeoutMs = 0) {
   const requiredAtoms = ["XCHANNEL", "XINTENT", "XINTENT_INTENT_V0"];
   const requiredResults = await Promise.all(
     requiredAtoms.map(async (atomName) => {
@@ -98,7 +100,10 @@ async function connectToRouter(X, root) {
     "XBLOB_BROADCAST_V0",
     "XBLOB_SOFT_LINK_V0",
     "XBLOB_SOFT_UNLINK_V0",
+    "XBLOB_ANNOUNCE_HOST_V0",
+    "XBLOB_DROP_HOST_V0",
     "XBLOB_DESTRUCTOR_V0",
+    "XBLOB_SOCKET_PATH",
 
     "XAUDIO_PLAY_V0",
     "XAUDIO_PLAY_RESPONSE_V0",
@@ -127,16 +132,16 @@ async function connectToRouter(X, root) {
       if (ev.name === 'DestroyNotify' && ev.wid == module.exports.routerWin) {
         module.exports.routerWin = undefined;
       }
-      if (ev.name === 'PropertyNotify' && ev.wid === root && ev.atom === atoms.XINTENT) {
+      if (ev.name === 'PropertyNotify' && ev.wid === root && (ev.atom === atoms.XINTENT || ev.atom === atoms.XCHANNEL)) {
         await getRouterWin(X, root);
       }
     });
   }
 
-  return await waitForRouterWin(X, root, 5000);
+  return await waitForRouterWin(X, root, timeoutMs);
 }
 
-async function waitForRouterWin(X, root, timeoutMs = 10000) {
+async function waitForRouterWin(X, root, timeoutMs = 0) {
   if (module.exports.routerWin) {
     try {
       await X.GetWindowAttributes(module.exports.routerWin);
@@ -146,12 +151,16 @@ async function waitForRouterWin(X, root, timeoutMs = 10000) {
     }
   }
 
+  const immediate = await getRouterWin(X, root);
+  if (immediate) return immediate;
+  if (timeoutMs <= 0) return null;
+
   return new Promise((resolve) => {
     let resolved = false;
     let timer = null;
 
     const propertyHandler = async (ev) => {
-      if (ev && ev.name === 'PropertyNotify' && ev.wid === root && ev.atom === atoms.XINTENT) {
+      if (ev && ev.name === 'PropertyNotify' && ev.wid === root && (ev.atom === atoms.XINTENT || ev.atom === atoms.XCHANNEL)) {
         const candidate = await getRouterWin(X, root);
         if (candidate && !resolved) {
           resolved = true;
@@ -235,6 +244,53 @@ async function XClientMessage(X, targetWin, message_type, data) {
   return X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
 }
 
+async function httpPutBlobsOverSocket(sockPath, blobData) {
+  return new Promise((resolve, reject) => {
+    const payloadStr = typeof blobData === 'string' ? blobData : (Buffer.isBuffer(blobData) ? blobData : JSON.stringify(blobData));
+    const isBuffer = Buffer.isBuffer(payloadStr);
+    const bodyBuf = isBuffer ? payloadStr : Buffer.from(payloadStr, 'utf8');
+
+    const contentEncoding = (typeof blobData === 'object' && blobData !== null) ? (blobData.contentEncoding || (blobData._dataType === 'fd-rights' ? 'fd-rights' : (blobData._dataType === 'base64' ? 'base64' : 'identity'))) : 'identity';
+    const mimeType = (typeof blobData === 'object' && blobData !== null && blobData.type) ? blobData.type : 'application/json';
+
+    const req = http.request({
+      socketPath: sockPath,
+      path: '/blobs',
+      method: 'PUT',
+      headers: {
+        'Content-Type': mimeType,
+        'Content-Length': bodyBuf.length,
+        'Content-Encoding': contentEncoding,
+        'Accept-Encoding': 'identity, base64, fd-rights'
+      }
+    }, (res) => {
+      let resData = '';
+      res.on('data', chunk => { resData += chunk; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(resData);
+          const rawBlob = res.headers['x-blob-id'] || json.blobId || json.blob;
+          const blobId = typeof rawBlob === 'number' ? rawBlob : (typeof rawBlob === 'string' && (rawBlob.startsWith('0x') || rawBlob.startsWith('0X')) ? parseInt(rawBlob, 16) : Number(rawBlob));
+          if (!isNaN(blobId) && blobId > 0) {
+            resolve(blobId);
+          } else {
+            reject(new Error('Invalid blob ID returned from socket: ' + resData));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.setTimeout(5000, () => {
+      req.destroy(new Error('Socket PUT /blobs timeout'));
+    });
+    req.on('error', reject);
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
 async function XBlobCreate(
   X,
   routerWin,
@@ -242,10 +298,36 @@ async function XBlobCreate(
   blobData,
   timeoutMs = 5000
 ) {
+  try {
+    const hostname = os.hostname();
+    const hostAtom = atoms[`XBLOB_HOST_${hostname}`] || (await X.InternAtom(false, `XBLOB_HOST_${hostname}`));
+    const xblobHost = (await X.GetSelectionOwner(hostAtom)) || routerWin;
+    const sockPath = (await getXBlobSocketPath(X, xblobHost)) || process.env.XBLOB_SOCKET_PATH;
+
+    if (sockPath && fs.existsSync(sockPath)) {
+      try {
+        const blobId = await httpPutBlobsOverSocket(sockPath, blobData);
+        if (blobId) return blobId;
+      } catch (sockErr) {
+        logger.warn(`XBlobCreate socket PUT /blobs failed, falling back to X11 IPC: ${sockErr.message}`);
+      }
+    }
+  } catch (_) {}
+
+  let typeAtom = 0;
+  if (blobData && typeof blobData === 'object') {
+    const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'text/plain');
+    if (mimeType) {
+      typeAtom = atoms[mimeType] || (await X.InternAtom(false, mimeType));
+      if (typeAtom) atoms[mimeType] = typeAtom;
+    }
+  }
+
   const cookie = crypto.randomBytes(4).readUInt32LE(0);
   const evBuf = buildClientMessageBuffer(routerWin, atoms.XBLOB_CREATE_V0, [
     senderWin,
     cookie,
+    typeAtom || 0,
   ]);
   const responseEv = await X.seekResponsePacket(
     (ev) =>
@@ -295,11 +377,30 @@ async function XBlobSoftUnlink(X, routerWin, senderWin, blobAtom) {
   ]);
 }
 
+async function XBlobAnnounceHost(X, routerWin, senderWin, blobAtom, hostWin) {
+  logger.debug(`XBlobAnnounceHost(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)}, ${widString(hostWin)})`);
+  return XClientMessage(X, routerWin, atoms.XBLOB_ANNOUNCE_HOST_V0, [
+    senderWin || 0,
+    blobAtom || 0,
+    hostWin || senderWin || 0,
+  ]);
+}
+
+async function XBlobDropHost(X, routerWin, senderWin, blobAtom, hostWin) {
+  logger.debug(`XBlobDropHost(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)}, ${widString(hostWin)})`);
+  return XClientMessage(X, routerWin, atoms.XBLOB_DROP_HOST_V0, [
+    senderWin || 0,
+    blobAtom || 0,
+    hostWin || senderWin || 0,
+  ]);
+}
+
 async function XBlobBroadcast(X, routerWin, senderWin, blobAtom, host, version) {
-  logger.debug(`XBlobBroadcast(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
-  return XClientMessage(X, routerWin, atoms.XBLOB_BROADCAST_V0, [
-    senderWin,
-    blobAtom,
+  const targetWin = routerWin || senderWin || 0;
+  logger.debug(`XBlobBroadcast(X, ${widString(targetWin)}, ${widString(senderWin || 0)}, ${widString(blobAtom || 0)})`);
+  return XClientMessage(X, targetWin, atoms.XBLOB_BROADCAST_V0, [
+    senderWin || 0,
+    blobAtom || 0,
     host,
     version,
   ]);
@@ -370,8 +471,13 @@ function formatXBlobAtRest(blobData) {
   const headers = [];
   headers.push(`Content-Type: ${type}`);
   headers.push(`Content-Length: ${size}`);
-  if (dataType === 'base64') {
-    headers.push('Content-Encoding: base64');
+  const contentEnc = blobData.contentEncoding || (dataType === 'fd-rights' || blobData._dataType === 'fd-rights' ? 'fd-rights' : (dataType === 'base64' ? 'base64' : null));
+  if (contentEnc && contentEnc !== 'identity') {
+    headers.push(`Content-Encoding: ${contentEnc}`);
+  }
+  const acceptEnc = blobData.acceptEncoding || (blobData.headers && (blobData.headers['accept-encoding'] || blobData.headers['Accept-Encoding']));
+  if (acceptEnc) {
+    headers.push(`Accept-Encoding: ${acceptEnc}`);
   }
   if (name) {
     headers.push(`Content-Disposition: attachment; filename="${name}"`);
@@ -384,7 +490,7 @@ function formatXBlobAtRest(blobData) {
     if (extraHeaders && typeof extraHeaders === 'object') {
       Object.entries(extraHeaders).forEach(([k, v]) => {
         const lowerK = k.toLowerCase();
-        if (!['content-type', 'content-length', 'content-encoding', 'content-disposition', 'x-xblob-type'].includes(lowerK)) {
+        if (!['content-type', 'content-length', 'content-encoding', 'accept-encoding', 'content-disposition', 'x-xblob-type'].includes(lowerK)) {
           headers.push(`${k}: ${v}`);
         }
       });
@@ -408,7 +514,7 @@ function parseXBlobAtRest(raw) {
     };
   }
 
-  const rawBuf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), 'utf8');
+  const rawBuf = Buffer.isBuffer(raw) ? raw : (Array.isArray(raw) ? Buffer.from(raw) : Buffer.from(String(raw), 'utf8'));
   let sepPos = rawBuf.indexOf('\r\n\r\n');
   let sepLen = 4;
   if (sepPos === -1) {
@@ -452,13 +558,22 @@ function parseXBlobAtRest(raw) {
   let dataType = 'binary';
 
   let data = bodyBuf;
-  if (transferEnc && transferEnc.toLowerCase().includes('base64')) {
-    try {
-      data = Buffer.from(bodyBuf.toString('utf8').trim(), 'base64');
-      dataType = 'binary';
-    } catch (_) {
+  if (transferEnc) {
+    const lowerEnc = transferEnc.toLowerCase().trim();
+    if (lowerEnc.includes('fd-rights')) {
+      dataType = 'fd-rights';
+      data = bodyBuf.toString('utf8').trim();
+    } else if (lowerEnc.includes('base64')) {
+      try {
+        data = Buffer.from(bodyBuf.toString('utf8').trim(), 'base64');
+        dataType = 'binary';
+      } catch (_) {
+        data = bodyBuf.toString('utf8');
+        dataType = 'base64';
+      }
+    } else if (lowerEnc.includes('identity')) {
       data = bodyBuf.toString('utf8');
-      dataType = 'base64';
+      dataType = 'text';
     }
   } else if (contentType.includes('application/json') || contentType.includes('+json')) {
     try {
@@ -468,6 +583,9 @@ function parseXBlobAtRest(raw) {
       data = bodyBuf.toString('utf8');
       dataType = 'text';
     }
+  } else if (contentType.startsWith('text/')) {
+    data = bodyBuf.toString('utf8');
+    dataType = 'text';
   }
 
   return {
@@ -478,6 +596,7 @@ function parseXBlobAtRest(raw) {
     headers,
     data,
     _dataType: dataType,
+    contentEncoding: transferEnc || (dataType === 'fd-rights' ? 'fd-rights' : (dataType === 'base64' ? 'base64' : 'identity')),
   };
 }
 
@@ -486,8 +605,9 @@ async function XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, host, ver
     blobData = Object.assign({}, blobData, { version });
   }
   const hostname = os.hostname();
-  const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
-  const xblobHost = (await X.GetSelectionOwner(hostAtom)) || routerWin;
+  const hostAtom = atoms[`XBLOB_HOST_${hostname}`] || (await X.InternAtom(false, `XBLOB_HOST_${hostname}`));
+  const selectionOwner = await X.GetSelectionOwner(hostAtom);
+  const xblobHost = selectionOwner || senderWin || routerWin;
   const payloadString = formatXBlobAtRest(blobData);
   const buffer = Buffer.from(payloadString, 'utf8');
   // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
@@ -593,11 +713,75 @@ const sendXAudioPlayResponseV0 = (X, routerWin, opts) =>
 const sendXAudioControlV0 = (X, routerWin, opts) =>
   sendXChannelJsonFrame(atoms.XAUDIO_CONTROL_V0, X, routerWin, opts);
 
+function httpGetBlobOverSocket(sockPath, hexBlobId) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      socketPath: sockPath,
+      path: `/blobs/${hexBlobId}`,
+      method: 'GET',
+      headers: {
+        'Accept': '*/*',
+        'Accept-Encoding': 'identity, base64, fd-rights'
+      }
+    }, (res) => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          const bodyBuf = Buffer.concat(chunks);
+          const headers = [];
+          if (res.headers['content-type']) headers.push(`Content-Type: ${res.headers['content-type']}`);
+          if (res.headers['content-length']) headers.push(`Content-Length: ${res.headers['content-length']}`);
+          if (res.headers['content-encoding']) headers.push(`Content-Encoding: ${res.headers['content-encoding']}`);
+          if (res.headers['content-disposition']) headers.push(`Content-Disposition: ${res.headers['content-disposition']}`);
+          if (res.headers['x-xblob-type']) headers.push(`X-XBlob-Type: ${res.headers['x-xblob-type']}`);
+
+          const rawRest = Buffer.concat([
+            Buffer.from(headers.join('\r\n') + '\r\n\r\n', 'utf8'),
+            bodyBuf
+          ]);
+          try {
+            resolve(parseXBlobAtRest(rawRest));
+          } catch (e) {
+            reject(e);
+          }
+        } else {
+          reject(new Error(`GET /blobs/${hexBlobId} over socket returned status ${res.statusCode}`));
+        }
+      });
+    });
+
+    req.setTimeout(5000, () => {
+      req.destroy(new Error(`Socket GET /blobs/${hexBlobId} timeout`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 async function XBlobRead(X, routerWin, blobAtom, host, version) {
   let hostWin = await X.GetSelectionOwner(blobAtom);
   if (!hostWin) {
-    hostWin = routerWin;
+    if (typeof host === 'number' && host > 0) {
+      hostWin = host;
+    } else {
+      hostWin = routerWin;
+    }
   }
+
+  const hexBlobId = typeof blobAtom === 'number' ? `0x${blobAtom.toString(16)}` : String(blobAtom);
+
+  try {
+    const sockPath = (await getXBlobSocketPath(X, hostWin)) || process.env.XBLOB_SOCKET_PATH;
+    if (sockPath && fs.existsSync(sockPath)) {
+      try {
+        const blobData = await httpGetBlobOverSocket(sockPath, hexBlobId);
+        if (blobData) return blobData;
+      } catch (sockErr) {
+        logger.warn(`XBlobRead socket GET /blobs/${hexBlobId} failed, falling back to X11 GetProperty: ${sockErr.message}`);
+      }
+    }
+  } catch (_) {}
 
   const prop = await X.GetProperty(
     0,
@@ -605,7 +789,7 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
     blobAtom,
     0, // 0 = AnyPropertyType in X11 protocol
     0,
-    4_000_000_000
+    10_000_000
   );
   if (prop && prop.data) {
     try {
@@ -649,6 +833,9 @@ async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {
   const headers = rawBlob?.headers || {};
   if (rawBlob && typeof rawBlob === 'object' && rawBlob.data !== undefined) {
     payload = rawBlob.data;
+  }
+  if (payload && typeof payload === 'object' && !payload.intent && !payload.event && !payload.action && payload.data !== undefined && typeof payload.data === 'object') {
+    payload = payload.data;
   }
   if (payload && typeof payload === 'object') {
     const cmd = payload.intent || payload.event || payload.action;
@@ -750,7 +937,20 @@ const SYN = 1;
 const FIN = 2;
 const SYN_FIN = 3;
 
+async function getXBlobSocketPath(X, hostWin) {
+  if (!hostWin) return null;
+  const socketPathAtom = atoms['XBLOB_SOCKET_PATH'] || (await X.InternAtom(false, 'XBLOB_SOCKET_PATH'));
+  try {
+    const prop = await X.GetProperty(0, hostWin, socketPathAtom, 0, 0, 1024);
+    if (prop && prop.data && prop.data.length > 0) {
+      return prop.data.toString('utf8');
+    }
+  } catch (_) {}
+  return null;
+}
+
 module.exports = {
+  x11,
   SYN,
   FIN,
   SYN_FIN,
@@ -768,6 +968,7 @@ module.exports = {
   parseXIntentEventV0: parseXIntentIntentV0,
   parseXBlobBroadcastFrame,
   parseXBlobDestructorFrame,
+  buildClientMessageBuffer,
   XClientMessage,
   sendXChannelJsonFrame,
   sendXIntentIntentV0,
@@ -780,10 +981,13 @@ module.exports = {
   XBlobUnlink,
   XBlobSoftLink,
   XBlobSoftUnlink,
+  XBlobAnnounceHost,
+  XBlobDropHost,
   XBlobTransfer,
   XBlobRead,
   XBlobWrite,
   XBlobBroadcast,
   formatXBlobAtRest,
   parseXBlobAtRest,
+  getXBlobSocketPath,
 };

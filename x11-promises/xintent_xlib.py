@@ -140,8 +140,19 @@ def format_xblob_at_rest(blob_data: Any) -> bytes:
         f"Content-Type: {mime_type}",
         f"Content-Length: {size}",
     ]
-    if data_type == "base64":
-        headers.append("Content-Encoding: base64")
+    content_enc = blob_data.get("contentEncoding") or blob_data.get("content_encoding")
+    if not content_enc and data_type == "fd-rights":
+        content_enc = "fd-rights"
+    elif not content_enc and data_type == "base64":
+        content_enc = "base64"
+
+    if content_enc and content_enc != "identity":
+        headers.append(f"Content-Encoding: {content_enc}")
+
+    accept_enc = blob_data.get("acceptEncoding") or blob_data.get("accept_encoding")
+    if accept_enc:
+        headers.append(f"Accept-Encoding: {accept_enc}")
+
     if name:
         headers.append(f'Content-Disposition: attachment; filename="{name}"')
         if "xblobType" not in blob_data:
@@ -201,13 +212,19 @@ def parse_xblob_at_rest(raw: Any) -> Any:
         xblob_type = headers.get("x-xblob-type") or headers.get("x-blob-type") or "Blob"
         transfer_enc = headers.get("content-encoding") or headers.get("content-transfer-encoding", "")
 
-        if "base64" in transfer_enc.lower():
+        if "fd-rights" in transfer_enc.lower():
+            data = body_bytes.decode("utf-8", errors="replace").strip()
+            data_type = "fd-rights"
+        elif "base64" in transfer_enc.lower():
             try:
                 data = base64.b64decode(body_bytes.strip())
                 data_type = "binary"
             except Exception:
                 data = body_bytes
                 data_type = "base64"
+        elif "identity" in transfer_enc.lower():
+            data = body_bytes.decode("utf-8", errors="replace")
+            data_type = "text"
         elif "application/json" in content_type or "+json" in content_type:
             try:
                 data = json.loads(body_bytes.decode("utf-8"))
@@ -330,6 +347,160 @@ def parse_xblob_at_rest(raw: Any) -> Any:
     return result
 
 
+def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any) -> Optional[int]:
+    try:
+        mime_type = "application/json"
+        content_enc = "identity"
+
+        if isinstance(blob_data, (bytes, bytearray)):
+            body_bytes = bytes(blob_data)
+            mime_type = "application/octet-stream"
+        elif isinstance(blob_data, str):
+            body_bytes = blob_data.encode("utf-8")
+            mime_type = "text/plain"
+        elif isinstance(blob_data, dict):
+            d = blob_data.get("data")
+            mime_type = blob_data.get("type") or ("application/octet-stream" if isinstance(d, (bytes, bytearray)) else "application/json")
+            if blob_data.get("_dataType") == "fd-rights" or blob_data.get("contentEncoding") == "fd-rights":
+                content_enc = "fd-rights"
+            elif blob_data.get("_dataType") == "base64" or blob_data.get("contentEncoding") == "base64":
+                content_enc = "base64"
+            elif blob_data.get("contentEncoding"):
+                content_enc = blob_data.get("contentEncoding")
+
+            if isinstance(d, (bytes, bytearray)):
+                body_bytes = bytes(d)
+            elif isinstance(d, str):
+                body_bytes = d.encode("utf-8")
+            elif d is not None:
+                body_bytes = json.dumps(d).encode("utf-8")
+            else:
+                body_bytes = json.dumps(blob_data).encode("utf-8")
+        else:
+            body_bytes = json.dumps(blob_data).encode("utf-8")
+
+        req_lines = [
+            "PUT /blobs XBlob/0.1",
+            "Host: localhost",
+            f"Content-Type: {mime_type}",
+            f"Content-Length: {len(body_bytes)}",
+            f"Content-Encoding: {content_enc}",
+            "Accept-Encoding: identity, base64, fd-rights",
+            "Connection: close",
+            "",
+            ""
+        ]
+        req_header = "\r\n".join(req_lines).encode("latin1")
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(3.0)
+        sock.connect(socket_path)
+        sock.sendall(req_header + body_bytes)
+
+        res_data = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            res_data += chunk
+        sock.close()
+
+        res_str = res_data.decode("utf-8", errors="replace")
+        header_end = res_str.find("\r\n\r\n")
+        headers_str = res_str[:header_end] if header_end != -1 else res_str
+        body_str = res_str[header_end + 4:] if header_end != -1 else ""
+
+        x_blob_id = None
+        for line in headers_str.splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                if k.strip().lower() == "x-blob-id":
+                    x_blob_id = v.strip()
+                    break
+
+        if not x_blob_id and body_str:
+            try:
+                js = json.loads(body_str)
+                x_blob_id = js.get("blobId") or js.get("blob")
+            except Exception:
+                pass
+
+        if x_blob_id:
+            if isinstance(x_blob_id, int):
+                return x_blob_id
+            x_str = str(x_blob_id).strip()
+            if x_str.startswith("0x") or x_str.startswith("0X"):
+                return int(x_str, 16)
+            return int(x_str)
+    except Exception as e:
+        sys.stderr.write(f"[libxintent.py debug] unix socket PUT /blobs error: {e}\n")
+        sys.stderr.flush()
+    return None
+
+
+def _http_get_blob_unix_socket(socket_path: str, blob_hex_id: str) -> Optional[Any]:
+    try:
+        req_lines = [
+            f"GET /blobs/{blob_hex_id} XBlob/0.1",
+            "Host: localhost",
+            "Accept: */*",
+            "Accept-Encoding: identity, base64, fd-rights",
+            "Connection: close",
+            "",
+            ""
+        ]
+        req_header = "\r\n".join(req_lines).encode("latin1")
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(3.0)
+        sock.connect(socket_path)
+        sock.sendall(req_header)
+
+        res_data = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            res_data += chunk
+        sock.close()
+
+        sep_pos = res_data.find(b"\r\n\r\n")
+        if sep_pos == -1:
+            return None
+
+        header_bytes = res_data[:sep_pos]
+        body_bytes = res_data[sep_pos + 4:]
+
+        headers = {}
+        for line in header_bytes.decode("latin1", errors="replace").splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                headers[k.strip().lower()] = v.strip()
+
+        status_line = header_bytes.decode("latin1", errors="replace").splitlines()[0] if header_bytes else ""
+        if " 200 " not in status_line and " 201 " not in status_line:
+            return None
+
+        rest_headers = []
+        if "content-type" in headers:
+            rest_headers.append(f"Content-Type: {headers['content-type']}")
+        if "content-length" in headers:
+            rest_headers.append(f"Content-Length: {headers['content-length']}")
+        if "content-encoding" in headers:
+            rest_headers.append(f"Content-Encoding: {headers['content-encoding']}")
+        if "content-disposition" in headers:
+            rest_headers.append(f"Content-Disposition: {headers['content-disposition']}")
+        if "x-xblob-type" in headers:
+            rest_headers.append(f"X-XBlob-Type: {headers['x-xblob-type']}")
+
+        raw_at_rest = ("\r\n".join(rest_headers) + "\r\n\r\n").encode("latin1") + body_bytes
+        return parse_xblob_at_rest(raw_at_rest)
+    except Exception as e:
+        sys.stderr.write(f"[libxintent.py debug] unix socket GET /blobs/{blob_hex_id} error: {e}\n")
+        sys.stderr.flush()
+    return None
+
+
 class XIntentXlibClient:
     """
     X11-native XIntent Client mirroring xintent.js.
@@ -353,6 +524,8 @@ class XIntentXlibClient:
         "XBLOB_BROADCAST_V0",
         "XBLOB_SOFT_LINK_V0",
         "XBLOB_SOFT_UNLINK_V0",
+        "XBLOB_ANNOUNCE_HOST_V0",
+        "XBLOB_DROP_HOST_V0",
         "XBLOB_DESTRUCTOR_V0",
         "_NET_WM_PID",
         "CARDINAL",
@@ -435,13 +608,24 @@ class XIntentXlibClient:
             )
 
     def blob_create(self, blob_data: Any, timeout_sec: float = 5.0) -> int:
-        """Creates an XBlob owned by client_win with response cookie tracking."""
+        """Creates an XBlob owned by client_win, translating via PUT /blobs over local UNIX socket if available."""
+        sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
+        if sock_path and os.path.exists(sock_path):
+            blob_id = _http_put_blobs_unix_socket(sock_path, blob_data)
+            if blob_id:
+                return blob_id
+
+        type_atom = 0
+        if isinstance(blob_data, dict) and blob_data.get("type"):
+            mime_type = blob_data["type"]
+            type_atom = self.x11.intern_atom(mime_type)
+
         cookie = random.randint(1, 0x7FFFFFFF)
         router_id = self.get_router_win_id()
         self.x11.send_client_message(
             router_id,
             int(self.atoms["XBLOB_CREATE_V0"]),
-            [self.client_win.id, cookie],
+            [self.client_win.id, cookie, type_atom],
         )
 
         start_time = time.time()
@@ -494,9 +678,32 @@ class XIntentXlibClient:
         type_atom = self.atoms.get("message/http") or self.atoms.get("STRING") or 0
         self.x11.set_window_property_string(target_win_id, blob_atom, payload_at_rest, type_atom=type_atom)
         self.x11.set_selection_owner(target_win_id, blob_atom)
+        if router_id and router_id != target_win_id:
+            try:
+                self.blob_announce_host(blob_atom, target_win_id)
+            except Exception:
+                pass
+
+    def get_xblob_socket_path(self, host_win_id: int = 0) -> Optional[str]:
+        """Returns the UNIX domain socket path advertised in XBLOB_SOCKET_PATH on XBLOB_HOST window."""
+        if not host_win_id:
+            hostname = socket.gethostname()
+            host_atom = self.x11.intern_atom(f"XBLOB_HOST_{hostname}")
+            host_win_id = self.x11.get_selection_owner(host_atom)
+        if not host_win_id:
+            return None
+        socket_path_atom = self.x11.intern_atom("XBLOB_SOCKET_PATH")
+        return self.x11.get_window_property_string(host_win_id, socket_path_atom)
 
     def blob_read(self, blob_atom: int) -> Any:
-        """Reads HTTP headers/data at rest payload from selection owner window property blob_atom."""
+        """Reads HTTP headers/data at rest payload from local UNIX socket if available, or window property blob_atom."""
+        blob_hex = hex(blob_atom)
+        sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
+        if sock_path and os.path.exists(sock_path):
+            blob_data = _http_get_blob_unix_socket(sock_path, blob_hex)
+            if blob_data:
+                return blob_data
+
         sys.stderr.write(f"[libxintent.py debug] blob_read start for {hex(blob_atom)}\n")
         sys.stderr.flush()
 
@@ -560,6 +767,24 @@ class XIntentXlibClient:
             router_id,
             self.atoms["XBLOB_UNLINK_V0"],
             [self.client_win.id, blob_atom],
+        )
+
+    def blob_announce_host(self, blob_atom: int, host_win_id: int = 0):
+        router_id = self.get_router_win_id()
+        target_host = host_win_id if host_win_id else self.client_win.id
+        self.x11.send_client_message(
+            router_id,
+            self.atoms["XBLOB_ANNOUNCE_HOST_V0"],
+            [self.client_win.id, blob_atom, target_host],
+        )
+
+    def blob_drop_host(self, blob_atom: int, host_win_id: int = 0):
+        router_id = self.get_router_win_id()
+        target_host = host_win_id if host_win_id else self.client_win.id
+        self.x11.send_client_message(
+            router_id,
+            self.atoms["XBLOB_DROP_HOST_V0"],
+            [self.client_win.id, blob_atom, target_host],
         )
 
     def send_intent(
@@ -633,9 +858,18 @@ class XIntentXlibClient:
         )
         return payload_blob
 
+    def register_handler(
+        self,
+        intent_name: str,
+        handler: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
+    ):
+        """Registers a handler function for an intent."""
+        self.handlers[intent_name] = handler
+
     def on_intent(self, intent_name: str):
+        """Decorator to register a handler function for an intent."""
         def decorator(func: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]):
-            self.handlers[intent_name] = func
+            self.register_handler(intent_name, func)
             return func
 
         return decorator

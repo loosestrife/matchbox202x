@@ -8,7 +8,7 @@ const {atoms, widString, frameType, frameDesc, connectToRouter, init: xintentIni
 xintentInit({logger: new Logger({module: 'libxintent'})});
 
 const {handleXIntentIntentV0, handleXIntentEventV0, handleForwardingOfXChannelJsonFrame, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
-const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0} = require('./xblob');
+const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0, handleXBlobAnnounceHostV0, handleXBlobDropHostV0} = require('./xblob');
 const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0, xaudioUnregisterWindow} = require('./xaudio');
 
 // Load Policy Engine from cool-intent-router
@@ -42,6 +42,8 @@ async function startRouter() {
     'XBLOB_BROADCAST_V0': handleXBlobBroadcastV0,
     'XBLOB_SOFT_LINK_V0': handleXBlobSoftLinkV0,
     'XBLOB_SOFT_UNLINK_V0': handleXBlobSoftUnlinkV0,
+    'XBLOB_ANNOUNCE_HOST_V0': handleXBlobAnnounceHostV0,
+    'XBLOB_DROP_HOST_V0': handleXBlobDropHostV0,
 
     'XAUDIO_GET_AUDIO_OUTPUTS_V0': handleXAudioGetAudioOutputsV0,
     'XAUDIO_PLAY_V0': handleXAudioPlayV0,
@@ -59,7 +61,7 @@ async function startRouter() {
   });
 
   {
-    const existingRouterWin = await connectToRouter(X, root);
+    const existingRouterWin = await connectToRouter(X, root, 0);
     if(existingRouterWin){
       logger.info('xbus-daemon already running', widString(routerWin));
       process.exit(0);
@@ -221,15 +223,6 @@ async function startRouter() {
         await parseWindowToml(propWin);
       } else if (ev.atom === atoms.SERVICE_MANIFEST_TOML) {
         await parseWindowLighterToml(propWin);
-      } else {
-        try {
-          const atomName = await X.GetAtomName(ev.atom);
-          if (atomName === 'MATCHBOX_TOML') {
-            await parseWindowToml(propWin);
-          } else if (atomName === 'SERVICE_MANIFEST_TOML') {
-            await parseWindowLighterToml(propWin);
-          }
-        } catch (_) {}
       }
     }
 

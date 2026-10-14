@@ -15,7 +15,7 @@ const activeProcesses = new Map();  // cookie -> ChildProcess
 const playbackQueues = new Map();   // cookie -> { nextSeqnum, pending: Map(seqnum -> item), isPlaying: boolean }
 
 function getAudioPlayerCmd() {
-  return 'ffplay';
+  return process.env.AUDIO_PLAYER_CMD || process.env.XAUDIO_PLAYER_CMD || 'ffplay';
 }
 
 async function resolveBlobToFilePath(blobAtom) {
@@ -28,13 +28,36 @@ async function resolveBlobToFilePath(blobAtom) {
   if (!data) {
     throw new Error(`XBlobRead returned null/empty for blobAtom ${numericBlobAtom}`);
   }
+
+  // 1. If blob is fd-rights or a direct file descriptor/path, return path directly
+  if (data._dataType === 'fd-rights' || data.contentEncoding === 'fd-rights') {
+    if (typeof data.data === 'string' && data.data.trim()) {
+      const fdPath = data.data.trim();
+      prefetchedBlobs.set(numericBlobAtom, fdPath);
+      return fdPath;
+    }
+  }
   let buf;
   if (data._dataType === 'text') {
     buf = Buffer.from(data.data, 'utf-8');
   } else if (data._dataType === 'base64') {
     buf = Buffer.from(data.data, 'base64');
   } else if (data.data) {
-    buf = typeof data.data === 'string' ? Buffer.from(data.data, 'base64') : Buffer.from(data.data);
+    if (Buffer.isBuffer(data.data)) {
+      buf = data.data;
+    } else if (typeof data.data === 'string') {
+      buf = Buffer.from(data.data, 'base64');
+    } else if (typeof data.data === 'object') {
+      if (Array.isArray(data.data)) {
+        buf = Buffer.from(data.data);
+      } else if (Array.isArray(data.data.data)) {
+        buf = Buffer.from(data.data.data);
+      } else {
+        buf = Buffer.from(JSON.stringify(data.data), 'utf-8');
+      }
+    } else {
+      buf = Buffer.from(String(data.data));
+    }
   } else {
     throw new Error('Invalid blob data format for audio playback');
   }
@@ -100,6 +123,7 @@ async function processQueue(cookie) {
   queue.pending.delete(queue.nextSeqnum);
 
   const { blobAtom, payload, senderWin, channel } = item;
+  const numericBlobAtom = Number(blobAtom);
   const seqnum = queue.nextSeqnum;
   const streamId = payload.streamId !== undefined ? Number(payload.streamId) : (payload.stream !== undefined ? Number(payload.stream) : 1);
 
@@ -107,17 +131,20 @@ async function processQueue(cookie) {
     const filePath = await resolveBlobToFilePath(blobAtom);
     const player = getAudioPlayerCmd();
 
-    const args = ['-nodisp', '-autoexit'];
-    if (payload.volume !== undefined && payload.volume !== null) {
-      const volInt = Math.floor((Number(payload.volume) || 1.0) * 100);
-      args.push('-volume', String(volInt));
+    const isCustomCmd = Boolean(process.env.AUDIO_PLAYER_CMD || process.env.XAUDIO_PLAYER_CMD);
+    const args = isCustomCmd ? [filePath] : ['-nodisp', '-autoexit'];
+    if (!isCustomCmd) {
+      if (payload.volume !== undefined && payload.volume !== null) {
+        const volInt = Math.floor((Number(payload.volume) || 1.0) * 100);
+        args.push('-volume', String(volInt));
+      }
+      if (payload.loop) {
+        args.push('-loop', '0');
+      }
+      args.push(filePath);
     }
-    if (payload.loop) {
-      args.push('-loop', '0');
-    }
-    args.push(filePath);
 
-    const proc = spawn(player, args, { stdio: ['ignore', 'ignore', 'inherit'] });
+    const proc = spawn(player, args, { shell: isCustomCmd, stdio: ['ignore', 'ignore', 'inherit'] });
     trackChild(proc);
     activeProcesses.set(cookie, proc);
 
@@ -127,7 +154,11 @@ async function processQueue(cookie) {
       // 1. Unlink sample XBlob when playback finishes
       try {
         await xintent.XBlobUnlink(X, xintent.routerWin, lighterWin, blobAtom);
-        prefetchedBlobs.delete(blobAtom);
+        const filePath = prefetchedBlobs.get(numericBlobAtom);
+        prefetchedBlobs.delete(numericBlobAtom);
+        if (filePath && fs.existsSync(filePath)) {
+          try { fs.unlinkSync(filePath); } catch (_) {}
+        }
       } catch (err) {
         logger.warn(`Failed to unlink blob ${blobAtom} after playback:`, err.message);
       }
@@ -137,7 +168,7 @@ async function processQueue(cookie) {
         if (senderWin) {
           const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
           const isQueueEmpty = queue.pending.size === 0;
-          const responseControlWord = (isQueueEmpty && !queue.lastKeepAlive) ? 2 : 1; // 2 = FIN if queue empty & no keep-alive
+          const responseControlWord = isQueueEmpty ? 2 : 1; // 2 = FIN if queue empty
           await sendResponseFn(X, xintent.routerWin, {
             targetWin: senderWin,
             senderWin: lighterWin,
@@ -172,7 +203,12 @@ async function processQueue(cookie) {
 }
 
 async function playSoundBlob(payload, senderWin, dataBlob, channel = 0) {
-  const cookie = payload.cookie || payload.Cookie || payload.OutputId || 'default';
+  const reqOutputId = payload.OutputId || payload.outputId || payload.cookie || payload.Cookie;
+  if (reqOutputId && reqOutputId !== defaultSinkName && reqOutputId !== 'default' && !playbackQueues.has(reqOutputId)) {
+    logger.warn(`[XAudioSink] Warning: Received XAudioPlay for unrecognized OutputId '${reqOutputId}' (active sink is '${defaultSinkName}')`);
+  }
+
+  const cookie = reqOutputId || defaultSinkName;
   const rawBlob = dataBlob || payload.dataBlob || payload.sample || payload.BlobId || payload.blobId || payload.blob;
   const blobAtom = Number(rawBlob);
   const seqnum = payload.seqnum !== undefined ? Number(payload.seqnum) : (payload.seq !== undefined ? Number(payload.seq) : null);
@@ -275,9 +311,14 @@ async function seekStream(payload) {
 
 let trackChild = proc => proc;
 
+let defaultSinkName = `${os.hostname()}-speakers`;
+
 function init(g) {
   X = g.X;
   lighterWin = g.lighterWin;
+  if (g.sinkName) {
+    defaultSinkName = g.sinkName;
+  }
   if (g.trackChild) {
     trackChild = g.trackChild;
   }

@@ -62,6 +62,12 @@ def intent_server():
             with open(out_path, "rb") as f:
                 wav_bytes = f.read()
 
+            try:
+                if os.path.exists(out_path):
+                    os.unlink(out_path)
+            except Exception:
+                pass
+
             blob_id = 0
             if server.x11_client and wav_bytes:
                 try:

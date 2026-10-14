@@ -12,18 +12,19 @@ const xblobAtomAssignments = [];
 const handleXBlobCreateV0 = {
   parse: ev => {
     const targetWin = ev.wid;
-    const [senderWin, cookie] = ev.data;
-    return {targetWin, senderWin, cookie};
+    const [senderWin, cookie, typeAtom] = ev.data;
+    return {targetWin, senderWin, cookie, typeAtom: typeAtom || 0};
   },
   securityContext: parsed => {
     return {
       source: {window: parsed.senderWin},
       action: 'XBlobCreate',
+      resources: [{typeAtom: parsed.typeAtom}],
     };
   },
   accept: async parsed => {
-    const blobAtom = await xblobCreate(parsed.senderWin);
-    logger.info(`XBlobCreate created ${widString(blobAtom)} from ${widString(parsed.senderWin)}`);
+    const blobAtom = await xblobCreate(parsed.senderWin, null, parsed.typeAtom);
+    logger.info(`XBlobCreate created ${widString(blobAtom)} (typeAtom: ${widString(parsed.typeAtom || 0)}) from ${widString(parsed.senderWin)}`);
 
     const responseEv = Buffer.alloc(32);
     responseEv.writeInt8(33, 0); // ClientMessage
@@ -94,8 +95,10 @@ const handleXBlobSoftLinkV0 = {
     };
   },
   accept: async ({senderWin, blobId}) => {
-    logger.info(`XBlobUnlink soft linking ${widString(blobId)} from ${widString(senderWin)}`);
-    xblobRegistry[blobId].softLinks.push(senderWin);
+    logger.info(`XBlobSoftLink soft linking ${widString(blobId)} from ${widString(senderWin)}`);
+    if (xblobRegistry[blobId]) {
+      xblobRegistry[blobId].softLinks.push(senderWin);
+    }
   },
 };
 
@@ -113,10 +116,66 @@ const handleXBlobSoftUnlinkV0 = {
     };
   },
   accept: async ({blobId, senderWin}) => {
-    logger.info(`XBlobUnlink soft unlinking ${widString(blobId)} from ${widString(senderWin)}`);
-    const link = xblobRegistry[blobId].softLinks.indexOf(senderWin);
-    xblobRegistry[blobId].softLinks.splice(link, 1);
-    await checkForDeletion(blobId, xblobRegistry[blobId]);
+    logger.info(`XBlobSoftUnlink soft unlinking ${widString(blobId)} from ${widString(senderWin)}`);
+    if (xblobRegistry[blobId]) {
+      const link = xblobRegistry[blobId].softLinks.indexOf(senderWin);
+      if (link !== -1) {
+        xblobRegistry[blobId].softLinks.splice(link, 1);
+      }
+      await checkForDeletion(blobId, xblobRegistry[blobId]);
+    }
+  },
+};
+
+const handleXBlobAnnounceHostV0 = {
+  parse: ev => {
+    const targetWin = ev.wid;
+    const [senderWin, blobId, hostWin, typeAtom] = ev.data;
+    return { targetWin, senderWin, blobId, host: hostWin || senderWin, typeAtom: typeAtom || 0 };
+  },
+  securityContext: parsed => {
+    return {
+      source: { window: parsed.senderWin },
+      action: 'XBlobAnnounceHost',
+      resources: [{ XBlob: parsed.blobId, typeAtom: parsed.typeAtom }],
+    };
+  },
+  accept: async ({ blobId, host, typeAtom }) => {
+    const regEntry = xblobRegistry[blobId];
+    if (regEntry) {
+      if (typeAtom && !regEntry.typeAtom) {
+        regEntry.typeAtom = typeAtom;
+      }
+      if (host && !regEntry.hosts.includes(host)) {
+        regEntry.hosts.push(host);
+        logger.info(`XBlobAnnounceHost registered host ${widString(host)} (typeAtom: ${widString(regEntry.typeAtom || 0)}) for blob ${widString(blobId)}`);
+      }
+    }
+  },
+};
+
+const handleXBlobDropHostV0 = {
+  parse: ev => {
+    const targetWin = ev.wid;
+    const [senderWin, blobId, hostWin] = ev.data;
+    return { targetWin, senderWin, blobId, host: hostWin || senderWin };
+  },
+  securityContext: parsed => {
+    return {
+      source: { window: parsed.senderWin },
+      action: 'XBlobDropHost',
+      resources: [{ XBlob: parsed.blobId }],
+    };
+  },
+  accept: async ({ blobId, host }) => {
+    const regEntry = xblobRegistry[blobId];
+    if (regEntry && host) {
+      const idx = regEntry.hosts.indexOf(host);
+      if (idx !== -1) {
+        regEntry.hosts.splice(idx, 1);
+        logger.info(`XBlobDropHost dropped host ${widString(host)} from blob ${widString(blobId)}`);
+      }
+    }
   },
 };
 
@@ -135,19 +194,28 @@ const handleXBlobBroadcastV0 = {
   },
   accept: async ({senderWin, blobId, host, version}) => {
     logger.info(`XBlobBroadcast broadcasting version ${version} on host ${widString(host)} of ${widString(blobId)} from ${widString(senderWin)}`);
+    if (xblobRegistry[blobId] && host) {
+      if (!xblobRegistry[blobId].hosts.includes(host)) {
+        xblobRegistry[blobId].hosts.push(host);
+      }
+    }
     for(const broadcastTarget of [
-      ...xblobRegistry[blobId].links,
-      ...xblobRegistry[blobId].softLinks
+      ...(xblobRegistry[blobId]?.links || []),
+      ...(xblobRegistry[blobId]?.softLinks || [])
     ]){
       if([senderWin, routerWin].includes(broadcastTarget)){
         continue;
       }
-      XClientMessage(X, broadcastTarget, atoms.XBLOB_BROADCAST_V0, [
-        senderWin,
-        blobId,
-        host,
-        version,
-      ]);
+      try {
+        if (X && typeof X.SendEvent === 'function') {
+          XClientMessage(X, broadcastTarget, atoms.XBLOB_BROADCAST_V0, [
+            senderWin,
+            blobId,
+            host,
+            version,
+          ]);
+        }
+      } catch (_) {}
     }
   },
 };
@@ -175,10 +243,23 @@ const handleXBlobTransferV0 = {
   },
 };
 
-const xblobCreate = async (senderWin) => {
+const xblobCreate = async (senderWin, hostWin = null, typeAtom = 0) => {
+  let initialHost = hostWin;
+  if (!initialHost) {
+    try {
+      const hostname = os.hostname();
+      const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
+      initialHost = (await X.GetSelectionOwner(hostAtom)) || senderWin;
+    } catch (_) {
+      initialHost = senderWin;
+    }
+  }
+
   const blobTrackingData = {
+    typeAtom: typeAtom || 0,
     links: [senderWin],
     softLinks: [],
+    hosts: initialHost ? [initialHost] : [],
   };
 
   let blobIdx = xblobAtomAssignments.findIndex(slot => !slot);
@@ -217,12 +298,19 @@ const xblobUnlink = async (blobId, unlinkWin) => {
     regEntry.links.splice(link, 1);
   }
 
-  if (regEntry.links.length == 0){
-    for(const notifyWin of regEntry.softLinks){
-      XClientMessage(X, notifyWin, atoms.XBLOB_DESTRUCTOR_V0, [
-        routerWin,
-        blobId,
-      ]);
+  if (regEntry.links.length === 0) {
+    const notifyTargets = new Set([...regEntry.softLinks, ...regEntry.hosts]);
+    for (const notifyWin of notifyTargets) {
+      if (notifyWin && notifyWin !== routerWin) {
+        try {
+          if (X && typeof X.SendEvent === 'function') {
+            XClientMessage(X, notifyWin, atoms.XBLOB_DESTRUCTOR_V0, [
+              routerWin,
+              blobId,
+            ]);
+          }
+        } catch (_) {}
+      }
     }
   }
 
@@ -230,19 +318,8 @@ const xblobUnlink = async (blobId, unlinkWin) => {
 };
 
 const checkForDeletion = async (blobId, regEntry) => {
-  if (regEntry.links.length == 0 && regEntry.softLinks.length == 0) {
-    logger.info(`deleting unlinked blob ${widString(blobId)}`);
-    try {
-      const hostname = os.hostname();
-      const hostAtom = await X.InternAtom(false, `XBLOB_HOST_${hostname}`);
-      const xblobHost = await X.GetSelectionOwner(hostAtom);
-      if (xblobHost) {
-        await X.DeleteProperty(xblobHost, blobId);
-      }
-    } catch (_) {}
-    try {
-      await X.DeleteProperty(routerWin, blobId);
-    } catch (_) {}
+  if (regEntry.links.length === 0 && regEntry.softLinks.length === 0) {
+    logger.info(`deleting unlinked blob ${widString(blobId)} from hosts`, regEntry.hosts);
     delete xblobRegistry[blobId];
 
     const blobIdx = xblobAtoms.indexOf(blobId);
@@ -275,14 +352,12 @@ const sameClient = (a, b) => {
 };
 
 const xblobUnlinkWindow = async (destroyedWin) => {
-  // 1. Unlink the destroyed window from all blobs it is linked to
   const blobIds = Object.keys(xblobRegistry);
   for (const blobIdStr of blobIds) {
     const blobId = Number(blobIdStr);
     const regEntry = xblobRegistry[blobId];
 
     if (regEntry?.links) {
-      // Remove all instances of destroyedWin linked to this blob
       while (regEntry.links.includes(destroyedWin)) {
         await xblobUnlink(blobId, destroyedWin);
       }
@@ -291,6 +366,7 @@ const xblobUnlinkWindow = async (destroyedWin) => {
 };
 
 module.exports = {
+  xblobRegistry,
   handleXBlobCreateV0,
   handleXBlobGrantV0,
   handleXBlobUnlinkV0,
@@ -298,6 +374,8 @@ module.exports = {
   handleXBlobBroadcastV0,
   handleXBlobSoftLinkV0,
   handleXBlobSoftUnlinkV0,
+  handleXBlobAnnounceHostV0,
+  handleXBlobDropHostV0,
   xblobCreate,
   implicitXBlobGrant,
   implicitXBlobTransfer,

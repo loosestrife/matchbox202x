@@ -280,12 +280,29 @@
      * @returns {Promise<{ status: string, blobId: number, blob: number }>}
      */
     XBlobCreate: async function(blobData = {}) {
-      const res = await fetch('/xblob/XBlobCreate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
-        body: JSON.stringify(blobData)
+      const isFdRights = blobData._dataType === 'fd-rights' || blobData.contentEncoding === 'fd-rights';
+      const isBase64 = blobData._dataType === 'base64' || blobData.contentEncoding === 'base64';
+      const contentEncoding = isFdRights ? 'fd-rights' : (isBase64 ? 'base64' : 'identity');
+
+      const res = await fetch('/blobs', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': blobData.type || 'application/json',
+          'Content-Encoding': contentEncoding,
+          'Accept-Encoding': 'identity, base64, fd-rights',
+          'X-Forwarded-By': getForwardedByHeader()
+        },
+        body: typeof blobData === 'string' ? blobData : JSON.stringify(blobData)
       });
-      if (!res.ok) throw new Error(`XBlobCreate failed: HTTP ${res.status}`);
+      if (!res.ok) {
+        const fallbackRes = await fetch('/xblob/XBlobCreate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+          body: JSON.stringify(blobData)
+        });
+        if (!fallbackRes.ok) throw new Error(`XBlobCreate failed: HTTP ${fallbackRes.status}`);
+        return fallbackRes.json();
+      }
       return res.json();
     },
 
@@ -351,11 +368,45 @@
       });
       if (!res.ok) throw new Error(`XBlobBroadcast failed: HTTP ${res.status}`);
       return res.json();
+    },
+
+    /**
+     * Read an XBlob from the bridge
+     * @param {number|string} blobId
+     * @returns {Promise<Object>}
+     */
+    XBlobRead: async function(blobId) {
+      const hexBlob = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
+      const res = await fetch(`/blobs/${hexBlob}`, {
+        method: 'GET',
+        headers: { 'Accept-Encoding': 'identity, base64, fd-rights', 'X-Forwarded-By': getForwardedByHeader() }
+      });
+      if (!res.ok) {
+        const fallbackRes = await fetch(`/xblob/XBlobRead`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+          body: JSON.stringify({ blobId: blobId, blob: blobId })
+        });
+        if (!fallbackRes.ok) throw new Error(`XBlobRead failed: HTTP ${fallbackRes.status}`);
+        return fallbackRes.json();
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        return res.json();
+      }
+      const data = await res.text();
+      return {
+        xblobType: res.headers.get('x-xblob-type') || 'Blob',
+        type: contentType,
+        contentEncoding: res.headers.get('content-encoding'),
+        data: data
+      };
     }
   };
 
   // Method aliases
   window.xblob.create = window.xblob.XBlobCreate;
+  window.xblob.read = window.xblob.XBlobRead;
   window.xblob.transfer = window.xblob.XBlobTransfer;
   window.xblob.grant = window.xblob.XBlobGrant;
   window.xblob.unlink = window.xblob.XBlobUnlink;

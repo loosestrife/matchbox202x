@@ -163,6 +163,10 @@ const routeIntent = async (req, res) => {
 
   const hasChannelControl = Boolean(channelControlHeader) || reqControlWord !== undefined;
   const opensChannel = hasChannelControl || payload.Accept || req.headers['accept'];
+  if (opensChannel && (reqControlWord === undefined || reqControlWord === null)) {
+    reqControlWord = 1; // SYN bit to open channel
+    payload.controlWord = reqControlWord;
+  }
 
   try {
     // --- 1. Streamed Multipart Response Path ---
@@ -293,10 +297,11 @@ const routeIntent = async (req, res) => {
 
           if (blobAtom && !isMinimalPreferred && !res.writableEnded && !res.finished) {
             try {
-              const routerWin = await xintent.getValidRouterWin(X, root);
+              const routerWin = xintent.routerWin || (await xintent.getValidRouterWin(X, X.rootWin || 0));
               const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
               if (blob && !res.writableEnded && !res.finished) {
-                writeXBlobFrame(res, blob, { 'X-Blob-Id': blobAtom });
+                const hexBlobId = typeof blobAtom === 'number' ? `0x${blobAtom.toString(16)}` : String(blobAtom);
+                writeXBlobFrame(res, blob, { 'X-Blob-Id': hexBlobId });
               }
             } catch (err) {
               logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
@@ -348,7 +353,11 @@ const routeIntent = async (req, res) => {
         });
       });
 
-      const reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
+      const reqDataBlobHeader = req.headers['x-attached-blob-id'] || req.headers['x-blob-id'];
+      let reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
+      if (reqDataBlobHeader) {
+        reqDataBlob = reqDataBlobHeader.startsWith('0x') || reqDataBlobHeader.startsWith('0X') ? parseInt(reqDataBlobHeader, 16) : Number(reqDataBlobHeader);
+      }
       const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
       const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
       const cookie = payload.cookie || payload.Cookie || payload.OutputId || 'default';
