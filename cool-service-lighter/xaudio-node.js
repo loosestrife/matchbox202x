@@ -18,7 +18,29 @@ function getAudioPlayerCmd() {
   return process.env.AUDIO_PLAYER_CMD || process.env.XAUDIO_PLAYER_CMD || 'ffplay';
 }
 
-async function resolveBlobToFilePath(blobAtom) {
+function createWavHeader(dataLength, sampleRate = 22050, channels = 2, bitsPerSample = 16) {
+  const header = Buffer.alloc(44);
+  const blockAlign = channels * (bitsPerSample / 8);
+  const byteRate = sampleRate * blockAlign;
+
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataLength, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM format
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataLength, 40);
+
+  return header;
+}
+
+async function resolveBlobToFilePath(blobAtom, payload = {}) {
   const numericBlobAtom = Number(blobAtom);
   if (prefetchedBlobs.has(numericBlobAtom)) {
     return prefetchedBlobs.get(numericBlobAtom);
@@ -60,6 +82,18 @@ async function resolveBlobToFilePath(blobAtom) {
     }
   } else {
     throw new Error('Invalid blob data format for audio playback');
+  }
+
+  /* Prepend WAV header if raw PCM is received */
+  if (buf.length >= 4 && !buf.subarray(0, 4).equals(Buffer.from('RIFF')) && !buf.subarray(0, 3).equals(Buffer.from('ID3'))) {
+    const isMp3 = data.type && data.type.includes('mp3');
+    if (!isMp3) {
+      const sampleRate = payload.sampleRate || payload.rate || 22050;
+      const channels = payload.channels || 2;
+      const bitsPerSample = payload.sampleBits || 16;
+      const wavHeader = createWavHeader(buf.length, sampleRate, channels, bitsPerSample);
+      buf = Buffer.concat([wavHeader, buf]);
+    }
   }
 
   const ext = data.type && data.type.includes('mp3') ? '.mp3' : '.wav';
@@ -128,7 +162,7 @@ async function processQueue(cookie) {
   const streamId = payload.streamId !== undefined ? Number(payload.streamId) : (payload.stream !== undefined ? Number(payload.stream) : 1);
 
   try {
-    const filePath = await resolveBlobToFilePath(blobAtom);
+    const filePath = await resolveBlobToFilePath(blobAtom, payload);
     const player = getAudioPlayerCmd();
 
     const isCustomCmd = Boolean(process.env.AUDIO_PLAYER_CMD || process.env.XAUDIO_PLAYER_CMD);
