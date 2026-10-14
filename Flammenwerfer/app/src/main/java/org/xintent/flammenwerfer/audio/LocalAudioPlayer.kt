@@ -38,12 +38,14 @@ class LocalAudioPlayer(
     fun triggerLocalPrefetch(jsonPayload: String): String {
         return try {
             val json = JSONObject(jsonPayload)
-            val sampleId = json.optString("sample")
-                .ifBlank { json.optString("blobId", json.optString("blob", "")) }
+            val rawSample = json.opt("sample") ?: json.opt("blobId") ?: json.opt("blob") ?: ""
+            val parsedSampleId = XIntentClient.parseBlobId(rawSample)
+            val sampleIdStr = parsedSampleId?.toString() ?: rawSample.toString()
 
-            if (sampleId.isNotBlank() && !localBlobCache.containsKey(sampleId)) {
+            if (parsedSampleId != null && !localBlobCache.containsKey(sampleIdStr)) {
                 val serverUrl = XIntentClient.getServerUrl(context)
-                val blobUrl = "$serverUrl/xblob/$sampleId"
+                val hexSampleId = XIntentClient.formatBlobIdHex(parsedSampleId)
+                val blobUrl = "$serverUrl/xblob/$hexSampleId"
 
                 Executors.newSingleThreadExecutor().execute {
                     try {
@@ -58,19 +60,21 @@ class LocalAudioPlayer(
                             if (audioBytes != null && audioBytes.isNotEmpty()) {
                                 val tempFile = File.createTempFile("flammen_prefetch_", ".wav", context.cacheDir)
                                 FileOutputStream(tempFile).use { it.write(audioBytes) }
-                                localBlobCache[sampleId] = tempFile
-                                XIntentClient.addLog("[xaudio.PrefetchSoundBlob] Prefetched blob $sampleId (${audioBytes.size} bytes)")
+                                localBlobCache[sampleIdStr] = tempFile
+                                XIntentClient.addLog("[xaudio.PrefetchSoundBlob] Prefetched blob $hexSampleId (${audioBytes.size} bytes)")
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e("LocalAudioPlayer", "Error prefetching xblob $sampleId", e)
+                        Log.e("LocalAudioPlayer", "Error prefetching xblob $hexSampleId", e)
+                    } finally {
+                        XIntentClient.unlinkXBlob(serverUrl, parsedSampleId)
                     }
                 }
             }
 
             JSONObject().apply {
                 put("status", "ok")
-                put("message", "Prefetch started for $sampleId")
+                put("message", "Prefetch started for $sampleIdStr")
             }.toString()
         } catch (e: Exception) {
             JSONObject().apply {
@@ -88,10 +92,11 @@ class LocalAudioPlayer(
             val seqnum = json.optInt("seqnum", json.optInt("seq", 0))
             val streamId = json.optInt("streamId", json.optInt("stream", 1))
 
-            val sampleId = json.optString("sample")
-                .ifBlank { json.optString("blobId", json.optString("blob", "")) }
+            val rawSample = json.opt("sample") ?: json.opt("blobId") ?: json.opt("blob") ?: ""
+            val parsedSampleId = XIntentClient.parseBlobId(rawSample)
+            val sampleIdStr = parsedSampleId?.toString() ?: rawSample.toString()
 
-            XIntentClient.addLog("[xaudio.PlaySoundBlob] Received XAudioPlay intent: cookie=$cookie, seq=$seqnum, sample=$sampleId")
+            XIntentClient.addLog("[xaudio.PlaySoundBlob] Received XAudioPlay intent: cookie=$cookie, seq=$seqnum, sample=$sampleIdStr")
 
             var audioBytes: ByteArray? = null
             if (json.has("data") && json.optString("_dataType") == "base64") {
@@ -103,11 +108,12 @@ class LocalAudioPlayer(
                 }
             }
 
-            var tempAudioFile: File? = if (sampleId.isNotBlank()) localBlobCache.remove(sampleId) else null
+            var tempAudioFile: File? = if (sampleIdStr.isNotBlank()) localBlobCache.remove(sampleIdStr) else null
 
-            if (tempAudioFile == null && audioBytes == null && sampleId.isNotBlank()) {
+            if (tempAudioFile == null && audioBytes == null && parsedSampleId != null) {
                 val serverUrl = XIntentClient.getServerUrl(context)
-                val blobUrl = "$serverUrl/xblob/$sampleId"
+                val hexSampleId = XIntentClient.formatBlobIdHex(parsedSampleId)
+                val blobUrl = "$serverUrl/xblob/$hexSampleId"
                 try {
                     val conn = (URL(blobUrl).openConnection() as HttpURLConnection).apply {
                         requestMethod = "GET"
@@ -119,7 +125,9 @@ class LocalAudioPlayer(
                         audioBytes = extractAudioBytesFromResponse(rawBytes)
                     }
                 } catch (e: Exception) {
-                    Log.e("LocalAudioPlayer", "Error fetching xblob $sampleId from $blobUrl", e)
+                    Log.e("LocalAudioPlayer", "Error fetching xblob $hexSampleId from $blobUrl", e)
+                } finally {
+                    XIntentClient.unlinkXBlob(serverUrl, parsedSampleId)
                 }
             }
 
@@ -157,7 +165,7 @@ class LocalAudioPlayer(
                     put("seqnum", seqnum)
                 }.toString()
             } else {
-                XIntentClient.addLog("[xaudio.PlaySoundBlob ⚠️] Received XAudioPlay seq #$seqnum for sample '$sampleId', but no audio bytes or cached xblob were found")
+                XIntentClient.addLog("[xaudio.PlaySoundBlob ⚠️] Received XAudioPlay seq #$seqnum for sample '$sampleIdStr', but no audio bytes or cached xblob were found")
                 JSONObject().apply {
                     put("status", "ok")
                     put("message", "XAudioPlay received (no audio data)")

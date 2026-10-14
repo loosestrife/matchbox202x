@@ -244,7 +244,10 @@ async function XClientMessage(X, targetWin, message_type, data) {
   return X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
 }
 
-async function httpPutBlobsOverSocket(sockPath, blobData) {
+async function httpPutBlobsOverSocket(sockPath, blobData, senderWin) {
+  if (!senderWin) {
+    throw new Error('httpPutBlobsOverSocket requires senderWin');
+  }
   return new Promise((resolve, reject) => {
     const payloadStr = typeof blobData === 'string' ? blobData : (Buffer.isBuffer(blobData) ? blobData : JSON.stringify(blobData));
     const isBuffer = Buffer.isBuffer(payloadStr);
@@ -253,16 +256,23 @@ async function httpPutBlobsOverSocket(sockPath, blobData) {
     const contentEncoding = (typeof blobData === 'object' && blobData !== null) ? (blobData.contentEncoding || (blobData._dataType === 'fd-rights' ? 'fd-rights' : (blobData._dataType === 'base64' ? 'base64' : 'identity'))) : 'identity';
     const mimeType = (typeof blobData === 'object' && blobData !== null && blobData.type) ? blobData.type : 'application/json';
 
+    const hostname = os.hostname();
+    const display = (process.env.DISPLAY || ':0').replace(/^:/, '');
+    const widHex = typeof senderWin === 'number' ? `0x${senderWin.toString(16)}` : String(senderWin);
+
+    const headers = {
+      'Content-Type': mimeType,
+      'Content-Length': bodyBuf.length,
+      'Content-Encoding': contentEncoding,
+      'Accept-Encoding': 'identity, base64, fd-rights',
+      'Origin': `${hostname}:${display}/${widHex}`
+    };
+
     const req = http.request({
       socketPath: sockPath,
       path: '/blobs',
       method: 'PUT',
-      headers: {
-        'Content-Type': mimeType,
-        'Content-Length': bodyBuf.length,
-        'Content-Encoding': contentEncoding,
-        'Accept-Encoding': 'identity, base64, fd-rights'
-      }
+      headers
     }, (res) => {
       let resData = '';
       res.on('data', chunk => { resData += chunk; });
@@ -306,7 +316,7 @@ async function XBlobCreate(
 
     if (sockPath && fs.existsSync(sockPath)) {
       try {
-        const blobId = await httpPutBlobsOverSocket(sockPath, blobData);
+        const blobId = await httpPutBlobsOverSocket(sockPath, blobData, senderWin);
         if (blobId) return blobId;
       } catch (sockErr) {
         logger.warn(`XBlobCreate socket PUT /blobs failed, falling back to X11 IPC: ${sockErr.message}`);

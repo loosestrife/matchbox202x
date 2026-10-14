@@ -122,12 +122,32 @@ module.exports = ({ X, clientWin }) => {
     }
   };
 
+  const parseBlobId = (id) => {
+    if (id === null || id === undefined) return NaN;
+    if (typeof id === 'number') return id;
+    if (typeof id === 'string') {
+      const trimmed = id.trim();
+      if (trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
+        return parseInt(trimmed, 16);
+      }
+      const num = Number(trimmed);
+      if (!isNaN(num)) return num;
+      return parseInt(trimmed, 16);
+    }
+    return NaN;
+  };
+
   const routeXBlobTransfer = async (req, res) => {
     const { blobId, blob, grantee } = req.body || {};
-    const targetBlob = Number(blobId || blob);
+    const rawBlob = req.params?.blobId || blobId || blob;
+    const targetBlob = parseBlobId(rawBlob);
     const hexBlobId = toHexBlobId(targetBlob);
     const granteeWin = Number(grantee || routerWin());
-    logger.info(`POST /xblob/XBlobTransfer blob=${targetBlob} grantee=${granteeWin}`);
+    logger.info(`${req.method} ${req.path} blob=${targetBlob} grantee=${granteeWin}`);
+    if (isNaN(targetBlob)) {
+      res.setHeader('Matchbox-Bridge', '1.0');
+      return res.status(400).json({ status: 'error', message: 'Invalid blobId' });
+    }
     await xintent.XBlobTransfer(X, routerWin(), clientWin, targetBlob, granteeWin);
     res.setHeader('Matchbox-Bridge', '1.0');
     res.setHeader('X-Blob-Id', hexBlobId);
@@ -136,10 +156,15 @@ module.exports = ({ X, clientWin }) => {
 
   const routeXBlobGrant = async (req, res) => {
     const { blobId, blob, grantee } = req.body || {};
-    const targetBlob = Number(blobId || blob);
+    const rawBlob = req.params?.blobId || blobId || blob;
+    const targetBlob = parseBlobId(rawBlob);
     const hexBlobId = toHexBlobId(targetBlob);
     const granteeWin = Number(grantee || routerWin());
-    logger.info(`POST /xblob/XBlobGrant blob=${targetBlob} grantee=${granteeWin}`);
+    logger.info(`${req.method} ${req.path} blob=${targetBlob} grantee=${granteeWin}`);
+    if (isNaN(targetBlob)) {
+      res.setHeader('Matchbox-Bridge', '1.0');
+      return res.status(400).json({ status: 'error', message: 'Invalid blobId' });
+    }
     await xintent.XBlobGrant(X, routerWin(), clientWin, targetBlob, granteeWin);
     res.setHeader('Matchbox-Bridge', '1.0');
     res.setHeader('X-Blob-Id', hexBlobId);
@@ -148,9 +173,14 @@ module.exports = ({ X, clientWin }) => {
 
   const routeXBlobUnlink = async (req, res) => {
     const { blobId, blob } = req.body || {};
-    const targetBlob = Number(blobId || blob);
+    const rawBlob = req.params?.blobId || blobId || blob;
+    const targetBlob = parseBlobId(rawBlob);
     const hexBlobId = toHexBlobId(targetBlob);
-    logger.info(`POST /xblob/XBlobUnlink blob=${targetBlob}`);
+    logger.info(`${req.method} ${req.path} blob=${targetBlob}`);
+    if (isNaN(targetBlob)) {
+      res.setHeader('Matchbox-Bridge', '1.0');
+      return res.status(400).json({ status: 'error', message: 'Invalid blobId' });
+    }
     await xintent.XBlobUnlink(X, routerWin(), clientWin, targetBlob);
     res.setHeader('Matchbox-Bridge', '1.0');
     res.setHeader('X-Blob-Id', hexBlobId);
@@ -160,10 +190,14 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobAnnounceHost = async (req, res) => {
     const { blobId, blob, host } = req.body || {};
     const rawBlob = req.params?.blobId || blobId || blob;
-    const targetBlob = Number(rawBlob);
+    const targetBlob = parseBlobId(rawBlob);
     const hexBlobId = toHexBlobId(targetBlob);
     const hostWin = Number(host || clientWin);
-    logger.info(`POST /xblob/XBlobAnnounceHost blob=${targetBlob} host=${hostWin}`);
+    logger.info(`${req.method} ${req.path} blob=${targetBlob} host=${hostWin}`);
+    if (isNaN(targetBlob)) {
+      res.setHeader('Matchbox-Bridge', '1.0');
+      return res.status(400).json({ status: 'error', message: 'Invalid blobId' });
+    }
     await xintent.XBlobAnnounceHost(X, routerWin(), clientWin, targetBlob, hostWin);
     res.setHeader('Matchbox-Bridge', '1.0');
     res.setHeader('X-Blob-Id', hexBlobId);
@@ -173,16 +207,13 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobBroadcast = async (req, res) => {
     const { blobId, blob, host, version } = req.body || {};
     const rawBlob = req.params?.blobId || blobId || blob;
-    let targetBlob;
-    if (typeof rawBlob === 'number') {
-      targetBlob = rawBlob;
-    } else if (typeof rawBlob === 'string' && (rawBlob.startsWith('0x') || rawBlob.startsWith('0X'))) {
-      targetBlob = parseInt(rawBlob, 16);
-    } else {
-      targetBlob = Number(rawBlob);
-    }
+    const targetBlob = parseBlobId(rawBlob);
     const hexBlobId = toHexBlobId(targetBlob);
-    logger.info(`POST /xblob/XBlobBroadcast blob=${targetBlob} version=${version}`);
+    logger.info(`${req.method} ${req.path} blob=${targetBlob} version=${version}`);
+    if (isNaN(targetBlob)) {
+      res.setHeader('Matchbox-Bridge', '1.0');
+      return res.status(400).json({ status: 'error', message: 'Invalid blobId' });
+    }
     await xintent.XBlobBroadcast(X, routerWin(), clientWin, targetBlob, host, version);
     res.setHeader('Matchbox-Bridge', '1.0');
     res.setHeader('Accept-Encoding', 'identity, base64, fd-rights');

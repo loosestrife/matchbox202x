@@ -171,7 +171,7 @@ abstract class BaseXIntentDocumentsProvider(
             val readSide = pipe[0]
             val writeSide = pipe[1]
 
-            val blobId = "0x" + System.currentTimeMillis().toString(16)
+            val blobId = System.currentTimeMillis() and 0xFFFFFFFFL
             val fileName = file.name.removePrefix("blob_")
 
             Thread {

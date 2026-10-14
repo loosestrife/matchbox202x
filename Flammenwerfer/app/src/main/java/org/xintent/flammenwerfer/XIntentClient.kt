@@ -574,6 +574,51 @@ name = "$advertisedName"
         prefs.edit().putString(KEY_SERVER_URL, cleanUrl).apply()
     }
 
+    fun parseBlobId(value: Any?): Long? {
+        if (value == null) return null
+        if (value is Number) {
+            val l = value.toLong()
+            return if (l > 0) l else null
+        }
+        val str = value.toString().trim()
+        if (str.isEmpty() || str == "0" || str == "0x0") return null
+        if (str.startsWith("0x", ignoreCase = true)) {
+            return try { str.substring(2).toLong(16) } catch (_: Exception) { null }
+        }
+        return try {
+            val l = str.toLong()
+            if (l > 0) l else null
+        } catch (_: Exception) {
+            try { str.toLong(16) } catch (_: Exception) { null }
+        }
+    }
+
+    fun formatBlobIdHex(blobId: Long): String {
+        if (blobId <= 0) return ""
+        return "0x" + blobId.toString(16)
+    }
+
+    fun unlinkXBlob(baseUrl: String, blobId: Long) {
+        if (blobId <= 0) {
+            Log.e(TAG, "Attempt to unlink invalid blobId $blobId")
+            return
+        }
+        val hexBlobId = formatBlobIdHex(blobId)
+        try {
+            val url = URL("$baseUrl/xblob/$hexBlobId")
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "DELETE"
+                connectTimeout = 5000
+                readTimeout = 5000
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+            }
+            val responseCode = connection.responseCode
+            Log.i(TAG, "Unlinked xblob $hexBlobId (u32: $blobId) at $baseUrl [$responseCode]")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unlinking xblob $hexBlobId (u32: $blobId) at $baseUrl", e)
+        }
+    }
+
     fun getTargetApp(context: Context, actionIndex: Int): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val defaultApp = when (actionIndex) {
@@ -1044,26 +1089,51 @@ name = "$advertisedName"
                 }
             }
 
-            if (audioBytes == null || audioBytes.isEmpty()) {
-                val blobIdMatch = Regex("""(?:X-Attached-Blob-Id|X-Blob-Id|data_blob|dataBlob|payloadBlob)\s*[:=]\s*"?(\d+)""", RegexOption.IGNORE_CASE)
-                    .find(responseText)
-                val blobId = blobIdMatch?.groupValues?.get(1) ?: ""
+            val blobIdsToUnlink = mutableSetOf<Long>()
 
-                if (blobId.isNotBlank() && blobId != "0") {
+            for (json in jsonObjects) {
+                listOf("data_blob", "dataBlob", "dataBlobId", "X-Attached-Blob-Id", "X-Blob-Id").forEach { key ->
+                    parseBlobId(json.opt(key))?.let { blobIdsToUnlink.add(it) }
+                }
+                val payloadObj = json.optJSONObject("payload")
+                if (payloadObj != null) {
+                    listOf("data_blob", "dataBlob", "dataBlobId").forEach { key ->
+                        parseBlobId(payloadObj.opt(key))?.let { blobIdsToUnlink.add(it) }
+                    }
+                }
+            }
+
+            val dataBlobRegex = Regex(""""?\b(?:X-Attached-Blob-Id|X-Blob-Id|data_blob|dataBlob)"?\s*[:=]\s*"?(\d+|0x[0-9a-fA-F]+)""", RegexOption.IGNORE_CASE)
+            dataBlobRegex.findAll(responseText).forEach { match ->
+                parseBlobId(match.groupValues[1])?.let { blobIdsToUnlink.add(it) }
+            }
+
+            if (audioBytes == null || audioBytes.isEmpty()) {
+                for (blobId in blobIdsToUnlink) {
+                    val hexBlobId = formatBlobIdHex(blobId)
+                    if (hexBlobId.isBlank()) continue
                     try {
-                        val conn = (URL("$baseUrl/xblob/$blobId").openConnection() as HttpURLConnection).apply {
+                        val conn = (URL("$baseUrl/xblob/$hexBlobId").openConnection() as HttpURLConnection).apply {
                             requestMethod = "GET"
                             connectTimeout = 5000
                             readTimeout = 10000
                         }
                         if (conn.responseCode in 200..299) {
                             val blobRawBytes = conn.inputStream.readBytes()
-                            audioBytes = extractAudioBytesFromRawResponse(blobRawBytes) ?: blobRawBytes
+                            val extracted = extractAudioBytesFromRawResponse(blobRawBytes) ?: blobRawBytes
+                            if (extracted.isNotEmpty()) {
+                                audioBytes = extracted
+                                break
+                            }
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error fetching xblob $blobId for TTS", e)
+                        Log.e(TAG, "Error fetching xblob $hexBlobId for TTS", e)
                     }
                 }
+            }
+
+            for (blobId in blobIdsToUnlink) {
+                unlinkXBlob(baseUrl, blobId)
             }
 
             Log.i(TAG, "Sent ui.TextToSpeech to $targetApp [$responseCode]: parsed ${jsonObjects.size} JSON blocks. AudioBytes size: ${audioBytes?.size}")
@@ -1152,7 +1222,7 @@ name = "$advertisedName"
 
     suspend fun sendXBlobBroadcast(
         context: Context,
-        blobId: String,
+        blobId: Long,
         name: String,
         type: String,
         size: Long,
@@ -1163,8 +1233,9 @@ name = "$advertisedName"
         val baseUrl = getServerUrl(context)
         val fullUrl = "$baseUrl/intent/sys/XBlobBroadcast?app=$targetApp"
 
+        val hexBlobId = formatBlobIdHex(blobId)
         val logPrefix = "[XBlobBroadcast -> $targetApp]"
-        addLog("$logPrefix Broadcasting blob $blobId: $name ($type, $size bytes)")
+        addLog("$logPrefix Broadcasting blob $hexBlobId (u32: $blobId): $name ($type, $size bytes)")
 
         try {
             val blobJson = JSONObject().apply {

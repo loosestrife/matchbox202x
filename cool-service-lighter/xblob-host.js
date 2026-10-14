@@ -168,7 +168,7 @@ const toHexBlobId = (id) => {
 };
 
 let nextHostBlobSlot = 1;
-const allocateHostBlobAtom = async (blobData = {}) => {
+const allocateHostBlobAtom = async (blobData = {}, initialHardLinker = null) => {
   try {
     let typeAtom = 0;
     if (blobData && typeof blobData === 'object') {
@@ -184,6 +184,7 @@ const allocateHostBlobAtom = async (blobData = {}) => {
       lighterWin,
       cookie,
       typeAtom || 0,
+      initialHardLinker || 0,
     ]);
     const responseEv = await X.seekResponsePacket(
       (ev) =>
@@ -394,12 +395,30 @@ const createXBlobSocketServer = (sockPath) => {
             }
             const targetBlob = parseBlobId(rawBlobId);
 
+            let requestSenderWin = null;
+            const originHeader = req.headers['origin'] || req.headers['x-origin'] || req.headers['x-sender-win'];
+            if (originHeader) {
+              const originParts = String(originHeader).split('/');
+              const lastPart = originParts[originParts.length - 1];
+              if (lastPart) {
+                if (lastPart.startsWith('0x') || lastPart.startsWith('0X')) {
+                  requestSenderWin = parseInt(lastPart, 16);
+                } else if (!isNaN(Number(lastPart))) {
+                  requestSenderWin = Number(lastPart);
+                }
+              }
+            }
+
             let blobId;
             if (targetBlob) {
               await xintent.XBlobWrite(X, xintent.routerWin, blobHostWin, targetBlob, blobData);
               blobId = targetBlob;
             } else {
-              blobId = await allocateHostBlobAtom(blobData);
+              if (!requestSenderWin) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ status: 'error', message: 'Origin header with sender window ID is required' }));
+              }
+              blobId = await allocateHostBlobAtom(blobData, requestSenderWin);
               await xintent.XBlobWrite(X, xintent.routerWin, blobHostWin, blobId, blobData);
             }
 

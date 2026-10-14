@@ -12,8 +12,8 @@ const xblobAtomAssignments = [];
 const handleXBlobCreateV0 = {
   parse: ev => {
     const targetWin = ev.wid;
-    const [senderWin, cookie, typeAtom] = ev.data;
-    return {targetWin, senderWin, cookie, typeAtom: typeAtom || 0};
+    const [senderWin, cookie, typeAtom, initialHardLinker] = ev.data;
+    return {targetWin, senderWin, cookie, typeAtom: typeAtom || 0, initialHardLinker: initialHardLinker || 0};
   },
   securityContext: parsed => {
     return {
@@ -23,8 +23,8 @@ const handleXBlobCreateV0 = {
     };
   },
   accept: async parsed => {
-    const blobAtom = await xblobCreate(parsed.senderWin, null, parsed.typeAtom);
-    logger.info(`XBlobCreate created ${widString(blobAtom)} (typeAtom: ${widString(parsed.typeAtom || 0)}) from ${widString(parsed.senderWin)}`);
+    const blobAtom = await xblobCreate(parsed.senderWin, null, parsed.typeAtom, parsed.initialHardLinker);
+    logger.info(`XBlobCreate created ${widString(blobAtom)} (typeAtom: ${widString(parsed.typeAtom || 0)}) from ${widString(parsed.senderWin)}${parsed.initialHardLinker ? ` (hardLinker: ${widString(parsed.initialHardLinker)})` : ''}`);
 
     const responseEv = Buffer.alloc(32);
     responseEv.writeInt8(33, 0); // ClientMessage
@@ -243,7 +243,7 @@ const handleXBlobTransferV0 = {
   },
 };
 
-const xblobCreate = async (senderWin, hostWin = null, typeAtom = 0) => {
+const xblobCreate = async (senderWin, hostWin = null, typeAtom = 0, initialHardLinker = null) => {
   let initialHost = hostWin;
   if (!initialHost) {
     try {
@@ -255,11 +255,14 @@ const xblobCreate = async (senderWin, hostWin = null, typeAtom = 0) => {
     }
   }
 
+  const primaryHardLinker = initialHardLinker || senderWin;
+  const primaryHost = initialHardLinker ? senderWin : initialHost;
+
   const blobTrackingData = {
     typeAtom: typeAtom || 0,
-    links: [senderWin],
-    softLinks: [],
-    hosts: initialHost ? [initialHost] : [],
+    links: [primaryHardLinker],
+    softLinks: primaryHost && primaryHost !== primaryHardLinker ? [primaryHost] : [],
+    hosts: primaryHost ? [primaryHost] : [],
   };
 
   let blobIdx = xblobAtomAssignments.findIndex(slot => !slot);
