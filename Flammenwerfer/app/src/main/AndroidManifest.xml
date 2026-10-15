@@ -44,6 +44,27 @@
             android:theme="@style/Theme.ProcessTextTranslucent" />
 
         <activity
+            android:name=".PlayMediaActivity"
+            android:exported="true"
+            android:label="XIntent Play On..."
+            android:icon="@mipmap/ic_launcher"
+            android:theme="@style/Theme.Flammenwerfer">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".SendIntentActivity"
             android:exported="true"
             android:label="XIntent Desktop (Pick / Save)"

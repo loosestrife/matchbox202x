@@ -5,7 +5,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
-const HTTP_PORT = 12345;
+const HTTP_PORT = parseInt(process.env.PORT || process.env.XINTENT_PORT || '12355', 10);
 const HTTP_BASE_URL = `http://localhost:${HTTP_PORT}`;
 const GLOBAL_TIMEOUT_MS = 60000;
 const STEP_EXEC_TIMEOUT_MS = 20000;
@@ -126,7 +126,7 @@ async function cleanup() {
     try { xvfbProc.kill('SIGKILL'); } catch (_) {}
   }
   try {
-    execSync('fuser -k 12345/tcp 2>/dev/null || true');
+    execSync(`fuser -k ${HTTP_PORT}/tcp 2>/dev/null || true`);
   } catch (_) {}
   await new Promise(r => setTimeout(r, 300));
 }
@@ -134,9 +134,9 @@ async function cleanup() {
 async function runE2EPipeline() {
   console.log('=== Starting E2E System Integration Test Pipeline ===');
 
-  // Kill any stale background listeners on port 12345
+  // Kill any stale background listeners on test port
   try {
-    execSync('fuser -k 12345/tcp 2>/dev/null || true');
+    execSync(`fuser -k ${HTTP_PORT}/tcp 2>/dev/null || true`);
   } catch (_) {}
 
   // Set mock audio player command for cool-service-lighter xaudio-node
@@ -174,13 +174,13 @@ async function runE2EPipeline() {
   console.log('[Step 2] Spawning cool-service-lighter supervisor...');
   const lighterScript = path.join(__dirname, '..', 'cool-service-lighter', 'index.js');
   lighterProc = spawn('node', [lighterScript], {
-    cwd: path.join(__dirname, '..', 'cool-service-lighter'),
+    cwd: path.join(__dirname, '..'),
     env: { ...process.env },
     stdio: 'ignore'
   });
 
   // Step 3: Wait for HTTP bridge readiness
-  console.log('[Step 3] Polling for cool-http-bridge readiness on port 12345...');
+  console.log(`[Step 3] Polling for cool-http-bridge readiness on port ${HTTP_PORT}...`);
   await pollHttpReady();
   console.log('[Step 3] cool-http-bridge is active and responsive!');
 
@@ -203,15 +203,15 @@ async function runE2EPipeline() {
   });
   await new Promise(r => setTimeout(r, 2000));
 
-  // Step 4: Execute final-copy.js (Copy Payload - Mode A)
+  // Step 4: Execute final-copy-pro.js (Copy Payload - Mode A)
   const testPayloadA = 'E2E Integration Payload Mode A - ' + Date.now();
-  console.log(`[Step 4] Executing final-copy.js --echo "${testPayloadA}"`);
-  execSync(`node "${path.join(__dirname, '..', 'final-copy.js')}" --echo "${testPayloadA}"`, {
+  console.log(`[Step 4] Executing final-copy-pro.js --echo "${testPayloadA}"`);
+  execSync(`node "${path.join(__dirname, '..', 'final-copy-pro.js')}" --echo "${testPayloadA}"`, {
     env: { ...process.env },
     timeout: STEP_EXEC_TIMEOUT_MS,
     stdio: 'ignore'
   });
-  console.log('[Step 4] final-copy.js completed successfully!');
+  console.log('[Step 4] final-copy-pro.js completed successfully!');
 
   // Step 5: Mock Web Card Paste Test - Mode A (Inline Multipart Stream)
   console.log('[Step 5] Mock Web Card issuing ui.Paste (Mode A: Default Multipart Stream)...');
@@ -226,10 +226,10 @@ async function runE2EPipeline() {
   assert(fullBodyA.includes('E2E Integration Payload'), 'Mode A multipart response body should contain payload header');
   console.log('  -> Mode A (Default Inline Multipart Stream) PASSED!');
 
-  // Step 6: Execute final-copy.js (Copy Payload - Mode B)
+  // Step 6: Execute final-copy-pro.js (Copy Payload - Mode B)
   const testPayloadB = 'E2E Integration Payload Mode B - ' + Date.now();
-  console.log(`\n[Step 6] Executing final-copy.js --echo "${testPayloadB}"`);
-  execSync(`node "${path.join(__dirname, '..', 'final-copy.js')}" --echo "${testPayloadB}"`, {
+  console.log(`\n[Step 6] Executing final-copy-pro.js --echo "${testPayloadB}"`);
+  execSync(`node "${path.join(__dirname, '..', 'final-copy-pro.js')}" --echo "${testPayloadB}"`, {
     env: { ...process.env },
     timeout: STEP_EXEC_TIMEOUT_MS,
     stdio: 'ignore'

@@ -53,7 +53,7 @@ class SendIntentActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             val bytes = text.toByteArray(Charsets.UTF_8)
-            val result = XIntentClient.sendSaveAsIntent(
+            val result = XIntentClient.sendSendToIntent(
                 context = applicationContext,
                 name = "shared_text.txt",
                 type = "text/plain",
@@ -110,7 +110,7 @@ class SendIntentActivity : ComponentActivity() {
                     Base64.encodeToString(bytes, Base64.NO_WRAP)
                 }
 
-                val result = XIntentClient.sendSaveAsIntent(
+                val result = XIntentClient.sendSendToIntent(
                     context = applicationContext,
                     name = name,
                     type = actualType,

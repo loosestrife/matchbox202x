@@ -179,16 +179,17 @@ async function ensureXIntentRouter(X, root) {
 }
 
 async function ensureHttpBridge() {
-  const isRunning = await checkHttpBridge(12345);
+  const httpPort = parseInt(process.env.PORT || process.env.XINTENT_PORT || '12345', 10);
+  const isRunning = await checkHttpBridge(httpPort);
   if (!isRunning) {
-    logger.info('[cool-service-lighter] cool-http-bridge not detected on port 12345. Auto-launching cool-http-bridge...');
+    logger.info(`[cool-service-lighter] cool-http-bridge not detected on port ${httpPort}. Auto-launching cool-http-bridge...`);
     const bridgeDir = path.join(__dirname, '../cool-http-bridge');
     const entryFile = path.join(bridgeDir, 'index.js');
 
     spawnRuntime(entryFile, bridgeDir);
-    logger.info('[cool-service-lighter] Auto-launched cool-http-bridge service on port 12345.');
+    logger.info(`[cool-service-lighter] Auto-launched cool-http-bridge service on port ${httpPort}.`);
   } else {
-    logger.info('[cool-service-lighter] cool-http-bridge is active on http://localhost:12345.');
+    logger.info(`[cool-service-lighter] cool-http-bridge is active on http://localhost:${httpPort}.`);
   }
 }
 

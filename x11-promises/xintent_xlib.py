@@ -85,7 +85,9 @@ def format_xblob_at_rest(blob_data: Any) -> bytes:
     data_type = None
     body_bytes = b""
 
-    if isinstance(blob_data, dict):
+    is_wrapper = isinstance(blob_data, dict) and ("data" in blob_data or "xblobType" in blob_data)
+
+    if is_wrapper:
         if "xblobType" in blob_data:
             xblob_type = blob_data["xblobType"]
         if "name" in blob_data:
@@ -109,10 +111,10 @@ def format_xblob_at_rest(blob_data: Any) -> bytes:
                     data_type = "json"
             else:
                 body_bytes = str(d).encode("utf-8") if d is not None else b""
-        else:
-            body_bytes = json.dumps(blob_data).encode("utf-8")
-            if not data_type:
-                data_type = "json"
+    elif isinstance(blob_data, dict):
+        body_bytes = json.dumps(blob_data).encode("utf-8")
+        data_type = "json"
+        mime_type = "application/json"
     elif isinstance(blob_data, (bytes, bytearray)):
         body_bytes = bytes(blob_data)
         data_type = "binary"
@@ -163,7 +165,7 @@ def format_xblob_at_rest(blob_data: Any) -> bytes:
     return header_bytes + body_bytes
 
 
-def parse_xblob_at_rest(raw: Any) -> Any:
+def parse_xblob_at_rest(raw: Any, received_fds: Optional[List[int]] = None) -> Any:
     if not raw:
         return {
             "xblobType": "Blob",
@@ -213,7 +215,14 @@ def parse_xblob_at_rest(raw: Any) -> Any:
         transfer_enc = headers.get("content-encoding") or headers.get("content-transfer-encoding", "")
 
         if "fd-rights" in transfer_enc.lower():
-            data = body_bytes.decode("utf-8", errors="replace").strip()
+            if received_fds and len(received_fds) > 0:
+                data = received_fds[0]
+            else:
+                body_str = body_bytes.decode("utf-8", errors="replace").strip()
+                if body_str.isdigit():
+                    data = int(body_str)
+                else:
+                    data = body_str
             data_type = "fd-rights"
         elif "base64" in transfer_enc.lower():
             try:
@@ -380,7 +389,7 @@ def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any) -> Optional[in
             body_bytes = json.dumps(blob_data).encode("utf-8")
 
         req_lines = [
-            "PUT /blobs XBlob/0.1",
+            "PUT /blobs HTTP/1.1",
             "Host: localhost",
             f"Content-Type: {mime_type}",
             f"Content-Length: {len(body_bytes)}",
@@ -441,7 +450,7 @@ def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any) -> Optional[in
 def _http_get_blob_unix_socket(socket_path: str, blob_hex_id: str) -> Optional[Any]:
     try:
         req_lines = [
-            f"GET /blobs/{blob_hex_id} XBlob/0.1",
+            f"GET /blobs/{blob_hex_id} HTTP/1.1",
             "Host: localhost",
             "Accept: */*",
             "Accept-Encoding: identity, base64, fd-rights",
@@ -457,11 +466,26 @@ def _http_get_blob_unix_socket(socket_path: str, blob_hex_id: str) -> Optional[A
         sock.sendall(req_header)
 
         res_data = b""
+        received_fds = []
+
         while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            res_data += chunk
+            try:
+                msg, ancdata, flags, addr = sock.recvmsg(4096, socket.CMSG_LEN(struct.calcsize("i") * 4))
+                if not msg:
+                    break
+                res_data += msg
+                if ancdata:
+                    for cmsg_level, cmsg_type, cmsg_data in ancdata:
+                        if cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS:
+                            num_fds = len(cmsg_data) // struct.calcsize("i")
+                            fds = struct.unpack(f"{num_fds}i", cmsg_data[:num_fds * struct.calcsize("i")])
+                            received_fds.extend(fds)
+            except Exception:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                res_data += chunk
+
         sock.close()
 
         sep_pos = res_data.find(b"\r\n\r\n")
@@ -494,7 +518,7 @@ def _http_get_blob_unix_socket(socket_path: str, blob_hex_id: str) -> Optional[A
             rest_headers.append(f"X-XBlob-Type: {headers['x-xblob-type']}")
 
         raw_at_rest = ("\r\n".join(rest_headers) + "\r\n\r\n").encode("latin1") + body_bytes
-        return parse_xblob_at_rest(raw_at_rest)
+        return parse_xblob_at_rest(raw_at_rest, received_fds=received_fds)
     except Exception as e:
         sys.stderr.write(f"[libxintent.py debug] unix socket GET /blobs/{blob_hex_id} error: {e}\n")
         sys.stderr.flush()
@@ -542,12 +566,25 @@ class XIntentXlibClient:
         self.atoms: Dict[str, int] = {}
         self.router_win_id: int = 0
         self.client_win = None
+        self.sub_windows: Dict[int, Any] = {}
         self.handlers: Dict[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = {}
+        self.window_handlers: Dict[Tuple[int, str], Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = {}
         self.pending_events_queue = []
 
         self._intern_all_atoms()
         self.connect_to_router()
         self.client_win = self.x11.create_client_window(name=app_id)
+        if self.client_win and hasattr(self.client_win, "id"):
+            self.sub_windows[self.client_win.id] = self.client_win
+
+    def create_sub_window(self, app_id: str, manifest: Optional[str] = None) -> Any:
+        """Creates an IPC sub-window on this client's shared X11 connection."""
+        win = self.x11.create_client_window(name=app_id)
+        if win and hasattr(win, "id"):
+            self.sub_windows[win.id] = win
+            if manifest:
+                self.register_matchbox_toml(manifest, win_id=win.id)
+        return win
 
     def _intern_all_atoms(self):
         for atom_name in self.PROTOCOL_ATOMS:
@@ -599,12 +636,13 @@ class XIntentXlibClient:
 
         return self.wait_for_router(timeout_sec=2.0)
 
-    def register_matchbox_toml(self, toml_content: str):
-        """Sets MATCHBOX_TOML property on client window to register services."""
-        if self.client_win:
+    def register_matchbox_toml(self, toml_content: str, win_id: Optional[int] = None):
+        """Sets MATCHBOX_TOML property on client window or specific sub-window to register services."""
+        target_win = win_id if win_id else (self.client_win.id if self.client_win else 0)
+        if target_win:
             atom_toml = self.atoms["MATCHBOX_TOML"]
             self.x11.set_window_property_string(
-                self.client_win.id, atom_toml, toml_content
+                target_win, atom_toml, toml_content
             )
 
     def blob_create(self, blob_data: Any, timeout_sec: float = 5.0) -> int:
@@ -685,27 +723,36 @@ class XIntentXlibClient:
                 pass
 
     def get_xblob_socket_path(self, host_win_id: int = 0) -> Optional[str]:
-        """Returns the UNIX domain socket path advertised in XBLOB_SOCKET_PATH on XBLOB_HOST window."""
-        if not host_win_id:
-            hostname = socket.gethostname()
-            host_atom = self.x11.intern_atom(f"XBLOB_HOST_{hostname}")
-            host_win_id = self.x11.get_selection_owner(host_atom)
-        if not host_win_id:
-            return None
+        """Returns the UNIX domain socket path advertised in XBLOB_SOCKET_PATH on XBLOB_HOST window or host_win_id."""
         socket_path_atom = self.x11.intern_atom("XBLOB_SOCKET_PATH")
-        return self.x11.get_window_property_string(host_win_id, socket_path_atom)
+        if host_win_id:
+            try:
+                sock_path = self.x11.get_window_property_string(host_win_id, socket_path_atom)
+                if sock_path:
+                    return sock_path
+            except Exception:
+                pass
+
+        hostname = socket.gethostname()
+        host_atom = self.x11.intern_atom(f"XBLOB_HOST_{hostname}")
+        xblob_host_id = self.x11.get_selection_owner(host_atom)
+        if not xblob_host_id:
+            alt_atom = self.x11.intern_atom("XBLOB_HOST")
+            xblob_host_id = self.x11.get_selection_owner(alt_atom)
+
+        if xblob_host_id:
+            try:
+                sock_path = self.x11.get_window_property_string(xblob_host_id, socket_path_atom)
+                if sock_path:
+                    return sock_path
+            except Exception:
+                pass
+
+        return None
 
     def blob_read(self, blob_atom: int) -> Any:
         """Reads HTTP headers/data at rest payload from local UNIX socket if available, or window property blob_atom."""
         blob_hex = hex(blob_atom)
-        sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
-        if sock_path and os.path.exists(sock_path):
-            blob_data = _http_get_blob_unix_socket(sock_path, blob_hex)
-            if blob_data:
-                return blob_data
-
-        sys.stderr.write(f"[libxintent.py debug] blob_read start for {hex(blob_atom)}\n")
-        sys.stderr.flush()
 
         host_win_id = 0
         try:
@@ -714,6 +761,23 @@ class XIntentXlibClient:
             sys.stderr.flush()
         except Exception as e:
             sys.stderr.write(f"[libxintent.py debug] get_selection_owner error: {e}\n")
+            sys.stderr.flush()
+
+        sock_path = self.get_xblob_socket_path(host_win_id) or os.environ.get("XBLOB_SOCKET_PATH")
+        if sock_path and os.path.exists(sock_path):
+            blob_data = _http_get_blob_unix_socket(sock_path, blob_hex)
+            if blob_data:
+                return blob_data
+            else:
+                msg = f"[libxintent.py warning] Failed to read blob {blob_hex} over UNIX socket '{sock_path}'. Falling back to X11 property read.\n"
+                logger.warning(msg)
+                sys.stderr.write(msg)
+                sys.stderr.flush()
+        else:
+            reason = f"path '{sock_path}' does not exist on disk" if sock_path else "socket path not found on XBLOB_HOST or XBLOB_SOCKET_PATH env"
+            msg = f"[libxintent.py warning] Could not connect to xblob UNIX socket ({reason}). Cannot transfer zero-copy file descriptors (SCM_RIGHTS). Falling back to X11 property read for blob {blob_hex}.\n"
+            logger.warning(msg)
+            sys.stderr.write(msg)
             sys.stderr.flush()
 
         router_id = 0
@@ -814,6 +878,7 @@ class XIntentXlibClient:
         channel: int = 0,
         control_word: int = 0,
         data_blob: int = 0,
+        sender_win_id: Optional[int] = None,
     ) -> int:
         return self._send_xi_v0(
             message_type_atom=self.atoms["XINTENT_EVENT_V0"],
@@ -823,6 +888,7 @@ class XIntentXlibClient:
             channel=channel,
             control_word=control_word,
             data_blob=data_blob,
+            sender_win_id=sender_win_id,
         )
 
     def _send_xi_v0(
@@ -834,13 +900,16 @@ class XIntentXlibClient:
         channel: int = 0,
         control_word: int = 0,
         data_blob: int = 0,
+        sender_win_id: Optional[int] = None,
     ) -> int:
         router_id = self.get_router_win_id()
         if not target_win_id:
             target_win_id = router_id
 
+        src_win_id = sender_win_id if sender_win_id else (self.client_win.id if self.client_win else 0)
+
         payload_blob = self.blob_create(payload)
-        if target_win_id != self.client_win.id:
+        if target_win_id != src_win_id:
             self.blob_transfer(payload_blob, target_win_id)
             if data_blob:
                 self.blob_transfer(data_blob, target_win_id)
@@ -854,7 +923,7 @@ class XIntentXlibClient:
         self.x11.send_client_message(
             target_win_id,
             message_type_atom,
-            [self.client_win.id, tx_or_channel, ctrl_word_to_send, payload_blob, data_blob],
+            [src_win_id, tx_or_channel, ctrl_word_to_send, payload_blob, data_blob],
         )
         return payload_blob
 
@@ -862,14 +931,18 @@ class XIntentXlibClient:
         self,
         intent_name: str,
         handler: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
+        win_id: Optional[int] = None,
     ):
-        """Registers a handler function for an intent."""
+        """Registers a handler function for an intent (optionally tied to a specific window ID)."""
+        target_win = win_id if win_id else (self.client_win.id if self.client_win else 0)
+        if target_win:
+            self.window_handlers[(target_win, intent_name)] = handler
         self.handlers[intent_name] = handler
 
-    def on_intent(self, intent_name: str):
+    def on_intent(self, intent_name: str, win_id: Optional[int] = None):
         """Decorator to register a handler function for an intent."""
         def decorator(func: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]):
-            self.register_handler(intent_name, func)
+            self.register_handler(intent_name, func, win_id=win_id)
             return func
 
         return decorator
@@ -898,7 +971,8 @@ class XIntentXlibClient:
     def _handle_client_message(self, event):
         msg_type = int(event.client_type)
         atom_name = next((name for name, atom_id in self.atoms.items() if int(atom_id) == msg_type), str(msg_type))
-        win_hex = hex(self.client_win.id) if self.client_win else "0x0"
+        target_win_id = event.window.id if (hasattr(event, 'window') and event.window) else (self.client_win.id if self.client_win else 0)
+        win_hex = hex(target_win_id)
         logger.info(f"[xintent_xlib] Received ClientMessage '{atom_name}' ({msg_type}) on window {win_hex}")
         sys.stderr.write(f"[libxintent.py] Received ClientMessage type '{atom_name}' ({msg_type}) on window {win_hex}\n")
         sys.stderr.flush()
@@ -942,15 +1016,18 @@ class XIntentXlibClient:
                 or payload.get("action")
             )
             logger.info(f"[xintent_xlib] Received message for intent '{intent_name}' on channel {channel} (payload_blob={hex(payload_blob)}, data_blob={hex(data_blob)}) on window {win_hex}")
-            if intent_name in self.handlers:
+
+            handler = self.window_handlers.get((target_win_id, intent_name)) or self.handlers.get(intent_name)
+
+            if handler:
                 logger.info(f"[xintent_xlib] Handling intent '{intent_name}' on window {win_hex}")
-                handler = self.handlers[intent_name]
                 frame = {
                     "intent": intent_name,
                     "sender": sender_win_id,
                     "channel": channel,
                     "payload": payload,
                     "data_blob": data_blob,
+                    "target_win": target_win_id,
                 }
                 try:
                     res = handler(frame)
@@ -967,12 +1044,12 @@ class XIntentXlibClient:
                                 ctrl_word = res_payload.pop("control_word")
 
                         router_id = self.get_router_win_id()
-                        logger.info(f"[xintent_xlib] Sending event response for '{intent_name}' back to router {hex(router_id)} on channel {channel} with control_word {ctrl_word} data_blob {hex(data_blob_id)}")
-                        self.send_event(router_id, res_payload, channel=channel, control_word=ctrl_word, data_blob=data_blob_id)
+                        logger.info(f"[xintent_xlib] Sending event response for '{intent_name}' back to router {hex(router_id)} on channel {channel} with control_word {ctrl_word} data_blob {hex(data_blob_id)} from sender win {win_hex}")
+                        self.send_event(router_id, res_payload, channel=channel, control_word=ctrl_word, data_blob=data_blob_id, sender_win_id=target_win_id)
                 except Exception as err:
                     logger.error(f"[xintent_xlib] Error executing handler for '{intent_name}': {err}", exc_info=True)
             else:
-                logger.warning(f"[xintent_xlib] No handler registered for intent '{intent_name}' in app '{self.app_id}'")
+                logger.warning(f"[xintent_xlib] No handler registered for intent '{intent_name}' on window {win_hex} in app '{self.app_id}'")
         else:
             sys.stderr.write(f"[libxintent.py warning] Unhandled ClientMessage type '{atom_name}' ({msg_type}) on window {win_hex}\n")
             sys.stderr.flush()

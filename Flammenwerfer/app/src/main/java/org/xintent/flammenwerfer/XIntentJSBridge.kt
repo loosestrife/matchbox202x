@@ -103,8 +103,14 @@ class XIntentJSBridge(private val activity: CardsActivity) {
 
     @Suppress("unused")
     @JavascriptInterface
+    fun handleLocalSendTo(jsonPayload: String): String {
+        return activity.triggerLocalSendTo(jsonPayload)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
     fun handleLocalSaveAs(jsonPayload: String): String {
-        return activity.triggerLocalSaveAs(jsonPayload)
+        return activity.triggerLocalSendTo(jsonPayload)
     }
 
     @Suppress("unused")

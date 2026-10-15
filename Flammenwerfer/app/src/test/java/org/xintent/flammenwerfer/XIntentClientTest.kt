@@ -57,4 +57,34 @@ class XIntentClientTest {
         assertEquals(null, XIntentClient.parseBlobId(""))
         assertEquals(null, XIntentClient.parseBlobId(null))
     }
+
+    @Test
+    fun testParseMediaPlayTargets() {
+        val sampleTagsJson = """
+        {
+          "apps": {
+            "dlna-living-room-tv": {
+              "name": "DLNA (Living Room TV)",
+              "intents": {
+                "media.Play": { "Accept": "video/webm; codecs=\"vp8\", video/mp4" }
+              }
+            },
+            "user-desktop": {
+              "name": "User Desktop",
+              "intents": {
+                "media.Play": { "Accept": "*/*" }
+              }
+            }
+          }
+        }
+        """.trimIndent()
+
+        val targets = XIntentClient.parseMediaPlayTargets(sampleTagsJson)
+        assertTrue(targets.any { it.appId == "dlna-living-room-tv" })
+        assertTrue(targets.any { it.appId == "user-desktop" })
+        
+        val dlnaTarget = targets.first { it.appId == "dlna-living-room-tv" }
+        assertEquals("DLNA (Living Room TV)", dlnaTarget.name)
+        assertTrue(dlnaTarget.accept.contains("video/webm"))
+    }
 }

@@ -1,0 +1,12 @@
+[app]
+id = "dlna-bridge"
+name = "DLNA XIntent Bridge"
+
+[intents."media.FindDevices"]
+exec = "uv run dlna_xintent_bridge.py"
+
+[intents."fs.SendTo"]
+exec = "uv run dlna_xintent_bridge.py"
+
+[intents."bridge.Advertise"]
+exec = "uv run dlna_xintent_bridge.py"

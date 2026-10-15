@@ -1,0 +1,9 @@
+[Nemo Action]
+Active=true
+Name=Send via XIntent (final-copy-pro)
+Comment=Send selected file(s) over XIntent network using fs.SendTo
+Exec=final-copy-pro --intent fs.SendTo %F
+Icon-Name=document-send
+Selection=notnone
+Extensions=any;
+Quote=double

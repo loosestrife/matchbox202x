@@ -428,27 +428,28 @@ function formatXBlobAtRest(blobData) {
   let dataType = null;
   let bodyBuf = Buffer.alloc(0);
 
-  if (typeof blobData === 'object' && blobData !== null && !Buffer.isBuffer(blobData)) {
+  const isWrapper = typeof blobData === 'object' && blobData !== null && !Buffer.isBuffer(blobData) && (blobData.data !== undefined || blobData.xblobType !== undefined);
+
+  if (isWrapper) {
     if (blobData.xblobType) xblobType = blobData.xblobType;
     if (blobData.name) name = blobData.name;
     if (blobData.type) type = blobData.type;
     if (blobData.size !== undefined) size = blobData.size;
     if (blobData._dataType) dataType = blobData._dataType;
 
-    if (blobData.data !== undefined) {
-      if (Buffer.isBuffer(blobData.data)) {
-        bodyBuf = blobData.data;
-        if (!dataType) dataType = 'binary';
-      } else if (typeof blobData.data === 'object') {
-        bodyBuf = Buffer.from(JSON.stringify(blobData.data), 'utf8');
-        if (!dataType) dataType = 'json';
-      } else {
-        bodyBuf = Buffer.from(String(blobData.data), 'utf8');
-      }
-    } else {
-      bodyBuf = Buffer.from(JSON.stringify(blobData), 'utf8');
+    if (Buffer.isBuffer(blobData.data)) {
+      bodyBuf = blobData.data;
+      if (!dataType) dataType = 'binary';
+    } else if (typeof blobData.data === 'object' && blobData.data !== null) {
+      bodyBuf = Buffer.from(JSON.stringify(blobData.data), 'utf8');
       if (!dataType) dataType = 'json';
+    } else {
+      bodyBuf = Buffer.from(String(blobData.data ?? ''), 'utf8');
     }
+  } else if (typeof blobData === 'object' && blobData !== null && !Buffer.isBuffer(blobData)) {
+    bodyBuf = Buffer.from(JSON.stringify(blobData), 'utf8');
+    dataType = 'json';
+    type = 'application/json';
   } else if (Buffer.isBuffer(blobData)) {
     bodyBuf = blobData;
     dataType = 'binary';
@@ -661,7 +662,10 @@ const sendXChannelJsonFrame = async (
 
   // 1. Create payload blob if not provided
   if (!payloadBlob) {
-    payloadBlob = await XBlobCreate(X, routerWin, senderWin, payload);
+    const payloadWrapper = (typeof payload === 'object' && payload !== null && payload.data === undefined && payload.xblobType === undefined)
+      ? { xblobType: 'Blob', type: 'application/json', data: payload }
+      : payload;
+    payloadBlob = await XBlobCreate(X, routerWin, senderWin, payloadWrapper);
   }
 
   // 2. Transfer or Grant blob rights BEFORE dispatching message

@@ -218,7 +218,7 @@ an XChannelJsonFrame with message type `XAudioSeekStreamV0`, payload `{streamId,
 Windows advertise this -> they get ipc calls.
 ```toml
 [intents]
-"fs.SaveAs" = {type="audio/*"}
+"fs.SendTo" = {type="audio/*"}
 
 [XAudioSink]
 name = "sound-player"

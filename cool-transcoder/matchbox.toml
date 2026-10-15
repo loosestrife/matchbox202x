@@ -1,0 +1,6 @@
+[app]
+id = "cool-transcoder"
+name = "Cool Transcoder (FFmpeg)"
+
+[intents."media.Transcode"]
+exec = "uv run cool_transcoder.py"

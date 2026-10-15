@@ -1,0 +1,15 @@
+[project]
+name = "flammenwerfer-dlna-bridge"
+version = "0.1.0"
+description = "DLNA to XIntent Bridge Daemon"
+requires-python = ">=3.10"
+dependencies = [
+    "websockets>=12.0",
+    "python-xlib>=0.33",
+]
+
+[project.scripts]
+dlna-xintent-bridge = "dlna_xintent_bridge:main"
+
+[tool.setuptools]
+py-modules = ["dlna_xintent_bridge"]

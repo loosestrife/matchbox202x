@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const fs = require('fs');
 const { spawn } = require('child_process');
 const xintent = require('./x11-promises/xintent');
 const {
@@ -191,10 +192,14 @@ async function startDaemon() {
     Object.entries(atoms).map(([name, val]) => [val, name])
   );
 
-  // 1. Advertise capabilities to matchbox router for both ui.Copy and ui.Paste
+  // 1. Advertise capabilities to matchbox router for ui.Copy, ui.Paste, and fs.SendTo
   const matchboxToml = `
 [app]
 id = "cool-clips"
+
+[intents]
+"fs.SendTo" = true
+"fs.SaveAs" = true
 
 [intents."ui.Copy"]
 invocation = "X11"
@@ -228,17 +233,21 @@ invocation = "X11"
       try {
         const { senderWin, payload, channel } = await parseXIntentIntentV0(X, xintent.routerWin, ev);
 
-        // --- Handle ui.Copy ---
-        if (payload.intent === 'ui.Copy') {
-          console.log(`\n[copy-daemon] Received ui.Copy intent from ${widString(senderWin)} (channel: ${channel})`);
-          const contentAtom = payload.blob;
+        // --- Handle ui.Copy / fs.SendTo / fs.SaveAs ---
+        if (payload.intent === 'ui.Copy' || payload.intent === 'fs.SendTo' || payload.intent === 'fs.SaveAs') {
+          console.log(`\n[copy-daemon] Received ${payload.intent} intent from ${widString(senderWin)} (channel: ${channel})`);
+          const contentAtom = payload.blob || (ev.data && ev.data[4] ? ev.data[4] : undefined);
+          if (!contentAtom) {
+            console.error(`[copy-daemon] Error: No content blob atom specified in ${payload.intent} frame`);
+            return;
+          }
           const content = await XBlobRead(X, xintent.routerWin, contentAtom);
 
           currentClipboard = content;
           X.SetSelectionOwner(daemonWin, atoms.CLIPBOARD);
 
           console.log('--------------------------------------------------');
-          console.log(`📋 CLIPBOARD CLAIMED (atoms.CLIPBOARD)`);
+          console.log(`📋 CLIPBOARD CLAIMED via ${payload.intent} (atoms.CLIPBOARD)`);
           console.log(` - MIME Type     : ${content.type || 'unknown'}`);
           console.log(` - Encoding      : ${content._dataType || 'text'}`);
           console.log('--------------------------------------------------');
@@ -301,7 +310,7 @@ invocation = "X11"
       }
 
       const isImage = currentClipboard.type?.startsWith('image/');
-      const isText = currentClipboard.type?.startsWith('text/') || currentClipboard._dataType === 'text';
+      const isText = currentClipboard.type?.startsWith('text/') || currentClipboard._dataType === 'text' || currentClipboard._dataType === 'fd-rights';
 
       try {
         if (targetAtom === atoms.TARGETS) {
@@ -337,7 +346,26 @@ invocation = "X11"
         }
 
         if (isText && [atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
-          const textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
+          let textBuf = Buffer.alloc(0);
+          if (currentClipboard._dataType === 'fd-rights') {
+            const pathOrFd = currentClipboard.data ? currentClipboard.data.trim() : '';
+            if (fs.existsSync(pathOrFd)) {
+              textBuf = fs.readFileSync(pathOrFd);
+            } else if (!isNaN(Number(pathOrFd))) {
+              try {
+                const numFd = Number(pathOrFd);
+                const stats = fs.fstatSync(numFd);
+                textBuf = Buffer.alloc(stats.size);
+                fs.readSync(numFd, textBuf, 0, stats.size, 0);
+              } catch (_) {
+                textBuf = Buffer.from(pathOrFd, 'utf8');
+              }
+            } else {
+              textBuf = Buffer.from(pathOrFd, 'utf8');
+            }
+          } else {
+            textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
+          }
           changePropertyChunked(X, requestor, targetProp, targetAtom, 8, textBuf);
 
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);

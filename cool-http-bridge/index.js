@@ -570,7 +570,8 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-server.listen(12345, '0.0.0.0', () => {
-  logger.info('matchbox202x intent server running on http://0.0.0.0:12345 (WebSocket: ws://0.0.0.0:12345/ws)');
+const HTTP_PORT = parseInt(process.env.PORT || '12345', 10);
+server.listen(HTTP_PORT, '0.0.0.0', () => {
+  logger.info(`matchbox202x intent server running on http://0.0.0.0:${HTTP_PORT} (WebSocket: ws://0.0.0.0:${HTTP_PORT}/ws)`);
 });
 })()

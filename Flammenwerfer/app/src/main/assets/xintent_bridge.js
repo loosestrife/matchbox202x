@@ -177,12 +177,12 @@
         }
       }
 
-      if (intentName === 'fs.SaveAs') {
+      if (intentName === 'fs.SendTo' || intentName === 'fs.SaveAs') {
         if (fsMode === 'doLocalFsCapture') {
-          var logMsg = '[XIntent Local 📁] Handling fs.SaveAs locally via Android file saver';
+          var logMsg = '[XIntent Local 📁] Handling ' + intentName + ' locally via Android file saver';
           console.log(logMsg);
           if (window.XIntentNative && typeof window.XIntentNative.logMessage === 'function') window.XIntentNative.logMessage(logMsg);
-          var rawRes = window.XIntentNative.handleLocalSaveAs(JSON.stringify(payload || {}));
+          var rawRes = window.XIntentNative.handleLocalSendTo(JSON.stringify(payload || {}));
           return new Response(rawRes, { status: 200, headers: { 'Content-Type': 'application/json' } });
         } else {
           targetApp = targetApp || (payload && payload.app) || defaultRemote;

@@ -406,7 +406,7 @@ class CardsActivity : ComponentActivity() {
         return responseString.ifBlank { "{\"status\":\"ok\"}" }
     }
 
-    fun triggerLocalSaveAs(jsonPayload: String): String {
+    fun triggerLocalSendTo(jsonPayload: String): String {
         var responseString = ""
         try {
             val json = JSONObject(jsonPayload)

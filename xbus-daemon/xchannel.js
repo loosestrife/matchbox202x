@@ -77,7 +77,7 @@ const getChannel = (senderWin, channel) => {
 };
 
 const getChannelToSend = (targetWin, channelObj) => {
-  if (!channelObj) {
+  if (!channelObj || channelObj.isVirtual) {
     return { channel: 0 };
   }
   if (targetWin == channelObj.senderWin) {
@@ -85,6 +85,27 @@ const getChannelToSend = (targetWin, channelObj) => {
   } else {
     return { channel: channelObj.channelNum };
   }
+};
+
+/**
+ * Creates a transient virtual channel 0 with no sender for unchanneled messages with routing info.
+ */
+const createVirtualChannel = (senderWin, xintentIntent) => {
+  const origWid = widString(senderWin);
+  const virtualSender = `virtual channel (was ${origWid})`;
+  const channelObj = {
+    channelNum: 0,
+    senderWin: null, // expressly has no sender
+    senderWinOriginal: senderWin,
+    virtualSender,
+    isVirtual: true,
+    senderCookie: 0,
+    handlerWin: null,
+    intent: frameType(xintentIntent),
+    xintentIntent,
+  };
+  logger.info(`Created transient virtual channel 0 for ${virtualSender} (${frameDesc(xintentIntent)})`);
+  return channelObj;
 };
 
 const getChannelForMessage = (message) => {
@@ -120,6 +141,7 @@ module.exports = {
   activeChannels,
   txidToChannel,
   newChannel,
+  createVirtualChannel,
   closeChannel,
   getChannel,
   getChannelToSend,

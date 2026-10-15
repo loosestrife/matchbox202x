@@ -242,6 +242,7 @@ id = "user-phone:flammenwerfer"
 "ui.Copy" = true
 "ui.Paste" = true
 "fs.PickFile" = true
+"fs.SendTo" = true
 "fs.SaveAs" = true
 
 [XAudioSink]
@@ -274,6 +275,7 @@ id = "$advertisedName"
 "ui.Copy" = true
 "ui.Paste" = true
 "fs.PickFile" = true
+"fs.SendTo" = true
 "fs.SaveAs" = true
 
 [XAudioSink]
@@ -683,6 +685,98 @@ name = "$advertisedName"
             }
         }
         return appCards
+    }
+
+    data class MediaPlayTarget(
+        val appId: String,
+        val name: String,
+        val accept: String = "*/*",
+        val description: String = "",
+    )
+
+    fun parseMediaPlayTargets(tagsJsonResponse: String): List<MediaPlayTarget> {
+        val targets = mutableListOf<MediaPlayTarget>()
+        val jsonObjects = extractJsonObjects(tagsJsonResponse)
+        val foundAppIds = mutableSetOf<String>()
+
+        fun processAppObject(appKey: String, appObj: JSONObject) {
+            val name = appObj.optString("name", appKey)
+            val description = appObj.optString("description", "")
+
+            var isMediaPlay = appKey.startsWith("dlna-") || appKey == "user-desktop"
+            var acceptStr = "*/*"
+
+            if (appObj.has("intents")) {
+                val intentsObj = appObj.optJSONObject("intents")
+                if (intentsObj != null && intentsObj.has("media.Play")) {
+                    isMediaPlay = true
+                    val playObj = intentsObj.opt("media.Play")
+                    if (playObj is JSONObject) {
+                        acceptStr = playObj.optString("Accept", playObj.optString("accept", "*/*"))
+                    } else if (playObj is String) {
+                        acceptStr = playObj
+                    }
+                }
+            }
+
+            val manifestStr = appObj.optString("manifest", "")
+            if (manifestStr.contains("media.Play")) {
+                isMediaPlay = true
+                if (acceptStr == "*/*") {
+                    val acceptMatch = Regex("""Accept\s*=\s*"([^"]+)"""").find(manifestStr)
+                    if (acceptMatch != null) {
+                        acceptStr = acceptMatch.groupValues[1].replace("\\\"", "\"")
+                    }
+                }
+            }
+
+            if (isMediaPlay && !foundAppIds.contains(appKey)) {
+                foundAppIds.add(appKey)
+                targets.add(
+                    MediaPlayTarget(
+                        appId = appKey,
+                        name = name,
+                        accept = acceptStr,
+                        description = description,
+                    )
+                )
+            }
+        }
+
+        for (rootJson in jsonObjects) {
+            val appsJson = if (rootJson.has("apps")) {
+                rootJson.optJSONObject("apps")
+            } else {
+                rootJson
+            }
+
+            if (appsJson != null) {
+                val keys = appsJson.keys()
+                if (keys != null) {
+                    while (keys.hasNext()) {
+                        val appKey = keys.next()
+                        val appObj = appsJson.optJSONObject(appKey)
+                        if (appObj != null) {
+                            processAppObject(appKey, appObj)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!foundAppIds.contains("user-desktop")) {
+            targets.add(
+                0,
+                MediaPlayTarget(
+                    appId = "user-desktop",
+                    name = "User Desktop PC",
+                    accept = "*/*",
+                    description = "Default Desktop XIntent Device"
+                )
+            )
+        }
+
+        return targets
     }
 
     data class Result(
@@ -1409,6 +1503,94 @@ name = "$advertisedName"
         }
     }
 
+    suspend fun sendSendToIntent(
+        context: Context,
+        name: String,
+        type: String,
+        size: Long,
+        dataType: String,
+        data: String,
+        targetApp: String = "cool-clips",
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/fs/SendTo?app=$targetApp"
+
+        val logPrefix = "[fs.SendTo -> $targetApp]"
+        addLog("$logPrefix Sending file: $name ($type, $size bytes)")
+
+        try {
+            val blobJson = JSONObject().apply {
+                put("name", name)
+                put("type", type)
+                put("size", size)
+                put("_dataType", dataType)
+                put("data", data)
+            }
+
+            val jsonBody = JSONObject().apply {
+                put("intent", "fs.SendTo")
+                put("app", targetApp)
+                put("blob", blobJson)
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.joinToString("\n---\n") { it.toString(2) }
+            } else {
+                responseText.ifBlank { "(Empty response body)" }
+            }
+
+            Log.i(TAG, "Sent fs.SendTo to $targetApp [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
+                Result(
+                    success = true,
+                    statusCode = responseCode,
+                    responseBody = formattedDisplay,
+                )
+            } else {
+                sendSaveAsIntent(context, name, type, size, dataType, data, targetApp)
+            }
+        } catch (e: Exception) {
+            val errorDetail = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending fs.SendTo to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorDetail")
+            sendSaveAsIntent(context, name, type, size, dataType, data, targetApp)
+        }
+    }
+
     suspend fun sendTextProcessIntent(
         context: Context,
         text: String,
@@ -1524,6 +1706,195 @@ name = "$advertisedName"
                 success = false,
                 errorMessage = errorDetail,
             )
+        }
+    }
+
+    suspend fun sendMediaPlayIntent(
+        context: Context,
+        name: String,
+        type: String,
+        size: Long,
+        dataType: String,
+        data: String,
+        targetApp: String,
+        title: String = name,
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/media/Play?app=$targetApp"
+
+        val logPrefix = "[media.Play -> $targetApp]"
+        addLog("$logPrefix Dispatching media stream: $name ($type, $size bytes)")
+
+        try {
+            val blobJson = JSONObject().apply {
+                put("name", name)
+                put("type", type)
+                put("size", size)
+                put("_dataType", dataType)
+                put("data", data)
+            }
+
+            val jsonBody = JSONObject().apply {
+                put("intent", "media.Play")
+                put("app", targetApp)
+                put("title", title)
+                put("url", if (dataType == "url") data else "")
+                put("mimeType", type)
+                put("blob", blobJson)
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8000
+                readTimeout = 15000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+                setRequestProperty("Accept", "application/json")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.joinToString("\n---\n") { it.toString(2) }
+            } else {
+                responseText.ifBlank { "(Empty response body)" }
+            }
+
+            Log.i(TAG, "Sent media.Play to $targetApp [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
+                Result(
+                    success = false,
+                    statusCode = responseCode,
+                    responseBody = formattedDisplay,
+                    errorMessage = "HTTP $responseCode: $formattedDisplay",
+                )
+            }
+        } catch (e: Exception) {
+            val errorMsg = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending media.Play to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorMsg")
+            Result(success = false, errorMessage = errorMsg)
+        }
+    }
+
+    suspend fun sendMediaTranscodeIntent(
+        context: Context,
+        name: String,
+        type: String,
+        size: Long,
+        dataType: String,
+        data: String,
+        targetAccept: String,
+        targetApp: String = "cool-transcoder",
+    ): Result = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/intent/media/Transcode?app=$targetApp"
+
+        val logPrefix = "[media.Transcode -> $targetApp]"
+        addLog("$logPrefix Requesting transcode for $name ($type) targeting '$targetAccept'")
+
+        try {
+            val blobJson = JSONObject().apply {
+                put("name", name)
+                put("type", type)
+                put("size", size)
+                put("_dataType", dataType)
+                put("data", data)
+            }
+
+            val jsonBody = JSONObject().apply {
+                put("intent", "media.Transcode")
+                put("app", targetApp)
+                put("accept", targetAccept)
+                put("targetCodecs", targetAccept)
+                put("title", name)
+                put("url", if (dataType == "url") data else "")
+                put("blob", blobJson)
+            }
+
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8000
+                readTimeout = 15000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+                setRequestProperty("Accept", "application/json")
+            }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonBody.toString())
+                writer.flush()
+            }
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            val responseTextBuilder = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(inputStream ?: "".byteInputStream(), "UTF-8"))
+            val buffer = CharArray(1024)
+            var bytesRead: Int
+
+            while (reader.read(buffer).also { bytesRead = it } != -1) {
+                responseTextBuilder.appendRange(buffer, 0, bytesRead)
+                val currentText = responseTextBuilder.toString().trim()
+                if (currentText.startsWith("{") && currentText.endsWith("}")) break
+            }
+
+            val responseText = responseTextBuilder.toString()
+            val jsonObjects = extractJsonObjects(responseText)
+            val formattedDisplay = if (jsonObjects.isNotEmpty()) {
+                jsonObjects.joinToString("\n---\n") { it.toString(2) }
+            } else {
+                responseText.ifBlank { "(Empty response body)" }
+            }
+
+            Log.i(TAG, "Sent media.Transcode to $targetApp [$responseCode]: $responseText")
+
+            if (responseCode in 200..299) {
+                addLog("$logPrefix SUCCESS ($responseCode):\n$formattedDisplay")
+                Result(success = true, statusCode = responseCode, responseBody = formattedDisplay)
+            } else {
+                addLog("$logPrefix ERROR ($responseCode):\n$formattedDisplay")
+                Result(
+                    success = false,
+                    statusCode = responseCode,
+                    responseBody = formattedDisplay,
+                    errorMessage = "HTTP $responseCode: $formattedDisplay",
+                )
+            }
+        } catch (e: Exception) {
+            val errorMsg = "${e.javaClass.simpleName}: ${e.message ?: "Network error"}"
+            Log.e(TAG, "Error sending media.Transcode to $fullUrl", e)
+            addLog("$logPrefix FAILED: $errorMsg")
+            Result(success = false, errorMessage = errorMsg)
         }
     }
 

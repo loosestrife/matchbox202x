@@ -7,6 +7,7 @@ const util = require("util");
 const execAsync = util.promisify(exec);
 const {Logger} = require('../server-tools');
 const logger = new Logger({module: 'xintent-router'});
+const policyEngine = require('../cool-intent-router');
 const {
   atoms,
   widString,
@@ -28,7 +29,7 @@ const {
   xblobUnlink,
 } = require("./xblob");
 
-const {activeChannels, txidToChannel, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage} = require('./xchannel');
+const {activeChannels, txidToChannel, newChannel, createVirtualChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage} = require('./xchannel');
 const {
   intentRegistry,
   lighterRegistry,
@@ -86,7 +87,17 @@ const handleXIntentEventV0 = handleForwardingOfXChannelJsonFrame;
 const tryToForwardTheFrame = async (xchannelFrame) => {
   const { senderWin, channel, payload } = xchannelFrame;
   const actionStr = formatActionString(xchannelFrame);
-  const intent = payload?.intent || payload?.event || payload?.action || (payload?.data && typeof payload.data === 'object' ? (payload.data.intent || payload.data.event || payload.data.action) : undefined);
+
+  let parsedPayload = payload;
+  if (typeof payload === "string") {
+    try {
+      parsedPayload = JSON.parse(payload);
+    } catch (_) {
+      parsedPayload = payload;
+    }
+  }
+
+  const intent = parsedPayload?.intent || parsedPayload?.event || parsedPayload?.action || (parsedPayload?.data && typeof parsedPayload.data === 'object' ? (parsedPayload.data.intent || parsedPayload.data.event || parsedPayload.data.action) : undefined);
 
   let channelObj = getChannelForMessage(xchannelFrame);
   if (channelObj) {
@@ -105,11 +116,64 @@ const tryToForwardTheFrame = async (xchannelFrame) => {
     }
   }
 
+  if (!channelObj && intent) {
+    channelObj = createVirtualChannel(senderWin, xchannelFrame);
+  }
+
   if (intent) {
-    const registryEntry = intentRegistry[intent];
-    if (registryEntry) {
-      const { wid, matchboxToml } = registryEntry[0];
-      logger.info(`[intent-router] Found service window (${widString(wid)}) for ${actionStr}`);
+    const registryEntries = intentRegistry[intent] || [];
+    const availableTargets = registryEntries.map((e) => e.matchboxToml?.app?.id).filter(Boolean);
+
+    let routeDecision = null;
+    if (policyEngine && typeof policyEngine.handleRouteIntent === 'function') {
+      try {
+        routeDecision = await policyEngine.handleRouteIntent({
+          requestId: xchannelFrame.payloadBlob,
+          senderApp: widString(senderWin),
+          requestedIntent: intent,
+          payload: parsedPayload,
+          availableTargets,
+        });
+      } catch (err) {
+        logger.error(`Error in PolicyEngine handleRouteIntent: ${err.message}`);
+      }
+    }
+
+    if (routeDecision?.decision === 'drop' || routeDecision?.decision === '401' || routeDecision?.decision === '404') {
+      logger.info(`[intent-router] PolicyEngine rejected intent ${intent} (decision: ${routeDecision.decision})`);
+      return;
+    }
+
+    const targetAppId = routeDecision?.targetApp || parsedPayload?.app || parsedPayload?.targetApp;
+
+    if (registryEntries.length > 0) {
+      let selectedEntry = registryEntries[0];
+
+      if (targetAppId) {
+        const matched = registryEntries.find(
+          (entry) =>
+            entry.matchboxToml?.app?.id === targetAppId ||
+            entry.matchboxToml?.app?.name === targetAppId ||
+            entry.appId === targetAppId
+        );
+        if (matched) {
+          selectedEntry = matched;
+          logger.info(`[intent-router] PolicyEngine matched target app '${targetAppId}' to service window (${widString(matched.wid)})`);
+        } else {
+          logger.info(`[intent-router] Target app '${targetAppId}' not found in active intentRegistry for ${intent}, checking windowRegistry...`);
+          for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
+            if (matchboxToml?.app?.id === targetAppId || matchboxToml?.app?.name === targetAppId) {
+              const numWid = Number(widStr);
+              selectedEntry = { wid: numWid, matchboxToml };
+              logger.info(`[intent-router] PolicyEngine matched target app '${targetAppId}' to windowRegistry window (${widString(numWid)})`);
+              break;
+            }
+          }
+        }
+      }
+
+      const { wid, matchboxToml } = selectedEntry;
+      logger.info(`[intent-router] Found service window (${widString(wid)}) for ${actionStr} (target app: ${targetAppId || 'any'})`);
       if (channelObj) {
         channelObj.handlerWin = wid;
       }
@@ -121,6 +185,11 @@ const tryToForwardTheFrame = async (xchannelFrame) => {
         payloadBlob: xchannelFrame.payloadBlob,
         dataBlob: xchannelFrame.dataBlob,
       });
+
+      if (channelObj && channelObj.isVirtual) {
+        logger.info(`Passed on message for ${channelObj.virtualSender}. Deleting transient virtual channel 0.`);
+        channelObj = null;
+      }
       return;
     } else {
       logger.info(

@@ -283,7 +283,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         )
 
         RoutingModeSelector(
-            title = "📁 File System Routing Policy (fs.PickFile / fs.SaveAs)",
+            title = "📁 File System Routing Policy (fs.PickFile / fs.SendTo)",
             currentMode = fsRoutingMode,
             localOption = "doLocalFsCapture",
             normalOption = "normal",
@@ -628,7 +628,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         isSending = true
                         coroutineScope.launch {
                             val bytes = testText.toByteArray(Charsets.UTF_8)
-                            XIntentClient.sendSaveAsIntent(
+                            XIntentClient.sendSendToIntent(
                                 context = context,
                                 name = "test_note.txt",
                                 type = "text/plain",
@@ -644,7 +644,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 enabled = !isSending && testText.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Test fs.SaveAs Blob Intent (--app ${action1App.ifBlank { "cool-clips" }})")
+                Text("Test fs.SendTo Blob Intent (--app ${action1App.ifBlank { "cool-clips" }})")
             }
         }
 

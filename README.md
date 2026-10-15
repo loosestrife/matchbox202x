@@ -170,7 +170,7 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 | data.l[1]   : Transaction id / channel id                             |
 | data.l[4]   : Channel Control Word (bit 0 to open, bit 1 to close)    |
 | data.l[3]   : Blob id holding the json payload                        |
-| data.l[4]   : Blob id holding intent data (fs.SaveAs)                 |
+| data.l[4]   : Blob id holding intent data (fs.SendTo)                 |
 +-----------------------------------------------------------------------+
 ```
 
@@ -179,14 +179,18 @@ An Intent or Event is sent via `XSendEvent` as an `XClientMessageEvent` formatte
 fs.PickFile({[mimeType], holdOpenForWrites})
 fs.PickFiles({[mimeType], maxFiles})
 fs.PickFileResponse({BlobId})
-fs.SaveAs({BlobId, pathHint})
+fs.SendTo({BlobId, pathHint})
 ui.TextProcess({text, replace: true})
 ui.TextProcessResponse({replacementText})
 ui.TextToSpeech({text, voice, [mimeType]})
 ui.TextToSpeechResponse({BlobId})
+ui.Copy
+ui.Paste
 sys.RerouteIntent({ChannelId, recieverName, recieverHost})
 bridge.Peer({host}) // host from the whatwg url spec, instructs the bridge to peer with that host
 bridge.Unpeer({host})
+media.Play
+media.FindDevices
 ```
 
 So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-service-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` or whatever user set the intent rerouting hotkey to and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-service-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  Because firefox currently only reads uri's, the blob has to be stowed to /tmp/xblob-bounce-buffers 
