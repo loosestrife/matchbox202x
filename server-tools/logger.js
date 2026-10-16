@@ -4,6 +4,40 @@ const alStorage = new async_hooks.AsyncLocalStorage();
 
 let projectName = undefined;
 
+const TRUNCATE_LIMIT = 4096; // 4K max
+const HALF_LIMIT = 2048; // 2K head & 2K tail
+
+function truncateLogString(str) {
+  if (typeof str !== 'string') return str;
+  if (str.length <= TRUNCATE_LIMIT) return str;
+
+  const originalLength = str.length;
+  const head = str.substring(0, HALF_LIMIT);
+  const tail = str.substring(originalLength - HALF_LIMIT);
+  const truncatedCount = originalLength - TRUNCATE_LIMIT;
+
+  return `${head}\n\x1b[91m[LOGGER ERROR: Requested to log ${originalLength} chars (>4K limit). Truncated ${truncatedCount} chars]\x1b[0m\n${tail}`;
+}
+
+function truncateLogValue(val) {
+  if (val === null || val === undefined) return val;
+  if (typeof val === 'string') {
+    return truncateLogString(val);
+  }
+  if (typeof val === 'object') {
+    try {
+      const jsonStr = JSON.stringify(val);
+      if (jsonStr.length > TRUNCATE_LIMIT) {
+        return truncateLogString(jsonStr);
+      }
+      return val;
+    } catch (_) {
+      return val;
+    }
+  }
+  return val;
+}
+
 const shortTimestamp = () => {
   const d = new Date();
   return [d.getHours().toString().padStart(2, '0'),
@@ -71,6 +105,9 @@ class Logger {
     } else {
       msg = '';
     }
+
+    msg = truncateLogString(msg);
+
     const store = alStorage.getStore();
     if (store) {
       Object.assign(loggerKeys, store.values);
@@ -78,14 +115,29 @@ class Logger {
         loggerKeys[t] = formatDuration(new Date() - store.timers[t]);
       }
     }
+
+    const sanitizedArgs = args.map(arg => truncateLogValue(arg));
+
+    const contextStrings = Object.keys(loggerKeys).map(k => {
+      let val = loggerKeys[k];
+      if (typeof val === 'object' && val !== null) {
+        try {
+          val = JSON.stringify(val);
+        } catch (_) {
+          val = String(val);
+        }
+      } else {
+        val = String(val);
+      }
+      val = truncateLogString(val);
+      return ` [${k}=${val}]`;
+    });
+
     console.log(
       `\x1b[${
         90 + colors[level]}m[${shortTimestamp()} ${projectName?projectName:''} ${level.padEnd(5)}] \x1b[${levelOffsets[level] + colors[level]}m${this.module}: ${msg}\x1b[0m`,
-      ...args,
-      ...Object.keys(loggerKeys).map(k => {
-        const val = typeof loggerKeys[k] === 'object' ? JSON.stringify(loggerKeys[k]) : loggerKeys[k];
-        return ` [${k}=${val}]`;
-      })
+      ...sanitizedArgs,
+      ...contextStrings
     );
     loggerKeys = {};
   }
@@ -143,4 +195,6 @@ module.exports = {
   alStorage,
   loggerMiddleware,
   Logger,
+  truncateLogString,
+  truncateLogValue,
 };

@@ -36,8 +36,9 @@ const {
 
 const app = express();
 app.set("json spaces", 2);
-app.use(express.json({ type: ['application/json', 'application/*+json', 'text/*', '*/*'] }));
-app.use(express.text({ type: '*/*' }));
+app.use(['/xblob', '/blobs'], express.raw({ limit: '2gb', type: '*/*' }));
+app.use(express.json({ limit: '2gb', type: ['application/json', 'application/*+json'] }));
+app.use(express.text({ limit: '2gb', type: ['text/plain', 'text/html', 'text/xml', 'text/css'] }));
 app.use((req, res, next) => {
   if (typeof req.body === 'string' && req.body.trim()) {
     try {
@@ -55,7 +56,8 @@ app.use((req, res, next) => {
   next();
 });
 app.post('/intent/:namespace/:action', routeIntent);
-app.post('/xblob/XBlobCreate', routeXBlobCreate);
+app.post(['/xblob', '/xblob/XBlobCreate', '/blobs'], routeXBlobCreate);
+app.put(['/xblob', '/xblob/XBlobCreate', '/blobs'], routeXBlobCreate);
 app.post('/xblob/XBlobRead', routeXBlobRead);
 app.get('/xblob/:blobId', routeXBlobRead);
 app.get('/blobs/:blobId', routeXBlobRead);

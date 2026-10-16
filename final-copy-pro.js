@@ -9,6 +9,7 @@
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const TOML = require('@iarna/toml');
 const { spawnSync } = require('child_process');
 const xintent = require('./x11-promises/xintent');
 const {connectToRouter, createClientWindow, sendXIntentIntentV0, XBlobCreate} = xintent;
@@ -61,11 +62,27 @@ async function fetchApiTags(port = parseInt(process.env.XINTENT_PORT || process.
   });
 }
 
-async function discoverSendToTargets() {
+async function fetchAggregateTomlFromRouter(X, routerWin) {
+  if (!X || !routerWin) return null;
+  try {
+    const aggregateAtom = await X.InternAtom(false, 'AGGREGATE_TOML');
+    const prop = await X.GetProperty(0, routerWin, aggregateAtom, 0, 0, 1000000);
+    if (prop && prop.data && prop.data.length > 0) {
+      const rawToml = prop.data.toString('utf8');
+      return TOML.parse(rawToml);
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function discoverSendToTargets(X, routerWin) {
   const targets = [];
   const seen = new Set();
 
-  const tagsData = await fetchApiTags();
+  let tagsData = await fetchAggregateTomlFromRouter(X, routerWin);
+  if (!tagsData || !tagsData.intents) {
+    tagsData = await fetchApiTags();
+  }
   if (tagsData) {
     const sendToIntents = [
       ...(tagsData.intents?.['fs.SendTo'] || []),
@@ -221,9 +238,16 @@ async function main() {
   // Prompt user with Zenity selection dialog if --select-app is requested OR if intent is fs.SendTo without an explicit target app
   const shouldPromptApp = selectAppArg || (!targetAppArg && intentName === 'fs.SendTo');
 
+  const { X, root } = await x11.createClientWithPromises();
+  await connectToRouter(X, root);
+  if (!xintent.routerWin) {
+    console.error('Error: Could not connect to XINTENT router.');
+    process.exit(1);
+  }
+
   if (shouldPromptApp) {
     console.log(`Discovering registered ${intentName} destinations...`);
-    const availableTargets = await discoverSendToTargets();
+    const availableTargets = await discoverSendToTargets(X, xintent.routerWin);
     const chosenTarget = selectTargetWithZenity(availableTargets, xblobPayload.name);
 
     if (!chosenTarget) {
@@ -232,13 +256,6 @@ async function main() {
     }
     targetAppArg = chosenTarget;
     console.log(`User selected target destination: ${targetAppArg}`);
-  }
-
-  const { X, root } = await x11.createClientWithPromises();
-  await connectToRouter(X, root);
-  if (!xintent.routerWin) {
-    console.error('Error: Could not connect to XINTENT router.');
-    process.exit(1);
   }
 
   const clientWin = await createClientWindow(X, root, 'final-copy-pro');

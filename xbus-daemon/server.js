@@ -156,9 +156,8 @@ async function startRouter() {
 
             const intentName = parsed.payload?.intent || parsed.payload?.event || parsed.payload?.action || (parsed.payload?.data && typeof parsed.payload.data === 'object' ? (parsed.payload.data.intent || parsed.payload.data.event || parsed.data?.action) : undefined);
 
-            // Attach parsed message to alStorage context
+            // Attach intent name to alStorage context
             logger.setContext({
-              parsedMessage: parsed,
               intent: intentName
             });
 

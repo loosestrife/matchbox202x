@@ -11,7 +11,7 @@ let clientWin, X, root;
  * Reads the aggregated TOML property off routerWin
  */
 const fetchAggregateToml = async () => {
-  const targetWin = xintent.routerWin;
+  const targetWin = xintent.routerWin || (X && root ? await xintent.getValidRouterWin(X, root) : null);
   if (!targetWin) return null;
 
   let atom = xintent.atoms.AGGREGATE_TOML || xintent.atoms.XINTENT_AGGREGATE_TOML;
@@ -84,6 +84,27 @@ const aggregateTomlAsObject = async () => {
   }
 };
 
+const resolveDataBlobAtom = async (rawBlob, XClient, rWin, cWin) => {
+  if (!rawBlob) return 0;
+  if (typeof rawBlob === 'number') return isNaN(rawBlob) ? 0 : rawBlob;
+  if (typeof rawBlob === 'string') {
+    const trimmed = rawBlob.trim();
+    if (trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
+      return parseInt(trimmed, 16);
+    }
+    const num = Number(trimmed);
+    return isNaN(num) ? 0 : num;
+  }
+  if (typeof rawBlob === 'object' && rawBlob !== null) {
+    try {
+      return await xintent.XBlobCreate(XClient, rWin, cWin, rawBlob);
+    } catch (err) {
+      logger.error(`Failed to auto-create XBlob for inline object: ${err.message}`);
+    }
+  }
+  return 0;
+};
+
 const routeIntent = async (req, res) => {
   const { namespace, action } = req.params;
   const intent = `${namespace}.${action}`;
@@ -113,6 +134,22 @@ const routeIntent = async (req, res) => {
   const channelHeader = req.headers['x-channel'];
   const forwardedByHeader = req.headers['x-forwarded-by'];
   const logPayload = { ...payload };
+  if (logPayload.dataBlob && typeof logPayload.dataBlob === 'object') {
+    logPayload.dataBlob = {
+      name: logPayload.dataBlob.name,
+      type: logPayload.dataBlob.type,
+      size: logPayload.dataBlob.size,
+      _dataType: logPayload.dataBlob._dataType,
+    };
+  }
+  if (logPayload.blob && typeof logPayload.blob === 'object') {
+    logPayload.blob = {
+      name: logPayload.blob.name,
+      type: logPayload.blob.type,
+      size: logPayload.blob.size,
+      _dataType: logPayload.blob._dataType,
+    };
+  }
   if (channelHeader) logPayload['X-Channel'] = channelHeader;
   if (channelControlHeader) logPayload['X-Channel-Control'] = channelControlHeader;
   if (forwardedByHeader) logPayload['X-Forwarded-By'] = forwardedByHeader;
@@ -130,11 +167,10 @@ const routeIntent = async (req, res) => {
     payload.headers['Connection'] = connectionReqHeader;
   }
 
-  // Store intent context in AsyncLocalStorage so all error logs include the intent JSON
+  // Store intent context in AsyncLocalStorage
   logger.setContext({
     intent,
     targetApp: targetApp || undefined,
-    intentJson: payload
   });
 
   logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, logPayload);
@@ -354,10 +390,11 @@ const routeIntent = async (req, res) => {
       });
 
       const reqDataBlobHeader = req.headers['x-attached-blob-id'] || req.headers['x-blob-id'];
-      let reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
-      if (reqDataBlobHeader) {
-        reqDataBlob = reqDataBlobHeader.startsWith('0x') || reqDataBlobHeader.startsWith('0X') ? parseInt(reqDataBlobHeader, 16) : Number(reqDataBlobHeader);
-      }
+      let rawBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId || reqDataBlobHeader;
+
+      const routerWin = await xintent.getValidRouterWin(X, root);
+      const dataBlobAtom = await resolveDataBlobAtom(rawBlob, X, routerWin, clientWin);
+
       const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
       const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
       const cookie = payload.cookie || payload.Cookie || payload.OutputId || 'default';
@@ -373,13 +410,12 @@ const routeIntent = async (req, res) => {
         const primarySession = activeHttpAudioStreams.get(cookie);
         logger.info(`route-intent: [XAUDIO STREAM] Active primary stream connection exists for cookie '${cookie}'. Forwarding seqnum ${payload.seqnum} on primary txId ${primarySession.txId} and returning 202 Accepted.`);
 
-        const routerWin = await xintent.getValidRouterWin(X, root);
         await dispatchFn(X, routerWin, {
           senderWin: clientWin,
           payload,
           txId: primarySession.txId,
           controlWord: reqControlWord,
-          dataBlob: reqDataBlob ? Number(reqDataBlob) : 0,
+          dataBlob: dataBlobAtom,
         });
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -391,32 +427,35 @@ const routeIntent = async (req, res) => {
         activeHttpAudioStreams.set(cookie, { res, txId });
       }
 
-      const routerWin = await xintent.getValidRouterWin(X, root);
       await dispatchFn(X, routerWin, {
         senderWin: clientWin,
         payload,
         txId,
         controlWord: reqControlWord,
-        dataBlob: reqDataBlob ? Number(reqDataBlob) : 0,
+        dataBlob: dataBlobAtom,
       });
 
       return await responsePromise;
     }
 
     // --- 2. Fire-and-Forget / Standard Response Path ---
-    const reqDataBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
+    const reqDataBlobHeader = req.headers['x-attached-blob-id'] || req.headers['x-blob-id'];
+    const rawBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId || reqDataBlobHeader;
+    const routerWin = await xintent.getValidRouterWin(X, root);
+    const dataBlobAtom = await resolveDataBlobAtom(rawBlob, X, routerWin, clientWin);
+
     const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
     const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
     const dispatchFn = isXAudioPlay
       ? (xintent.sendXAudioPlayV0 || xintent.sendXIntentIntentV0)
       : (isXAudioControl ? (xintent.sendXAudioControlV0 || xintent.sendXIntentIntentV0) : xintent.sendXIntentIntentV0);
 
-    await dispatchFn(X, xintent.routerWin, {
+    await dispatchFn(X, routerWin, {
       senderWin: clientWin,
       payload,
       txId,
       controlWord: reqControlWord,
-      dataBlob: reqDataBlob ? Number(reqDataBlob) : 0,
+      dataBlob: dataBlobAtom,
     });
 
     res.setHeader('Matchbox-Bridge', '1.0');

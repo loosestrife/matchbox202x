@@ -5,7 +5,6 @@ const fs = require('fs');
 const {Logger} = require('../server-tools');
 const logger = new Logger({module: 'xsecure'});
 const {atoms, widString} = require('../x11-promises/xintent.js');
-const {X, root, routerWin} = require('./index.js');
 
 const authentication = {};
 const rules = [

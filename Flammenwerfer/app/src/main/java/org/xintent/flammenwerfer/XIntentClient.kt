@@ -687,6 +687,66 @@ name = "$advertisedName"
         return appCards
     }
 
+    data class SendToTarget(
+        val appId: String,
+        val name: String,
+        val description: String = "",
+    )
+
+    fun parseSendToTargets(tagsJsonResponse: String): List<SendToTarget> {
+        val targets = mutableListOf<SendToTarget>()
+        val jsonObjects = extractJsonObjects(tagsJsonResponse)
+        val foundAppIds = mutableSetOf<String>()
+
+        for (rootJson in jsonObjects) {
+            val intentsObj = rootJson.optJSONObject("intents")
+            if (intentsObj != null) {
+                val sendToApps = intentsObj.optJSONArray("fs.SendTo") ?: intentsObj.optJSONArray("fs.SaveAs")
+                if (sendToApps != null) {
+                    for (i in 0 until sendToApps.length()) {
+                        val appId = sendToApps.optString(i)
+                        if (appId.isNotBlank() && !foundAppIds.contains(appId)) {
+                            foundAppIds.add(appId)
+                            val appsObj = rootJson.optJSONObject("apps")
+                            val appObj = appsObj?.optJSONObject(appId)
+                            val friendlyName = appObj?.optString("name", appId) ?: appId
+                            val desc = appObj?.optString("description", "Active Desktop Destination") ?: "Active Desktop Destination"
+                            targets.add(SendToTarget(appId, friendlyName, desc))
+                        }
+                    }
+                }
+            }
+
+            val appsJson = rootJson.optJSONObject("apps") ?: rootJson
+            val keys = appsJson.keys()
+            while (keys.hasNext()) {
+                val appKey = keys.next()
+                val appObj = appsJson.optJSONObject(appKey) ?: continue
+                val name = appObj.optString("name", appKey)
+                val description = appObj.optString("description", "")
+
+                var isSendTo = appKey == "cool-clips" || appKey == "user-desktop"
+                if (appObj.has("intents")) {
+                    val appIntents = appObj.optJSONObject("intents")
+                    if (appIntents != null && (appIntents.has("fs.SendTo") || appIntents.has("fs.SaveAs"))) {
+                        isSendTo = true
+                    }
+                }
+
+                if (isSendTo && !foundAppIds.contains(appKey)) {
+                    foundAppIds.add(appKey)
+                    targets.add(SendToTarget(appId = appKey, name = name, description = description))
+                }
+            }
+        }
+
+        if (targets.isEmpty()) {
+            targets.add(SendToTarget("cool-clips", "Cool Clips (Desktop Clipboard & Files)", "Default Desktop Receiver"))
+        }
+
+        return targets
+    }
+
     data class MediaPlayTarget(
         val appId: String,
         val name: String,
@@ -1410,6 +1470,7 @@ name = "$advertisedName"
         dataType: String,
         data: String,
         targetApp: String = "cool-clips",
+        rawBytes: ByteArray? = null,
     ): Result = withContext(Dispatchers.IO) {
         val baseUrl = getServerUrl(context)
         val fullUrl = "$baseUrl/intent/fs/SaveAs?app=$targetApp"
@@ -1418,18 +1479,40 @@ name = "$advertisedName"
         addLog("$logPrefix Saving file: $name ($type, $size bytes)")
 
         try {
-            val blobJson = JSONObject().apply {
-                put("name", name)
-                put("type", type)
-                put("size", size)
-                put("_dataType", dataType)
-                put("data", data)
+            var bytesToUpload: ByteArray? = rawBytes
+            if (bytesToUpload == null && dataType == "base64" && data.isNotBlank()) {
+                bytesToUpload = try {
+                    Base64.decode(data, Base64.DEFAULT)
+                } catch (_: Exception) {
+                    try { Base64.decode(data, Base64.NO_WRAP) } catch (_: Exception) { null }
+                }
+            }
+
+            var dataBlobRef: Any? = null
+            if (bytesToUpload != null && bytesToUpload.isNotEmpty()) {
+                val uploadedBlobId = uploadXBlob(context, name, type, bytesToUpload)
+                if (uploadedBlobId != null) {
+                    dataBlobRef = uploadedBlobId
+                }
+            }
+
+            if (dataBlobRef == null) {
+                dataBlobRef = JSONObject().apply {
+                    put("name", name)
+                    put("type", type)
+                    put("size", size)
+                    put("_dataType", dataType)
+                    put("data", data)
+                }
             }
 
             val jsonBody = JSONObject().apply {
                 put("intent", "fs.SaveAs")
                 put("app", targetApp)
-                put("blob", blobJson)
+                put("dataBlob", dataBlobRef)
+                put("name", name)
+                put("mimeType", type)
+                put("size", size)
             }
 
             val url = URL(fullUrl)
@@ -1503,6 +1586,62 @@ name = "$advertisedName"
         }
     }
 
+    suspend fun uploadXBlob(
+        context: Context,
+        name: String,
+        type: String,
+        rawBytes: ByteArray,
+    ): String? = withContext(Dispatchers.IO) {
+        val baseUrl = getServerUrl(context)
+        val fullUrl = "$baseUrl/xblob"
+
+        val logPrefix = "[XBlob Upload]"
+        addLog("$logPrefix Uploading $name ($type, ${rawBytes.size} bytes)...")
+
+        try {
+            val url = URL(fullUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 15000
+                readTimeout = 60000
+                setRequestProperty("Content-Type", type)
+                setRequestProperty("Content-Length", rawBytes.size.toString())
+                setRequestProperty("Content-Disposition", "attachment; filename=\"$name\"")
+                setRequestProperty("X-Forwarded-By", "flammenwerfer")
+            }
+
+            connection.outputStream.use { os ->
+                os.write(rawBytes)
+                os.flush()
+            }
+
+            val responseCode = connection.responseCode
+            if (responseCode in 200..299) {
+                val responseText = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonObjects = extractJsonObjects(responseText)
+                var blobIdHex = if (jsonObjects.isNotEmpty()) {
+                    val obj = jsonObjects.first()
+                    obj.optString("blobId", obj.optString("blob", ""))
+                } else {
+                    ""
+                }
+                if (blobIdHex.isBlank()) {
+                    blobIdHex = connection.getHeaderField("X-Blob-Id") ?: ""
+                }
+                if (blobIdHex.isNotBlank()) {
+                    addLog("$logPrefix SUCCESS -> Blob ID $blobIdHex")
+                    return@withContext blobIdHex
+                }
+            }
+            addLog("$logPrefix FAILED ($responseCode)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error uploading XBlob to $fullUrl", e)
+            addLog("$logPrefix ERROR: ${e.javaClass.simpleName}: ${e.message}")
+        }
+        return@withContext null
+    }
+
     suspend fun sendSendToIntent(
         context: Context,
         name: String,
@@ -1511,6 +1650,7 @@ name = "$advertisedName"
         dataType: String,
         data: String,
         targetApp: String = "cool-clips",
+        rawBytes: ByteArray? = null,
     ): Result = withContext(Dispatchers.IO) {
         val baseUrl = getServerUrl(context)
         val fullUrl = "$baseUrl/intent/fs/SendTo?app=$targetApp"
@@ -1519,18 +1659,40 @@ name = "$advertisedName"
         addLog("$logPrefix Sending file: $name ($type, $size bytes)")
 
         try {
-            val blobJson = JSONObject().apply {
-                put("name", name)
-                put("type", type)
-                put("size", size)
-                put("_dataType", dataType)
-                put("data", data)
+            var bytesToUpload: ByteArray? = rawBytes
+            if (bytesToUpload == null && dataType == "base64" && data.isNotBlank()) {
+                bytesToUpload = try {
+                    Base64.decode(data, Base64.DEFAULT)
+                } catch (_: Exception) {
+                    try { Base64.decode(data, Base64.NO_WRAP) } catch (_: Exception) { null }
+                }
+            }
+
+            var dataBlobRef: Any? = null
+            if (bytesToUpload != null && bytesToUpload.isNotEmpty()) {
+                val uploadedBlobId = uploadXBlob(context, name, type, bytesToUpload)
+                if (uploadedBlobId != null) {
+                    dataBlobRef = uploadedBlobId
+                }
+            }
+
+            if (dataBlobRef == null) {
+                dataBlobRef = JSONObject().apply {
+                    put("name", name)
+                    put("type", type)
+                    put("size", size)
+                    put("_dataType", dataType)
+                    put("data", data)
+                }
             }
 
             val jsonBody = JSONObject().apply {
                 put("intent", "fs.SendTo")
                 put("app", targetApp)
-                put("blob", blobJson)
+                put("dataBlob", dataBlobRef)
+                put("name", name)
+                put("mimeType", type)
+                put("size", size)
             }
 
             val url = URL(fullUrl)

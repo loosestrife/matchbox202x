@@ -16,7 +16,7 @@ const {
 } = xintent;
 const x11 = require('../x11-promises/x11-promises');
 
-let currentClipboard = null; // Holds { type, _dataType, data, name }
+let currentClipboard = null; // Holds { type, _dataType, data, name, rawBuf, filePath, fileUri }
 
 /**
  * Converts an image buffer to a requested target format on-the-fly using `convert`
@@ -176,6 +176,9 @@ async function startDaemon() {
     'text/plain',
     'text/plain;charset=utf-8',
     'text/html',
+    'text/uri-list',
+    'x-special/gnome-copied-files',
+    'application/octet-stream',
     'image/png',
     'image/jpeg',
     'image/bmp',
@@ -244,21 +247,47 @@ invocation = "X11"
           }
           const content = await XBlobRead(X, xintent.routerWin, contentAtom);
 
+          // Extract raw binary Buffer safely
+          let rawBuf;
+          if (Buffer.isBuffer(content.data)) {
+            rawBuf = content.data;
+          } else if (content._dataType === 'base64' || (typeof content.data === 'string' && content.data.startsWith('data:'))) {
+            const b64Str = content.data.includes(',') ? content.data.split(',')[1] : content.data;
+            rawBuf = Buffer.from(b64Str, 'base64');
+          } else {
+            rawBuf = Buffer.from(content.data || '', 'utf8');
+          }
+
+          // Persist file payload to disk for file manager paste (text/uri-list)
+          const clipDir = '/tmp/xintent_clipboard';
+          if (!fs.existsSync(clipDir)) fs.mkdirSync(clipDir, { recursive: true });
+          const fileName = content.name || payload.name || `shared_file_${Date.now()}`;
+          const filePath = path.join(clipDir, fileName);
+          fs.writeFileSync(filePath, rawBuf);
+
+          content.rawBuf = rawBuf;
+          content.filePath = filePath;
+          content.fileUri = `file://${filePath}`;
+
           currentClipboard = content;
           X.SetSelectionOwner(daemonWin, atoms.CLIPBOARD);
 
           console.log('--------------------------------------------------');
           console.log(`📋 CLIPBOARD CLAIMED via ${payload.intent} (atoms.CLIPBOARD)`);
+          console.log(` - File Name     : ${fileName}`);
+          console.log(` - File Path     : ${filePath}`);
           console.log(` - MIME Type     : ${content.type || 'unknown'}`);
-          console.log(` - Encoding      : ${content._dataType || 'text'}`);
+          console.log(` - Size          : ${rawBuf.length} bytes`);
           console.log('--------------------------------------------------');
         }
 
         if (payload.intent == 'ui.TextProcess') {
           console.log(`\n[copy-daemon] Received ui.TextProcess intent from ${widString(senderWin)} (channel: ${channel})`);
+          const rawBuf = Buffer.from(payload.text || '', 'utf8');
           currentClipboard = {
             type: 'text/plain',
             data: payload.text,
+            rawBuf: rawBuf,
             _dataType: 'text'
           };
           X.SetSelectionOwner(daemonWin, atoms.CLIPBOARD);
@@ -315,7 +344,20 @@ invocation = "X11"
 
       try {
         if (targetAtom === atoms.TARGETS) {
-          let supportedTargets = [atoms.TARGETS];
+          let supportedTargets = [
+            atoms.TARGETS,
+            atoms.UTF8_STRING,
+            atoms.STRING,
+            atoms.TEXT,
+            atoms['text/plain'],
+            atoms['text/plain;charset=utf-8'],
+          ];
+
+          if (currentClipboard.fileUri) {
+            if (atoms['text/uri-list']) supportedTargets.push(atoms['text/uri-list']);
+            if (atoms['x-special/gnome-copied-files']) supportedTargets.push(atoms['x-special/gnome-copied-files']);
+          }
+
           if (isImage) {
             supportedTargets.push(
               atoms['image/png'],
@@ -324,17 +366,10 @@ invocation = "X11"
               atoms['image/webp'],
               atoms['image/gif']
             );
-          } else if (isText) {
-            supportedTargets.push(
-              atoms.UTF8_STRING,
-              atoms.STRING,
-              atoms.TEXT,
-              atoms['text/plain'],
-              atoms['text/plain;charset=utf-8']
-            );
-            if (currentClipboard.type === 'text/html') {
-              supportedTargets.push(atoms['text/html']);
-            }
+          }
+
+          if (currentClipboard.type && atoms[currentClipboard.type] && !supportedTargets.includes(atoms[currentClipboard.type])) {
+            supportedTargets.push(atoms[currentClipboard.type]);
           }
 
           const buf = Buffer.alloc(supportedTargets.length * 4);
@@ -346,45 +381,61 @@ invocation = "X11"
           return;
         }
 
-        if (isText && [atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
-          let textBuf = Buffer.alloc(0);
-          if (currentClipboard._dataType === 'fd-rights') {
-            const pathOrFd = currentClipboard.data ? currentClipboard.data.trim() : '';
-            if (fs.existsSync(pathOrFd)) {
-              textBuf = fs.readFileSync(pathOrFd);
-            } else if (!isNaN(Number(pathOrFd))) {
-              try {
-                const numFd = Number(pathOrFd);
-                const stats = fs.fstatSync(numFd);
-                textBuf = Buffer.alloc(stats.size);
-                fs.readSync(numFd, textBuf, 0, stats.size, 0);
-              } catch (_) {
-                textBuf = Buffer.from(pathOrFd, 'utf8');
-              }
-            } else {
-              textBuf = Buffer.from(pathOrFd, 'utf8');
-            }
-          } else {
-            textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
-          }
-          changePropertyChunked(X, requestor, targetProp, targetAtom, 8, textBuf);
-
+        if (targetAtom === atoms['text/uri-list'] || targetName === 'text/uri-list') {
+          const uriListBuf = Buffer.from(`${currentClipboard.fileUri || ''}\r\n`, 'utf8');
+          changePropertyChunked(X, requestor, targetProp, targetAtom, 8, uriListBuf);
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);
           return;
         }
 
-        if (isImage && targetName.startsWith('image/')) {
-          let rawInputBuf = currentClipboard._dataType === 'base64'
-            ? Buffer.from(currentClipboard.data, 'base64')
-            : Buffer.from(currentClipboard.data, 'utf8');
+        if (targetAtom === atoms['x-special/gnome-copied-files'] || targetName === 'x-special/gnome-copied-files') {
+          const gnomeBuf = Buffer.from(`copy\r\n${currentClipboard.fileUri || ''}\r\n`, 'utf8');
+          changePropertyChunked(X, requestor, targetProp, targetAtom, 8, gnomeBuf);
+          const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
+          X.SendEvent(requestor, false, 0, notifyBuf);
+          return;
+        }
+
+        if ((isImage && targetName.startsWith('image/')) || targetName === currentClipboard.type || targetName === 'application/octet-stream') {
+          let rawInputBuf = currentClipboard.rawBuf;
+          if (!Buffer.isBuffer(rawInputBuf)) {
+            if (currentClipboard._dataType === 'base64' || (typeof currentClipboard.data === 'string' && currentClipboard.data.startsWith('data:'))) {
+              const b64 = currentClipboard.data.includes(',') ? currentClipboard.data.split(',')[1] : currentClipboard.data;
+              rawInputBuf = Buffer.from(b64, 'base64');
+            } else {
+              rawInputBuf = Buffer.from(currentClipboard.data || '', 'utf8');
+            }
+          }
 
           let outputBuf = rawInputBuf;
-          if (currentClipboard.type !== targetName) {
-            outputBuf = await convertImageBuffer(rawInputBuf, targetName);
+          if (isImage && targetName.startsWith('image/') && currentClipboard.type !== targetName) {
+            try {
+              outputBuf = await convertImageBuffer(rawInputBuf, targetName);
+            } catch (_) {
+              outputBuf = rawInputBuf;
+            }
           }
 
           changePropertyChunked(X, requestor, targetProp, targetAtom, 8, outputBuf);
+          const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
+          X.SendEvent(requestor, false, 0, notifyBuf);
+          return;
+        }
+
+        if ([atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
+          let textBuf = Buffer.alloc(0);
+          if (isText) {
+            textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
+          } else if (currentClipboard.fileUri) {
+            textBuf = Buffer.from(currentClipboard.fileUri, 'utf8');
+          } else if (currentClipboard.rawBuf) {
+            textBuf = currentClipboard.rawBuf;
+          } else {
+            textBuf = Buffer.from(String(currentClipboard.data || ''), 'utf8');
+          }
+
+          changePropertyChunked(X, requestor, targetProp, targetAtom, 8, textBuf);
           const notifyBuf = buildSelectionNotifyBuffer(time, requestor, atoms.CLIPBOARD, targetAtom, targetProp);
           X.SendEvent(requestor, false, 0, notifyBuf);
           return;
