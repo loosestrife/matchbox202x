@@ -1,0 +1,46 @@
+name: Monorepo Automated Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-android:
+    name: Android App Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - name: Run Android Unit Tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+        working-directory: Flammenwerfer
+
+  test-node-services:
+    name: Node.js Services Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+      - name: Install dependencies
+        run: bun install
+      - name: Run Node Services Tests
+        run: bun test cool-http-bridge/test/services.test.js
+
+  test-python-services:
+    name: Python Services Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run Python Unit Tests
+        run: python3 -m unittest discover -s cool-tts/tests
