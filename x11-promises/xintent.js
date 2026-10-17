@@ -244,14 +244,32 @@ async function XClientMessage(X, targetWin, message_type, data) {
   return X.SendEvent(targetWin, false, x11.eventMask.NoEventMask, ev);
 }
 
-async function httpPutBlobsOverSocket(sockPath, blobData, senderWin) {
+const toHexBlobId = (id) => {
+  if (id === null || id === undefined) return null;
+  const num = typeof id === 'number' ? id : (typeof id === 'string' && (id.startsWith('0x') || id.startsWith('0X')) ? parseInt(id, 16) : Number(id));
+  if (isNaN(num)) return id;
+  return `0x${num.toString(16)}`;
+};
+
+async function httpPutBlobsOverSocket(sockPath, blobData, senderWin, targetBlobId = null) {
   if (!senderWin) {
     throw new Error('httpPutBlobsOverSocket requires senderWin');
   }
   return new Promise((resolve, reject) => {
-    const payloadStr = typeof blobData === 'string' ? blobData : (Buffer.isBuffer(blobData) ? blobData : JSON.stringify(blobData));
-    const isBuffer = Buffer.isBuffer(payloadStr);
-    const bodyBuf = isBuffer ? payloadStr : Buffer.from(payloadStr, 'utf8');
+    let bodyBuf;
+    if (Buffer.isBuffer(blobData)) {
+      bodyBuf = blobData;
+    } else if (typeof blobData === 'string') {
+      bodyBuf = Buffer.from(blobData, 'utf8');
+    } else if (typeof blobData === 'object' && blobData !== null) {
+      if (blobData._dataType === 'binary' && Buffer.isBuffer(blobData.data)) {
+        bodyBuf = blobData.data;
+      } else {
+        bodyBuf = Buffer.from(formatXBlobAtRest(blobData), 'utf8');
+      }
+    } else {
+      bodyBuf = Buffer.from(String(blobData), 'utf8');
+    }
 
     const contentEncoding = (typeof blobData === 'object' && blobData !== null) ? (blobData.contentEncoding || (blobData._dataType === 'fd-rights' ? 'fd-rights' : (blobData._dataType === 'base64' ? 'base64' : 'identity'))) : 'identity';
     const mimeType = (typeof blobData === 'object' && blobData !== null && blobData.type) ? blobData.type : 'application/json';
@@ -267,10 +285,16 @@ async function httpPutBlobsOverSocket(sockPath, blobData, senderWin) {
       'Accept-Encoding': 'identity, base64, fd-rights',
       'Origin': `${hostname}:${display}/${widHex}`
     };
+    if (typeof blobData === 'object' && blobData !== null) {
+      if (blobData.name) headers['Content-Disposition'] = `attachment; filename="${blobData.name}"`;
+      if (blobData.xblobType) headers['X-XBlob-Type'] = blobData.xblobType;
+    }
+
+    const pathStr = targetBlobId ? `/blobs/${toHexBlobId(targetBlobId)}` : '/blobs';
 
     const req = http.request({
       socketPath: sockPath,
-      path: '/blobs',
+      path: pathStr,
       method: 'PUT',
       headers
     }, (res) => {
@@ -279,7 +303,7 @@ async function httpPutBlobsOverSocket(sockPath, blobData, senderWin) {
       res.on('end', () => {
         try {
           const json = JSON.parse(resData);
-          const rawBlob = res.headers['x-blob-id'] || json.blobId || json.blob;
+          const rawBlob = res.headers['x-blob-id'] || json.blobId || json.blob || targetBlobId;
           const blobId = typeof rawBlob === 'number' ? rawBlob : (typeof rawBlob === 'string' && (rawBlob.startsWith('0x') || rawBlob.startsWith('0X')) ? parseInt(rawBlob, 16) : Number(rawBlob));
           if (!isNaN(blobId) && blobId > 0) {
             resolve(blobId);
@@ -294,6 +318,78 @@ async function httpPutBlobsOverSocket(sockPath, blobData, senderWin) {
 
     req.setTimeout(5000, () => {
       req.destroy(new Error('Socket PUT /blobs timeout'));
+    });
+    req.on('error', reject);
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
+async function httpPutBlobsOverHttp(port, blobData, senderWin, targetBlobId = null) {
+  return new Promise((resolve, reject) => {
+    let bodyBuf;
+    if (Buffer.isBuffer(blobData)) {
+      bodyBuf = blobData;
+    } else if (typeof blobData === 'string') {
+      bodyBuf = Buffer.from(blobData, 'utf8');
+    } else if (typeof blobData === 'object' && blobData !== null) {
+      if (blobData._dataType === 'binary' && Buffer.isBuffer(blobData.data)) {
+        bodyBuf = blobData.data;
+      } else {
+        bodyBuf = Buffer.from(formatXBlobAtRest(blobData), 'utf8');
+      }
+    } else {
+      bodyBuf = Buffer.from(String(blobData), 'utf8');
+    }
+
+    const contentEncoding = (typeof blobData === 'object' && blobData !== null) ? (blobData.contentEncoding || (blobData._dataType === 'fd-rights' ? 'fd-rights' : (blobData._dataType === 'base64' ? 'base64' : 'identity'))) : 'identity';
+    const mimeType = (typeof blobData === 'object' && blobData !== null && blobData.type) ? blobData.type : 'application/json';
+
+    const hostname = os.hostname();
+    const display = (process.env.DISPLAY || ':0').replace(/^:/, '');
+    const widHex = typeof senderWin === 'number' ? `0x${senderWin.toString(16)}` : String(senderWin);
+
+    const headers = {
+      'Content-Type': mimeType,
+      'Content-Length': bodyBuf.length,
+      'Content-Encoding': contentEncoding,
+      'Accept-Encoding': 'identity, base64, fd-rights',
+      'Origin': `${hostname}:${display}/${widHex}`
+    };
+    if (typeof blobData === 'object' && blobData !== null) {
+      if (blobData.name) headers['Content-Disposition'] = `attachment; filename="${blobData.name}"`;
+      if (blobData.xblobType) headers['X-XBlob-Type'] = blobData.xblobType;
+    }
+
+    const pathStr = targetBlobId ? `/blobs/${toHexBlobId(targetBlobId)}` : '/blobs';
+
+    const req = http.request({
+      hostname: 'localhost',
+      port,
+      path: pathStr,
+      method: 'PUT',
+      headers
+    }, (res) => {
+      let resData = '';
+      res.on('data', chunk => { resData += chunk; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(resData);
+          const rawBlob = res.headers['x-blob-id'] || json.blobId || json.blob || targetBlobId;
+          const blobId = typeof rawBlob === 'number' ? rawBlob : (typeof rawBlob === 'string' && (rawBlob.startsWith('0x') || rawBlob.startsWith('0X')) ? parseInt(rawBlob, 16) : Number(rawBlob));
+          if (!isNaN(blobId) && blobId > 0) {
+            resolve(blobId);
+          } else {
+            reject(new Error('Invalid blob ID returned from http: ' + resData));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.setTimeout(5000, () => {
+      req.destroy(new Error('HTTP PUT /blobs timeout'));
     });
     req.on('error', reject);
     req.write(bodyBuf);
@@ -349,68 +445,68 @@ async function XBlobCreate(
     timeoutMs
   ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
 
-  const blobAtom = responseEv.data[1];
-  await XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, os.hostname(), null);
+  const blobId = responseEv.data[1];
+  await XBlobWrite(X, routerWin, senderWin, blobId, blobData, os.hostname(), null);
 
-  return blobAtom;
+  return blobId;
 }
 
-async function XBlobGrant(X, routerWin, senderWin, blobAtom, granteeWin) {
+async function XBlobGrant(X, routerWin, senderWin, blobId, granteeWin) {
   return XClientMessage(X, routerWin, atoms.XBLOB_GRANT_V0, [
     senderWin,
-    blobAtom,
+    blobId,
     granteeWin,
   ]);
 }
 
-async function XBlobUnlink(X, routerWin, senderWin, blobAtom) {
-  logger.debug(`XBlobUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+async function XBlobUnlink(X, routerWin, senderWin, blobId) {
+  logger.debug(`XBlobUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobId)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_UNLINK_V0, [
     senderWin,
-    blobAtom,
+    blobId,
   ]);
 }
 
-async function XBlobSoftLink(X, routerWin, senderWin, blobAtom) {
-  logger.debug(`XBlobSoftLink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+async function XBlobSoftLink(X, routerWin, senderWin, blobId) {
+  logger.debug(`XBlobSoftLink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobId)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_LINK_V0, [
     senderWin,
-    blobAtom,
+    blobId,
   ]);
 }
 
-async function XBlobSoftUnlink(X, routerWin, senderWin, blobAtom) {
-  logger.debug(`XBlobSoftUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)})`);
+async function XBlobSoftUnlink(X, routerWin, senderWin, blobId) {
+  logger.debug(`XBlobSoftUnlink(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobId)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_SOFT_UNLINK_V0, [
     senderWin,
-    blobAtom,
+    blobId,
   ]);
 }
 
-async function XBlobAnnounceHost(X, routerWin, senderWin, blobAtom, hostWin) {
-  logger.debug(`XBlobAnnounceHost(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)}, ${widString(hostWin)})`);
+async function XBlobAnnounceHost(X, routerWin, senderWin, blobId, hostWin) {
+  logger.debug(`XBlobAnnounceHost(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobId)}, ${widString(hostWin)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_ANNOUNCE_HOST_V0, [
     senderWin || 0,
-    blobAtom || 0,
+    blobId || 0,
     hostWin || senderWin || 0,
   ]);
 }
 
-async function XBlobDropHost(X, routerWin, senderWin, blobAtom, hostWin) {
-  logger.debug(`XBlobDropHost(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobAtom)}, ${widString(hostWin)})`);
+async function XBlobDropHost(X, routerWin, senderWin, blobId, hostWin) {
+  logger.debug(`XBlobDropHost(X, ${widString(routerWin)}, ${widString(senderWin)}, ${widString(blobId)}, ${widString(hostWin)})`);
   return XClientMessage(X, routerWin, atoms.XBLOB_DROP_HOST_V0, [
     senderWin || 0,
-    blobAtom || 0,
+    blobId || 0,
     hostWin || senderWin || 0,
   ]);
 }
 
-async function XBlobBroadcast(X, routerWin, senderWin, blobAtom, host, version) {
+async function XBlobBroadcast(X, routerWin, senderWin, blobId, host, version) {
   const targetWin = routerWin || senderWin || 0;
-  logger.debug(`XBlobBroadcast(X, ${widString(targetWin)}, ${widString(senderWin || 0)}, ${widString(blobAtom || 0)})`);
+  logger.debug(`XBlobBroadcast(X, ${widString(targetWin)}, ${widString(senderWin || 0)}, ${widString(blobId || 0)})`);
   return XClientMessage(X, targetWin, atoms.XBLOB_BROADCAST_V0, [
     senderWin || 0,
-    blobAtom || 0,
+    blobId || 0,
     host,
     version,
   ]);
@@ -611,41 +707,40 @@ function parseXBlobAtRest(raw) {
   };
 }
 
-async function XBlobWrite(X, routerWin, senderWin, blobAtom, blobData, host, version){
-  if(version && typeof blobData === 'object' && blobData !== null){
+async function XBlobWrite(X, routerWin, senderWin, blobId, blobData, host, version) {
+  if (version && typeof blobData === 'object' && blobData !== null) {
     blobData = Object.assign({}, blobData, { version });
   }
+  const hexBlobId = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
   const hostname = os.hostname();
   const hostAtom = atoms[`XBLOB_HOST_${hostname}`] || (await X.InternAtom(false, `XBLOB_HOST_${hostname}`));
   const selectionOwner = await X.GetSelectionOwner(hostAtom);
   const xblobHost = selectionOwner || senderWin || routerWin;
-  const payloadString = formatXBlobAtRest(blobData);
-  const buffer = Buffer.from(payloadString, 'utf8');
-  // Chunk size: 32,768 bytes (safely under the 65,535 X11 request unit limit)
-  const CHUNK_SIZE = 32768;
-  for (let offset = 0; offset < buffer.length; offset += CHUNK_SIZE) {
-    const chunk = buffer.subarray(offset, offset + CHUNK_SIZE);
-    // Mode 0 = PropModeReplace (first chunk resets/creates the prop)
-    // Mode 2 = PropModeAppend  (subsequent chunks append)
-    const mode = offset === 0 ? 0 : 2;
-    const typeAtom = atoms['message/http'] || atoms.STRING;
-    X.ChangeProperty(
-      mode,
-      xblobHost,
-      blobAtom,
-      typeAtom,
-      8,
-      chunk
-    );
+
+  // Send blob to XBlob host via HTTP over socket or HTTP port
+  const sockPath = (await getXBlobSocketPath(X, xblobHost)) || process.env.XBLOB_SOCKET_PATH;
+  if (sockPath && fs.existsSync(sockPath)) {
+    try {
+      await httpPutBlobsOverSocket(sockPath, blobData, senderWin || xblobHost, blobId);
+      return;
+    } catch (sockErr) {
+      logger.warn(`XBlobWrite socket PUT /blobs/${hexBlobId} failed: ${sockErr.message}`);
+    }
   }
-  X.SetSelectionOwner(xblobHost, blobAtom, 0);
+
+  const httpPort = parseInt(process.env.XINTENT_PORT || process.env.PORT || '12345', 10);
+  try {
+    await httpPutBlobsOverHttp(httpPort, blobData, senderWin || xblobHost, blobId);
+  } catch (httpErr) {
+    logger.error(`XBlobWrite HTTP PUT /blobs/${hexBlobId} failed: ${httpErr.message}`);
+  }
 }
 
 
-async function XBlobTransfer(X, routerWin, senderWin, blobAtom, granteeWin) {
+async function XBlobTransfer(X, routerWin, senderWin, blobId, granteeWin) {
   return XClientMessage(X, routerWin, atoms.XBLOB_TRANSFER_V0, [
     senderWin,
-    blobAtom,
+    blobId,
     granteeWin,
   ]);
 }
@@ -773,18 +868,69 @@ function httpGetBlobOverSocket(sockPath, hexBlobId) {
   });
 }
 
-async function XBlobRead(X, routerWin, blobAtom, host, version) {
-  let hostWin = await X.GetSelectionOwner(blobAtom);
-  if (!hostWin) {
-    if (typeof host === 'number' && host > 0) {
-      hostWin = host;
-    } else {
-      hostWin = routerWin;
-    }
+function httpGetBlobOverHttp(port, hexBlobId) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: 'localhost',
+      port,
+      path: `/blobs/${hexBlobId}`,
+      method: 'GET',
+      headers: {
+        'Accept': '*/*',
+        'Accept-Encoding': 'identity, base64, fd-rights'
+      }
+    }, (res) => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          const bodyBuf = Buffer.concat(chunks);
+          const headers = [];
+          if (res.headers['content-type']) headers.push(`Content-Type: ${res.headers['content-type']}`);
+          if (res.headers['content-length']) headers.push(`Content-Length: ${res.headers['content-length']}`);
+          if (res.headers['content-encoding']) headers.push(`Content-Encoding: ${res.headers['content-encoding']}`);
+          if (res.headers['content-disposition']) headers.push(`Content-Disposition: ${res.headers['content-disposition']}`);
+          if (res.headers['x-xblob-type']) headers.push(`X-XBlob-Type: ${res.headers['x-xblob-type']}`);
+
+          const rawRest = Buffer.concat([
+            Buffer.from(headers.join('\r\n') + '\r\n\r\n', 'utf8'),
+            bodyBuf
+          ]);
+          try {
+            resolve(parseXBlobAtRest(rawRest));
+          } catch (e) {
+            reject(e);
+          }
+        } else {
+          reject(new Error(`GET /blobs/${hexBlobId} over HTTP returned status ${res.statusCode}`));
+        }
+      });
+    });
+
+    req.setTimeout(5000, () => {
+      req.destroy(new Error(`HTTP GET /blobs/${hexBlobId} timeout`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function XBlobRead(X, routerWin, blobId, host, version) {
+  const hexBlobId = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
+
+  let hostWin = routerWin;
+  if (typeof host === 'number' && host > 0) {
+    hostWin = host;
+  } else {
+    try {
+      const hostname = os.hostname();
+      const hostAtom = atoms[`XBLOB_HOST_${hostname}`] || (await X.InternAtom(false, `XBLOB_HOST_${hostname}`));
+      const selOwner = await X.GetSelectionOwner(hostAtom);
+      if (selOwner) hostWin = selOwner;
+    } catch (_) {}
   }
 
-  const hexBlobId = typeof blobAtom === 'number' ? `0x${blobAtom.toString(16)}` : String(blobAtom);
-
+  // 1. Try socket GET
   try {
     const sockPath = (await getXBlobSocketPath(X, hostWin)) || process.env.XBLOB_SOCKET_PATH;
     if (sockPath && fs.existsSync(sockPath)) {
@@ -792,47 +938,21 @@ async function XBlobRead(X, routerWin, blobAtom, host, version) {
         const blobData = await httpGetBlobOverSocket(sockPath, hexBlobId);
         if (blobData) return blobData;
       } catch (sockErr) {
-        logger.warn(`XBlobRead socket GET /blobs/${hexBlobId} failed, falling back to X11 GetProperty: ${sockErr.message}`);
+        logger.warn(`XBlobRead socket GET /blobs/${hexBlobId} failed: ${sockErr.message}`);
       }
     }
   } catch (_) {}
 
-  const prop = await X.GetProperty(
-    0,
-    hostWin,
-    blobAtom,
-    0, // 0 = AnyPropertyType in X11 protocol
-    0,
-    10_000_000
-  );
-  if (prop && prop.data) {
-    try {
-      return parseXBlobAtRest(prop.data);
-    } catch (parseErr) {
-      const rawStr = prop.data.toString('utf8');
-      const snippet = rawStr.length > 200 ? rawStr.slice(0, 200) + '...' : rawStr;
-      logger.setContext({
-        blobAtom: widString(blobAtom),
-        hostWin: widString(hostWin),
-        rawLength: prop.data.length,
-        rawSnippet: snippet
-      });
-      const err = new SyntaxError(
-        `XBlobRead Parse error at blobAtom ${widString(blobAtom)} on window ${widString(hostWin)} (raw length: ${prop.data.length} bytes, snippet: ${JSON.stringify(snippet)}): ${parseErr.message}`
-      );
-      err.rawString = rawStr;
-      err.blobAtom = blobAtom;
-      throw err;
-    }
-  } else {
-    logger.setContext({
-      blobAtom: widString(blobAtom),
-      hostWin: widString(hostWin)
-    });
-    throw new Error(
-      `XBlobRead: no data found at ${widString(blobAtom)} on window ${widString(hostWin)}`
-    );
+  // 2. Try HTTP port GET
+  const httpPort = parseInt(process.env.XINTENT_PORT || process.env.PORT || '12345', 10);
+  try {
+    const blobData = await httpGetBlobOverHttp(httpPort, hexBlobId);
+    if (blobData) return blobData;
+  } catch (httpErr) {
+    logger.warn(`XBlobRead HTTP GET /blobs/${hexBlobId} failed: ${httpErr.message}`);
   }
+
+  throw new Error(`XBlobRead: blob ${hexBlobId} not found on XBlob host`);
 }
 
 async function parseJsonFrame(X, routerWin, ev, {unlinkPayloadBlob = true}={}) {

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -397,7 +397,7 @@ invocation = "X11"
           return;
         }
 
-        if ((isImage && targetName.startsWith('image/')) || targetName === currentClipboard.type || targetName === 'application/octet-stream') {
+        if ((isImage && targetName.startsWith('image/')) || (targetName === currentClipboard.type && !targetName.startsWith('text/')) || targetName === 'application/octet-stream') {
           let rawInputBuf = currentClipboard.rawBuf;
           if (!Buffer.isBuffer(rawInputBuf)) {
             if (currentClipboard._dataType === 'base64' || (typeof currentClipboard.data === 'string' && currentClipboard.data.startsWith('data:'))) {
@@ -425,7 +425,9 @@ invocation = "X11"
 
         if ([atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
           let textBuf = Buffer.alloc(0);
-          if (isText) {
+          if ((currentClipboard._dataType === 'fd-rights' || currentClipboard.contentEncoding === 'fd-rights') && typeof currentClipboard.data === 'string' && fs.existsSync(currentClipboard.data)) {
+            textBuf = fs.readFileSync(currentClipboard.data);
+          } else if (isText) {
             textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
           } else if (currentClipboard.fileUri) {
             textBuf = Buffer.from(currentClipboard.fileUri, 'utf8');

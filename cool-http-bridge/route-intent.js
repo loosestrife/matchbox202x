@@ -84,7 +84,7 @@ const aggregateTomlAsObject = async () => {
   }
 };
 
-const resolveDataBlobAtom = async (rawBlob, XClient, rWin, cWin) => {
+const resolveDataBlob = async (rawBlob, XClient, rWin, cWin) => {
   if (!rawBlob) return 0;
   if (typeof rawBlob === 'number') return isNaN(rawBlob) ? 0 : rawBlob;
   if (typeof rawBlob === 'string') {
@@ -305,7 +305,7 @@ const routeIntent = async (req, res) => {
 
           const eventData = msg?.payload || {};
           const controlWord = msg?.controlWord;
-          const blobAtom = msg?.dataBlob || eventData?.data_blob || eventData?.blobId || eventData?.blob;
+          const blobId = msg?.dataBlob || eventData?.data_blob || eventData?.blobId || eventData?.blob;
 
           logger.info(`route-intent: [HTTP STREAM] messageFromX XChannel ${txId}: ${xintent.frameDesc(msg)}`);
 
@@ -314,8 +314,8 @@ const routeIntent = async (req, res) => {
           }
 
           const customIntentHeaders = {};
-          if (blobAtom) {
-            customIntentHeaders['X-Attached-Blob-Id'] = blobAtom;
+          if (blobId) {
+            customIntentHeaders['X-Attached-Blob-Id'] = blobId;
           }
           if (controlWord !== undefined) {
             const ctrlStrings = [];
@@ -331,16 +331,16 @@ const routeIntent = async (req, res) => {
           const preferVal = String(eventData?.Prefer || payload?.Prefer || req.headers['prefer'] || '').toLowerCase();
           const isMinimalPreferred = preferVal.includes('return=minimal') || payload?.receive_data === false || payload?.receiveData === false;
 
-          if (blobAtom && !isMinimalPreferred && !res.writableEnded && !res.finished) {
+          if (blobId && !isMinimalPreferred && !res.writableEnded && !res.finished) {
             try {
               const routerWin = xintent.routerWin || (await xintent.getValidRouterWin(X, X.rootWin || 0));
-              const blob = await xintent.XBlobRead(X, routerWin, blobAtom);
+              const blob = await xintent.XBlobRead(X, routerWin, blobId);
               if (blob && !res.writableEnded && !res.finished) {
-                const hexBlobId = typeof blobAtom === 'number' ? `0x${blobAtom.toString(16)}` : String(blobAtom);
+                const hexBlobId = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
                 writeXBlobFrame(res, blob, { 'X-Blob-Id': hexBlobId });
               }
             } catch (err) {
-              logger.error(`[BLOB READ ERROR] Failed to fetch blob atom ${blobAtom} for intent ${intent}: ${err.message}`, { intentPayload: payload });
+              logger.error(`[BLOB READ ERROR] Failed to fetch blob ${blobId} for intent ${intent}: ${err.message}`, { intentPayload: payload });
             }
           }
 
@@ -393,7 +393,7 @@ const routeIntent = async (req, res) => {
       let rawBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId || reqDataBlobHeader;
 
       const routerWin = await xintent.getValidRouterWin(X, root);
-      const dataBlobAtom = await resolveDataBlobAtom(rawBlob, X, routerWin, clientWin);
+      const dataBlob = await resolveDataBlob(rawBlob, X, routerWin, clientWin);
 
       const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
       const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
@@ -415,7 +415,7 @@ const routeIntent = async (req, res) => {
           payload,
           txId: primarySession.txId,
           controlWord: reqControlWord,
-          dataBlob: dataBlobAtom,
+          dataBlob: dataBlob,
         });
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -432,7 +432,7 @@ const routeIntent = async (req, res) => {
         payload,
         txId,
         controlWord: reqControlWord,
-        dataBlob: dataBlobAtom,
+        dataBlob: dataBlob,
       });
 
       return await responsePromise;
@@ -442,7 +442,7 @@ const routeIntent = async (req, res) => {
     const reqDataBlobHeader = req.headers['x-attached-blob-id'] || req.headers['x-blob-id'];
     const rawBlob = payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId || reqDataBlobHeader;
     const routerWin = await xintent.getValidRouterWin(X, root);
-    const dataBlobAtom = await resolveDataBlobAtom(rawBlob, X, routerWin, clientWin);
+    const dataBlob = await resolveDataBlob(rawBlob, X, routerWin, clientWin);
 
     const isXAudioPlay = intent.startsWith("xaudio.Play") || intent === "XAudioPlay" || intent === "XAudioPlayV0";
     const isXAudioControl = intent.startsWith("xaudio.Control") || intent === "XAudioControl" || intent === "XAudioControlV0";
@@ -455,7 +455,7 @@ const routeIntent = async (req, res) => {
       payload,
       txId,
       controlWord: reqControlWord,
-      dataBlob: dataBlobAtom,
+      dataBlob: dataBlob,
     });
 
     res.setHeader('Matchbox-Bridge', '1.0');

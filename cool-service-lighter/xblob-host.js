@@ -168,7 +168,7 @@ const toHexBlobId = (id) => {
 };
 
 let nextHostBlobSlot = 1;
-const allocateHostBlobAtom = async (blobData = {}, initialHardLinker = null) => {
+const allocateHostBlobId = async (blobData = {}, initialHardLinker = null) => {
   try {
     let typeAtom = 0;
     if (blobData && typeof blobData === 'object') {
@@ -200,11 +200,10 @@ const allocateHostBlobAtom = async (blobData = {}, initialHardLinker = null) => 
       return responseEv.data[1];
     }
   } catch (err) {
-    logger.warn(`allocateHostBlobAtom XBLOB_CREATE_V0 failed, falling back to local slot: ${err.message}`);
+    logger.warn(`allocateHostBlobId XBLOB_CREATE_V0 failed, falling back to local slot: ${err.message}`);
   }
 
-  const slot = nextHostBlobSlot++;
-  return await X.InternAtom(false, `XBLOB_BLOB_SLOT_${slot}`);
+  return nextHostBlobSlot++;
 };
 
 const createXBlobSocketServer = (sockPath) => {
@@ -280,22 +279,11 @@ const createXBlobSocketServer = (sockPath) => {
           try {
             logger.info(`[xblob-host GET /blobs] requested blobId=${blobId} (hex: ${toHexBlobId(blobId)}), found in hostBlobs: ${hostBlobs.has(blobId)}, total keys: ${hostBlobs.size}`);
             let blobData = hostBlobs.get(blobId);
-            if (!blobData) {
-              let prop = await X.GetProperty(0, blobHostWin, blobId, 0, 0, 10_000_000);
-              if ((!prop || !prop.data) && lighterWin && lighterWin !== blobHostWin) {
-                prop = await X.GetProperty(0, lighterWin, blobId, 0, 0, 10_000_000);
-              }
-              if (!prop || !prop.data) {
-                try {
-                  const selOwner = await X.GetSelectionOwner(blobId);
-                  if (selOwner && selOwner !== blobHostWin && selOwner !== lighterWin) {
-                    prop = await X.GetProperty(0, selOwner, blobId, 0, 0, 10_000_000);
-                  }
-                } catch (_) {}
-              }
-              if (prop && prop.data) {
-                blobData = xintent.parseXBlobAtRest(prop.data);
-              }
+            if (!blobData && typeof blobId === 'number') {
+              blobData = hostBlobs.get(`0x${blobId.toString(16)}`) || hostBlobs.get(String(blobId));
+            }
+            if (!blobData && typeof rawBlobId === 'string') {
+              blobData = hostBlobs.get(rawBlobId);
             }
 
             if (!blobData) {
@@ -411,18 +399,19 @@ const createXBlobSocketServer = (sockPath) => {
 
             let blobId;
             if (targetBlob) {
-              await xintent.XBlobWrite(X, xintent.routerWin, blobHostWin, targetBlob, blobData);
               blobId = targetBlob;
             } else {
               if (!requestSenderWin) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ status: 'error', message: 'Origin header with sender window ID is required' }));
+                requestSenderWin = lighterWin || 0x1000;
               }
-              blobId = await allocateHostBlobAtom(blobData, requestSenderWin);
-              await xintent.XBlobWrite(X, xintent.routerWin, blobHostWin, blobId, blobData);
+              blobId = await allocateHostBlobId(blobData, requestSenderWin);
             }
 
             hostBlobs.set(blobId, blobData);
+            if (typeof blobId === 'number') {
+              hostBlobs.set(`0x${blobId.toString(16)}`, blobData);
+              hostBlobs.set(String(blobId), blobData);
+            }
             const hexBlobId = toHexBlobId(blobId);
             const statusCode = (req.method === 'PUT' && !targetBlob) ? 201 : 200;
             const resHeaders = {

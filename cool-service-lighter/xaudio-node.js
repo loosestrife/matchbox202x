@@ -10,7 +10,7 @@ const logger = new Logger({ module: 'xaudio-host' });
 
 let X;
 let lighterWin;
-const prefetchedBlobs = new Map(); // blobAtom -> filePath
+const prefetchedBlobs = new Map(); // blobId -> filePath
 const activeProcesses = new Map();  // cookie -> ChildProcess
 const playbackQueues = new Map();   // cookie -> { nextSeqnum, pending: Map(seqnum -> item), isPlaying: boolean }
 
@@ -40,22 +40,22 @@ function createWavHeader(dataLength, sampleRate = 22050, channels = 2, bitsPerSa
   return header;
 }
 
-async function resolveBlobToFilePath(blobAtom, payload = {}) {
-  const numericBlobAtom = Number(blobAtom);
-  if (prefetchedBlobs.has(numericBlobAtom)) {
-    return prefetchedBlobs.get(numericBlobAtom);
+async function resolveBlobToFilePath(blobId, payload = {}) {
+  const numericBlobId = Number(blobId);
+  if (prefetchedBlobs.has(numericBlobId)) {
+    return prefetchedBlobs.get(numericBlobId);
   }
 
-  const data = await xintent.XBlobRead(X, xintent.routerWin, numericBlobAtom);
+  const data = await xintent.XBlobRead(X, xintent.routerWin, numericBlobId);
   if (!data) {
-    throw new Error(`XBlobRead returned null/empty for blobAtom ${numericBlobAtom}`);
+    throw new Error(`XBlobRead returned null/empty for blobId ${numericBlobId}`);
   }
 
   // 1. If blob is fd-rights or a direct file descriptor/path, return path directly
   if (data._dataType === 'fd-rights' || data.contentEncoding === 'fd-rights') {
     if (typeof data.data === 'string' && data.data.trim()) {
       const fdPath = data.data.trim();
-      prefetchedBlobs.set(numericBlobAtom, fdPath);
+      prefetchedBlobs.set(numericBlobId, fdPath);
       return fdPath;
     }
   }
@@ -97,10 +97,10 @@ async function resolveBlobToFilePath(blobAtom, payload = {}) {
   }
 
   const ext = data.type && data.type.includes('mp3') ? '.mp3' : '.wav';
-  const fileId = `xaudio_${numericBlobAtom}_${Date.now()}${ext}`;
+  const fileId = `xaudio_${numericBlobId}_${Date.now()}${ext}`;
   const filePath = path.join(os.tmpdir(), fileId);
   fs.writeFileSync(filePath, buf);
-  prefetchedBlobs.set(numericBlobAtom, filePath);
+  prefetchedBlobs.set(numericBlobId, filePath);
   return filePath;
 }
 
@@ -156,13 +156,13 @@ async function processQueue(cookie) {
   queue.isPlaying = true;
   queue.pending.delete(queue.nextSeqnum);
 
-  const { blobAtom, payload, senderWin, channel } = item;
-  const numericBlobAtom = Number(blobAtom);
+  const { blobId, payload, senderWin, channel } = item;
+  const numericBlobId = Number(blobId);
   const seqnum = queue.nextSeqnum;
   const streamId = payload.streamId !== undefined ? Number(payload.streamId) : (payload.stream !== undefined ? Number(payload.stream) : 1);
 
   try {
-    const filePath = await resolveBlobToFilePath(blobAtom, payload);
+    const filePath = await resolveBlobToFilePath(blobId, payload);
     const player = getAudioPlayerCmd();
 
     const isCustomCmd = Boolean(process.env.AUDIO_PLAYER_CMD || process.env.XAUDIO_PLAYER_CMD);
@@ -187,14 +187,14 @@ async function processQueue(cookie) {
 
       // 1. Unlink sample XBlob when playback finishes
       try {
-        await xintent.XBlobUnlink(X, xintent.routerWin, lighterWin, blobAtom);
-        const filePath = prefetchedBlobs.get(numericBlobAtom);
-        prefetchedBlobs.delete(numericBlobAtom);
+        await xintent.XBlobUnlink(X, xintent.routerWin, lighterWin, blobId);
+        const filePath = prefetchedBlobs.get(numericBlobId);
+        prefetchedBlobs.delete(numericBlobId);
         if (filePath && fs.existsSync(filePath)) {
           try { fs.unlinkSync(filePath); } catch (_) {}
         }
       } catch (err) {
-        logger.warn(`Failed to unlink blob ${blobAtom} after playback:`, err.message);
+        logger.warn(`Failed to unlink blob ${blobId} after playback:`, err.message);
       }
 
       // 2. Dispatch XAudioPlayResponseV0 event back to client with streamId and seqnum
@@ -229,7 +229,7 @@ async function processQueue(cookie) {
       processQueue(cookie);
     });
   } catch (err) {
-    logger.error(`Error playing sample ${blobAtom} for cookie ${cookie} seq ${seqnum}: ${err.message}`);
+    logger.error(`Error playing sample ${blobId} for cookie ${cookie} seq ${seqnum}: ${err.message}`);
     queue.isPlaying = false;
     queue.nextSeqnum++;
     processQueue(cookie);
@@ -244,11 +244,11 @@ async function playSoundBlob(payload, senderWin, dataBlob, channel = 0) {
 
   const cookie = reqOutputId || defaultSinkName;
   const rawBlob = dataBlob || payload.dataBlob || payload.sample || payload.BlobId || payload.blobId || payload.blob;
-  const blobAtom = Number(rawBlob);
+  const blobId = Number(rawBlob);
   const seqnum = payload.seqnum !== undefined ? Number(payload.seqnum) : (payload.seq !== undefined ? Number(payload.seq) : null);
 
-  logger.setContext({ cookie, seqnum, blob: xintent.widString(blobAtom) });
-  logger.info(`[XAudioSink] XAudioPlay: cookie=${cookie}, seqnum=${seqnum}, blob=${blobAtom}`);
+  logger.setContext({ cookie, seqnum, blob: xintent.widString(blobId) });
+  logger.info(`[XAudioSink] XAudioPlay: cookie=${cookie}, seqnum=${seqnum}, blob=${blobId}`);
 
   if (!playbackQueues.has(cookie)) {
     playbackQueues.set(cookie, {
@@ -293,7 +293,7 @@ async function playSoundBlob(payload, senderWin, dataBlob, channel = 0) {
   }
 
   queue.pending.set(targetSeqnum, {
-    blobAtom,
+    blobId,
     payload,
     senderWin,
     channel,
@@ -305,10 +305,10 @@ async function playSoundBlob(payload, senderWin, dataBlob, channel = 0) {
 }
 
 async function prefetchSoundBlob(payload) {
-  const blobAtom = payload.sample || payload.BlobId || payload.blobId || payload.blob;
-  logger.info(`[XAudioSink] XAudioPrefetchSoundBlob: BlobId=${blobAtom}`);
+  const blobId = payload.sample || payload.BlobId || payload.blobId || payload.blob;
+  logger.info(`[XAudioSink] XAudioPrefetchSoundBlob: BlobId=${blobId}`);
   try {
-    const filePath = await resolveBlobToFilePath(blobAtom);
+    const filePath = await resolveBlobToFilePath(blobId);
     return { status: 'ok', filePath };
   } catch (err) {
     logger.error(`[XAudioSink] Error prefetching sound blob: ${err.message}`);

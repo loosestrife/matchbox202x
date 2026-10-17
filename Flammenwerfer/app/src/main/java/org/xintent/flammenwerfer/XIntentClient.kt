@@ -19,6 +19,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.DatagramPacket
@@ -1590,29 +1591,45 @@ name = "$advertisedName"
         context: Context,
         name: String,
         type: String,
-        rawBytes: ByteArray,
+        inputStream: InputStream,
+        size: Long,
+        onProgress: ((bytesWritten: Long, totalBytes: Long) -> Unit)? = null,
     ): String? = withContext(Dispatchers.IO) {
         val baseUrl = getServerUrl(context)
         val fullUrl = "$baseUrl/xblob"
 
         val logPrefix = "[XBlob Upload]"
-        addLog("$logPrefix Uploading $name ($type, ${rawBytes.size} bytes)...")
+        addLog("$logPrefix Uploading stream $name ($type, $size bytes)...")
 
         try {
             val url = URL(fullUrl)
             val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
+                requestMethod = "PUT"
                 doOutput = true
                 connectTimeout = 15000
                 readTimeout = 60000
                 setRequestProperty("Content-Type", type)
-                setRequestProperty("Content-Length", rawBytes.size.toString())
+                if (size >= 0) {
+                    setFixedLengthStreamingMode(size)
+                    setRequestProperty("Content-Length", size.toString())
+                }
                 setRequestProperty("Content-Disposition", "attachment; filename=\"$name\"")
                 setRequestProperty("X-Forwarded-By", "flammenwerfer")
             }
 
             connection.outputStream.use { os ->
-                os.write(rawBytes)
+                inputStream.use { input ->
+                    val buffer = ByteArray(8192)
+                    var bytesWritten = 0L
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        os.write(buffer, 0, bytesRead)
+                        bytesWritten += bytesRead
+                        if (size > 0 && onProgress != null) {
+                            onProgress(bytesWritten, size)
+                        }
+                    }
+                }
                 os.flush()
             }
 
@@ -1636,11 +1653,18 @@ name = "$advertisedName"
             }
             addLog("$logPrefix FAILED ($responseCode)")
         } catch (e: Exception) {
-            Log.e(TAG, "Error uploading XBlob to $fullUrl", e)
+            Log.e(TAG, "Error uploading XBlob stream to $fullUrl", e)
             addLog("$logPrefix ERROR: ${e.javaClass.simpleName}: ${e.message}")
         }
         return@withContext null
     }
+
+    suspend fun uploadXBlob(
+        context: Context,
+        name: String,
+        type: String,
+        rawBytes: ByteArray,
+    ): String? = uploadXBlob(context, name, type, rawBytes.inputStream(), rawBytes.size.toLong())
 
     suspend fun sendSendToIntent(
         context: Context,
@@ -1651,6 +1675,8 @@ name = "$advertisedName"
         data: String,
         targetApp: String = "cool-clips",
         rawBytes: ByteArray? = null,
+        inputStream: InputStream? = null,
+        onProgress: ((Long, Long) -> Unit)? = null,
     ): Result = withContext(Dispatchers.IO) {
         val baseUrl = getServerUrl(context)
         val fullUrl = "$baseUrl/intent/fs/SendTo?app=$targetApp"
@@ -1659,40 +1685,39 @@ name = "$advertisedName"
         addLog("$logPrefix Sending file: $name ($type, $size bytes)")
 
         try {
-            var bytesToUpload: ByteArray? = rawBytes
-            if (bytesToUpload == null && dataType == "base64" && data.isNotBlank()) {
-                bytesToUpload = try {
-                    Base64.decode(data, Base64.DEFAULT)
-                } catch (_: Exception) {
-                    try { Base64.decode(data, Base64.NO_WRAP) } catch (_: Exception) { null }
+            var uploadedBlobId: String? = null
+            if (inputStream != null) {
+                uploadedBlobId = uploadXBlob(context, name, type, inputStream, size, onProgress)
+            } else {
+                var bytesToUpload: ByteArray? = rawBytes
+                if (bytesToUpload == null && dataType == "base64" && data.isNotBlank()) {
+                    bytesToUpload = try {
+                        Base64.decode(data, Base64.DEFAULT)
+                    } catch (_: Exception) {
+                        try { Base64.decode(data, Base64.NO_WRAP) } catch (_: Exception) { null }
+                    }
                 }
-            }
 
-            var dataBlobRef: Any? = null
-            if (bytesToUpload != null && bytesToUpload.isNotEmpty()) {
-                val uploadedBlobId = uploadXBlob(context, name, type, bytesToUpload)
-                if (uploadedBlobId != null) {
-                    dataBlobRef = uploadedBlobId
-                }
-            }
-
-            if (dataBlobRef == null) {
-                dataBlobRef = JSONObject().apply {
-                    put("name", name)
-                    put("type", type)
-                    put("size", size)
-                    put("_dataType", dataType)
-                    put("data", data)
+                if (bytesToUpload != null && bytesToUpload.isNotEmpty()) {
+                    uploadedBlobId = uploadXBlob(context, name, type, bytesToUpload.inputStream(), bytesToUpload.size.toLong(), onProgress)
                 }
             }
 
             val jsonBody = JSONObject().apply {
                 put("intent", "fs.SendTo")
                 put("app", targetApp)
-                put("dataBlob", dataBlobRef)
                 put("name", name)
                 put("mimeType", type)
                 put("size", size)
+                if (uploadedBlobId == null) {
+                    put("dataBlob", JSONObject().apply {
+                        put("name", name)
+                        put("type", type)
+                        put("size", size)
+                        put("_dataType", dataType)
+                        put("data", data)
+                    })
+                }
             }
 
             val url = URL(fullUrl)
@@ -1704,6 +1729,9 @@ name = "$advertisedName"
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("X-Forwarded-By", "flammenwerfer")
+                if (uploadedBlobId != null) {
+                    setRequestProperty("X-Attached-Blob-Id", uploadedBlobId)
+                }
             }
 
             OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->

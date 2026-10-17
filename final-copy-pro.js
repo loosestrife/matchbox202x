@@ -259,12 +259,12 @@ async function main() {
   }
 
   const clientWin = await createClientWindow(X, root, 'final-copy-pro');
-  const dataBlobAtom = await XBlobCreate(X, xintent.routerWin, clientWin, xblobPayload);
+  const dataBlob = await XBlobCreate(X, xintent.routerWin, clientWin, xblobPayload);
 
-  console.log(`Sending intent '${intentName}' to '${targetAppArg || 'all'}' (dataBlob: ${dataBlobAtom})...`);
+  console.log(`Sending intent '${intentName}' to '${targetAppArg || 'all'}' (dataBlob: ${dataBlob})...`);
   await sendXIntentIntentV0(X, xintent.routerWin, {
     senderWin: clientWin,
-    dataBlob: dataBlobAtom,
+    dataBlob: dataBlob,
     payload: {
       intent: intentName,
       app: targetAppArg || undefined,

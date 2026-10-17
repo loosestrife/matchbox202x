@@ -42,7 +42,7 @@ def run_test():
     print("--- 1. Starting cool-service-lighter / xbus-daemon ---")
     supervisor_script = "/home/user/matchbox202x/cool-service-lighter/index.js"
     supervisor_proc = subprocess.Popen(
-        ["node", supervisor_script],
+        ["bun", supervisor_script],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -53,7 +53,7 @@ def run_test():
     try:
         print("--- 2. Sending test file via final-copy-pro.js ---")
         final_copy_proc = subprocess.run(
-            ["node", "/home/user/matchbox202x/final-copy-pro.js", test_file],
+            ["bun", "/home/user/matchbox202x/final-copy-pro.js", test_file],
             capture_output=True,
             text=True,
             env=env,

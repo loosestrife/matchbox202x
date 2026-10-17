@@ -149,51 +149,51 @@ this is likely parsed by client libraries to
 ```
 since it is a pseudo-rtmp packet, there is no reason for the data field to not be base64 encoded binary data.
 
-When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob atom name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkReceived`, but should be reused as soon as possible.
+When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob stream name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkReceived`, but should be reused as soon as possible.
 
 XBlob requests are always bus local since XBlob id's are bus local.  When an XBlob is linked across a bridge, both sides of the bridge need XBlob id's for it, the bridge would hold links on both sides and the nat table, and if the bridge dies, the links are automatically unlinked at the same time as the dead bridge loses the nat table.  The XBlobBroadcast is also bus local, but it is propagated across bridges accordingly as there are links.
 
 ## XBlobCreate
-an XMessageFrame with message type `XBlobCreateV0`, `data.l[1]` as the client's cookie, `data.l[2]` as the optional `typeAtom` (e.g. `atoms["audio/wav"]`, `atoms["application/json"]`), and optional `data.l[3]` as `initialHardLinker` window ID. When `initialHardLinker` is provided, `xbus-daemon` registers `data.l[3]` as the initial hard link holder in `links: [...]` and registers `data.l[0]` (`senderWin` / host) in `hosts: [...]`. The client cookie won't be needed by the real XBLOB V1 because that would use the X request sequence number. `xbus-daemon` holds `typeAtom` in `xblobRegistry[blobAtom]` alongside `links`, `softLinks`, and `hosts`, mirroring how the X server holds property type atoms and pixmap depth/format metadata.
+an XMessageFrame with message type `XBlobCreateV0`, `data.l[1]` as the client's cookie, `data.l[2]` as the optional `typeAtom` (e.g. `atoms["audio/wav"]`, `atoms["application/json"]`), and optional `data.l[3]` as `initialHardLinker` window ID. When `initialHardLinker` is provided, `xbus-daemon` registers `data.l[3]` as the initial hard link holder in `links: [...]` and registers `data.l[0]` (`senderWin` / host) in `hosts: [...]`. The client cookie won't be needed by the real XBLOB V1 because that would use the X request sequence number. `xbus-daemon` holds `typeAtom` in `xblobRegistry[blobId]` alongside `links`, `softLinks`, and `hosts`, mirroring how the X server holds property type atoms and pixmap depth/format metadata.
 
 ## XBlobCreateResponse
-an XMessageFrame with message type `XBlobCreateResponseV0`, `data.l[1]` as the blob atom, `data.l[2]` as the client's cookie.
+an XMessageFrame with message type `XBlobCreateResponseV0`, `data.l[1]` as the 32-bit blob ID, `data.l[2]` as the client's cookie.
 
 ## XBlobGrant
-an XMessageFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob atom, and `data.l[2]` as a grantee window.
+an XMessageFrame with message type `XBlobGrantV0`, `data.l[1]` as the blob ID, and `data.l[2]` as a grantee window.
 
 ## XBlobTransfer
-an XMessageFrame with message type `XBlobTransferV0`, `data.l[1]` as the blob atom, `data.l[2]` as the old owner window, and `data.l[3]` as the new owner window. Updates ownership links in `xbus-daemon`'s `links` list.
+an XMessageFrame with message type `XBlobTransferV0`, `data.l[1]` as the blob ID, `data.l[2]` as the old owner window, and `data.l[3]` as the new owner window. Updates ownership links in `xbus-daemon`'s `links` list.
 
 ## XBlobSoftLink
-an XMessageFrame with message type `XBlobSoftLinkV0`, `data.l[1]` as the blob atom, `data.l[2]` as the window to get a soft link.
+an XMessageFrame with message type `XBlobSoftLinkV0`, `data.l[1]` as the blob ID, `data.l[2]` as the window to get a soft link.
 
 ## XBlobUnlink
-an XMessageFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob atom.
+an XMessageFrame with message type `XBlobUnlinkV0` and `data.l[1]` as the blob ID.
 
 ## XBlobDestructor
-an XMessageFrame with message type `XBlobDestructorV0` and `data.l[1]` as the blob atom. Dispatched by `xbus-daemon` directly to all registered host windows (`hosts`) and soft link observers when `links.length == 0` and `softLinks.length == 0`, informing hosts to free local properties, socket buffers, or mmap regions.
+an XMessageFrame with message type `XBlobDestructorV0` and `data.l[1]` as the blob ID. Dispatched by `xbus-daemon` directly to all registered host windows (`hosts`) and soft link observers when `links.length == 0` and `softLinks.length == 0`, informing hosts to free local properties, socket buffers, or mmap regions.
 
 ## XBlobSoftUnlink
-an XMessageFrame with message type `XBlobSoftUnlinkV0` and `data.l[1]` as the blob atom.  Removes the soft link.
+an XMessageFrame with message type `XBlobSoftUnlinkV0` and `data.l[1]` as the blob ID.  Removes the soft link.
 
 ## XBlobAnnounceHost
-an XMessageFrame with message type `XBlobAnnounceHostV0`, `data.l[1]` as the blob atom, `data.l[2]` as the `XBLOB_HOST` window ID, and optional `data.l[3]` as `typeAtom`. Registers the host window in `xbus-daemon`'s `hosts` list for that blob and updates `typeAtom`.
+an XMessageFrame with message type `XBlobAnnounceHostV0`, `data.l[1]` as the blob ID, `data.l[2]` as the `XBLOB_HOST` window ID, and optional `data.l[3]` as `typeAtom`. Registers the host window in `xbus-daemon`'s `hosts` list for that blob and updates `typeAtom`.
 
 ## XBlobDropHost
-an XMessageFrame with message type `XBlobDropHostV0`, `data.l[1]` as the blob atom, and `data.l[2]` as the `XBLOB_HOST` window ID. Removes the host window from `xbus-daemon`'s `hosts` list for that blob when a host evicts its local cache copy.
+an XMessageFrame with message type `XBlobDropHostV0`, `data.l[1]` as the blob ID, and `data.l[2]` as the `XBLOB_HOST` window ID. Removes the host window from `xbus-daemon`'s `hosts` list for that blob when a host evicts its local cache copy.
 
 ## XBlobStreamChunkAdvise
-an XMessageFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to every consumer.
+an XMessageFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob ID and `data.l[2]` as the chunk ID.  This is forwarded to every consumer.
 
 ## XBlobStreamChunkReceived
-an XMessageFrame with message type `XBlobStreamChunkReceivedV0` and `data.l[1]` as the main blob atom and `data.l[2]` as the chunk atom.  This is forwarded to the producer.
+an XMessageFrame with message type `XBlobStreamChunkReceivedV0` and `data.l[1]` as the main blob ID and `data.l[2]` as the chunk ID.  This is forwarded to the producer.
 
 ## XBlobHost registration
-an XBlobHost claims an atom for what numa node its on, as `XBLOB_HOST_${host}`, and progams use XGetSelection() to find their local XBlobHost.  Then `XBlobCreate` returns a bus global unique atom, but the XBLOB is actually on the window that owns the atom according to XGetSelection().  The XBlobHost opens a local socket and advertises its socket path in its `XBLOB_SOCKET_PATH` property on the `XBLOB_HOST` window.  `xbus-daemon` operates strictly as a Control Plane directory, holding `typeAtom`, `links: [...]`, `softLinks: [...]`, and `hosts: [...]` for each blob, without storing payload bytes.
+an XBlobHost claims an atom for what numa node its on, as `XBLOB_HOST_${host}`, and programs use XGetSelection() to find their local XBlobHost.  Then `XBlobCreate` returns a 32-bit bus global unique blob ID.  The XBlobHost opens a local socket and advertises its socket path in its `XBLOB_SOCKET_PATH` property on the `XBLOB_HOST` window.  `xbus-daemon` operates strictly as a Control Plane directory, holding `typeAtom`, `links: [...]`, `softLinks: [...]`, and `hosts: [...]` for each blob, without storing payload bytes.
 
 ## XBlobBroadcast
-an XMessageFrame on the local X bus with message type `XBlobBroadcastV0`, `data.l[1]` as the blob atom, `data.l[2]` as the host window ID, and `data.l[3]` as the version number. Automatically registers `data.l[2]` in `xbus-daemon`'s `hosts` list and forwards the broadcast to linkers and soft linkers. Across HTTP bridges, it can also be bridged as an `XJsonFrame` carrying `{hostName, version}`.
+an XMessageFrame on the local X bus with message type `XBlobBroadcastV0`, `data.l[1]` as the blob ID, `data.l[2]` as the host window ID, and `data.l[3]` as the version number. Automatically registers `data.l[2]` in `xbus-daemon`'s `hosts` list and forwards the broadcast to linkers and soft linkers. Across HTTP bridges, it can also be bridged as an `XJsonFrame` carrying `{hostName, version}`.
 
 # XAUDIO V0
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.  It registers itself in its MATCHBOX_TOML as

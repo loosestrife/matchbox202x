@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Test: Zero-Copy File Descriptor Passing & Live Append Paste
  * =========================================================
@@ -17,8 +17,12 @@ const TEST_FILE = '/tmp/test_zero_copy_append.txt';
 let busProc = null;
 let clipsProc = null;
 
+let lighterProc = null;
+
 function cleanup() {
   if (clipsProc) try { clipsProc.kill('SIGKILL'); } catch (_) {}
+  if (lighterProc) try { lighterProc.kill('SIGKILL'); } catch (_) {}
+  if (busProc) try { busProc.kill('SIGKILL'); } catch (_) {}
   if (fs.existsSync(TEST_FILE)) try { fs.unlinkSync(TEST_FILE); } catch (_) {}
 }
 
@@ -27,13 +31,22 @@ async function ensureServices(X, root) {
   if (!routerWin) {
     console.log('[test] xbus-daemon not detected. Auto-launching xbus-daemon...');
     const busScript = path.join(__dirname, '..', 'xbus-daemon', 'index.js');
-    busProc = spawn('node', [busScript], { stdio: 'ignore' });
+    busProc = spawn('bun', [busScript], { stdio: 'ignore' });
     await new Promise((r) => setTimeout(r, 1200));
   }
 
+  console.log('[test] Spawning cool-service-lighter supervisor...');
+  const lighterScript = path.join(__dirname, '..', 'cool-service-lighter', 'index.js');
+  lighterProc = spawn('bun', [lighterScript], {
+    cwd: path.join(__dirname, '..'),
+    env: { ...process.env, PORT: '12355', XINTENT_PORT: '12355' },
+    stdio: 'ignore'
+  });
+  await new Promise((r) => setTimeout(r, 1500));
+
   console.log('[test] Spawning cool-clips daemon...');
   const clipsScript = path.join(__dirname, '..', 'cool-clips.js');
-  clipsProc = spawn('node', [clipsScript], { stdio: 'ignore' });
+  clipsProc = spawn('bun', [clipsScript], { stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1200));
 }
 
@@ -73,7 +86,7 @@ async function runTest() {
 
   console.log('--- 2. Copying file via final-copy-pro.js ---');
   const finalCopyScript = path.join(__dirname, '..', 'final-copy-pro.js');
-  execSync(`node "${finalCopyScript}" "${TEST_FILE}"`, { stdio: 'inherit' });
+  execSync(`bun "${finalCopyScript}" "${TEST_FILE}"`, { stdio: 'inherit' });
 
   await new Promise((r) => setTimeout(r, 500));
 

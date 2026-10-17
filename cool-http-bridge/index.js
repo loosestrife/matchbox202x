@@ -36,6 +36,42 @@ const {
 
 const app = express();
 app.set("json spaces", 2);
+
+app.use(loggerMiddleware);
+
+// Log when an XBlob stream upload starts BEFORE express.raw buffers the body
+app.use(['/xblob', '/blobs'], (req, res, next) => {
+  if (
+    (req.method === 'PUT' || req.method === 'POST') &&
+    !req.path.includes('/XBlobRead') &&
+    !req.path.includes('/XBlobTransfer') &&
+    !req.path.includes('/XBlobGrant') &&
+    !req.path.includes('/XBlobUnlink') &&
+    !req.path.includes('/XBlobBroadcast') &&
+    !req.path.includes('/broadcast')
+  ) {
+    const forwardedBy = req.headers['x-forwarded-by'] || '';
+    const userAgent = req.headers['user-agent'] || '';
+    const isFlammenwerfer =
+      forwardedBy.toLowerCase().includes('flammenwerfer') ||
+      userAgent.toLowerCase().includes('flammenwerfer');
+
+    const disp = req.headers['content-disposition'] || '';
+    const fileNameMatch = disp.match(/filename="?([^";]+)"?/);
+    const fileName = fileNameMatch ? fileNameMatch[1] : (req.headers['x-blob-name'] || null);
+    const mimeType = req.headers['content-type'] || 'application/octet-stream';
+    const len = req.headers['content-length'];
+    const sizeStr = len ? `${parseInt(len, 10).toLocaleString()} bytes` : 'unknown size';
+
+    const source = isFlammenwerfer
+      ? 'Flammenwerfer'
+      : (forwardedBy || userAgent || req.ip || 'client');
+
+    logger.info(`Started receiving XBlob upload from ${source}${fileName ? `: "${fileName}"` : ''} (${mimeType}, ${sizeStr})`);
+  }
+  next();
+});
+
 app.use(['/xblob', '/blobs'], express.raw({ limit: '2gb', type: '*/*' }));
 app.use(express.json({ limit: '2gb', type: ['application/json', 'application/*+json'] }));
 app.use(express.text({ limit: '2gb', type: ['text/plain', 'text/html', 'text/xml', 'text/css'] }));
@@ -49,7 +85,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(loggerMiddleware);
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');

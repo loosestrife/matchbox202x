@@ -63,7 +63,7 @@ class SendIntentActivity : ComponentActivity() {
                             mimeType = type ?: "application/octet-stream",
                             onTargetSelected = { selectedTarget ->
                                 if (streamUri != null) {
-                                    handleUriShare(streamUri, type ?: "application/octet-stream", selectedTarget)
+                                    // handled inside picker screen
                                 } else if (!textContent.isNullOrBlank()) {
                                     handleTextShare(textContent, selectedTarget)
                                 }
@@ -90,6 +90,9 @@ class SendIntentActivity : ComponentActivity() {
         var isLoading by remember { mutableStateOf(true) }
         var statusMessage by remember { mutableStateOf<String?>(null) }
         var fileName by remember { mutableStateOf(streamUri?.lastPathSegment ?: "shared_attachment") }
+        var isUploading by remember { mutableStateOf(false) }
+        var uploadProgress by remember { mutableStateOf(0f) }
+        var uploadStatusText by remember { mutableStateOf("") }
 
         LaunchedEffect(streamUri) {
             if (streamUri != null) {
@@ -150,7 +153,27 @@ class SendIntentActivity : ComponentActivity() {
                     .padding(paddingValues)
                     .padding(16.dp)
             ) {
-                if (isLoading) {
+                if (isUploading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Card(modifier = Modifier.padding(24.dp).fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(progress = { uploadProgress })
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(uploadStatusText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                LinearProgressIndicator(
+                                    progress = { uploadProgress },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("${(uploadProgress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                } else if (isLoading) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator()
@@ -183,7 +206,18 @@ class SendIntentActivity : ComponentActivity() {
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onTargetSelected(target.appId) },
+                                    .clickable {
+                                        if (streamUri != null) {
+                                            isUploading = true
+                                            uploadStatusText = "Preparing upload..."
+                                            handleUriShare(streamUri, mimeType, target.appId) { prog, text ->
+                                                uploadProgress = prog
+                                                uploadStatusText = text
+                                            }
+                                        } else {
+                                            onTargetSelected(target.appId)
+                                        }
+                                    },
                                 colors = CardDefaults.cardColors(
                                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                                 )
@@ -250,16 +284,17 @@ class SendIntentActivity : ComponentActivity() {
         }
     }
 
-    private fun handleUriShare(uri: Uri, mimeType: String, targetApp: String) {
+    private fun handleUriShare(uri: Uri, mimeType: String, targetApp: String, onProgress: (Float, String) -> Unit = { _, _ -> }) {
         Toast.makeText(applicationContext, "Reading file and saving to desktop via $targetApp...", Toast.LENGTH_SHORT).show()
 
         lifecycleScope.launch {
-            val (name, bytes, actualType) = withContext(Dispatchers.IO) {
+            val (name, fileSize, actualType) = withContext(Dispatchers.IO) {
                 var fileName = "shared_file"
+                var fileSize = -1L
                 val resolvedType = contentResolver.getType(uri) ?: mimeType
 
                 try {
-                    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                         if (cursor.moveToFirst()) {
                             val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                             if (nameIdx != -1) {
@@ -268,38 +303,43 @@ class SendIntentActivity : ComponentActivity() {
                                     fileName = foundName
                                 }
                             }
+                            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (sizeIdx != -1) {
+                                fileSize = cursor.getLong(sizeIdx)
+                            }
                         }
                     }
                 } catch (_: Exception) {
                     uri.lastPathSegment?.let { if (it.isNotBlank()) fileName = it }
                 }
 
-                val fileBytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
-                Triple(fileName, fileBytes, resolvedType)
+                Triple(fileName, fileSize, resolvedType)
             }
 
-            if (bytes.isNotEmpty()) {
+            val inputStream = contentResolver.openInputStream(uri)
+            if (inputStream != null) {
                 val isText = actualType.startsWith("text/")
                 val dataType = if (isText) "text" else "base64"
-                val encodedData = if (isText) {
-                    String(bytes, Charsets.UTF_8)
-                } else {
-                    Base64.encodeToString(bytes, Base64.NO_WRAP)
-                }
 
                 val result = XIntentClient.sendSendToIntent(
                     context = applicationContext,
                     name = name,
                     type = actualType,
-                    size = bytes.size.toLong(),
+                    size = fileSize,
                     dataType = dataType,
-                    data = encodedData,
+                    data = "",
                     targetApp = targetApp,
-                    rawBytes = bytes,
+                    inputStream = inputStream,
+                    onProgress = { written, total ->
+                        val progress = if (total > 0) written.toFloat() / total.toFloat() else 0f
+                        val mbWritten = written / (1024 * 1024)
+                        val mbTotal = total / (1024 * 1024)
+                        onProgress(progress, "Uploading $name (${mbWritten}MB / ${mbTotal}MB)...")
+                    }
                 )
 
                 val msg = if (result.success) {
-                    "Saved $name (${bytes.size} bytes) to $targetApp!"
+                    "Saved $name to $targetApp!"
                 } else {
                     "Failed to save $name: ${result.errorMessage}"
                 }

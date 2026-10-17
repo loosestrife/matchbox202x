@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const xintent = require('../x11-promises/xintent');
 const { Logger } = require('../server-tools');
 
@@ -32,8 +35,16 @@ module.exports = ({ X, clientWin }) => {
           dataVal = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body);
         }
       } else if (Buffer.isBuffer(req.body)) {
-        dataType = 'binary';
-        dataVal = req.body;
+        const blobDir = '/tmp/xintent_blobs';
+        if (!fs.existsSync(blobDir)) fs.mkdirSync(blobDir, { recursive: true });
+        const fileName = req.headers['content-disposition']?.match(/filename="?([^";]+)"?/)?.[1] || `blob_${Date.now()}`;
+        const tempPath = path.join(blobDir, `${Date.now()}_${crypto.randomBytes(4).toString('hex')}_${path.basename(fileName)}`);
+        const fd = fs.openSync(tempPath, 'w+');
+        fs.writeSync(fd, req.body);
+        try { fs.unlinkSync(tempPath); } catch (_) {}
+
+        dataType = 'fd-rights';
+        dataVal = `/proc/${process.pid}/fd/${fd}`;
       } else {
         dataVal = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
       }
@@ -63,6 +74,10 @@ module.exports = ({ X, clientWin }) => {
     }
 
     const hexBlobId = toHexBlobId(blobId);
+    const fileNameStr = blobData.name ? ` "${blobData.name}"` : '';
+    const sizeStr = blobData.size ? `${blobData.size.toLocaleString()} bytes` : '0 bytes';
+    logger.info(`Finished receiving XBlob upload${fileNameStr} -> created blob ${hexBlobId} (${blobData.type || 'unknown type'}, ${sizeStr})`);
+
     res.setHeader('Matchbox-Bridge', '1.0');
     res.setHeader('Accept-Encoding', 'identity, base64, fd-rights');
     res.setHeader('X-Blob-Id', hexBlobId);

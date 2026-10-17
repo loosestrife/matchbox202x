@@ -6,8 +6,7 @@ const logger = new Logger({module: 'xblob'});
 const {X, rawX, x11, root, routerWin} = require('./index.js');
 
 const xblobRegistry = {};
-const xblobAtoms = [];
-const xblobAtomAssignments = [];
+let nextOpaqueBlobId = 0x100;
 
 const handleXBlobCreateV0 = {
   parse: ev => {
@@ -23,8 +22,8 @@ const handleXBlobCreateV0 = {
     };
   },
   accept: async parsed => {
-    const blobAtom = await xblobCreate(parsed.senderWin, null, parsed.typeAtom, parsed.initialHardLinker);
-    logger.info(`XBlobCreate created ${widString(blobAtom)} (typeAtom: ${widString(parsed.typeAtom || 0)}) from ${widString(parsed.senderWin)}${parsed.initialHardLinker ? ` (hardLinker: ${widString(parsed.initialHardLinker)})` : ''}`);
+    const blobId = await xblobCreate(parsed.senderWin, null, parsed.typeAtom, parsed.initialHardLinker);
+    logger.info(`XBlobCreate created ${widString(blobId)} (typeAtom: ${widString(parsed.typeAtom || 0)}) from ${widString(parsed.senderWin)}${parsed.initialHardLinker ? ` (hardLinker: ${widString(parsed.initialHardLinker)})` : ''}`);
 
     const responseEv = Buffer.alloc(32);
     responseEv.writeInt8(33, 0); // ClientMessage
@@ -32,7 +31,8 @@ const handleXBlobCreateV0 = {
     responseEv.writeUInt32LE((parsed.senderWin || 0) >>> 0, 4);
     responseEv.writeUInt32LE((atoms.XBLOB_CREATE_RESPONSE_V0 || 0) >>> 0, 8);
     responseEv.writeUInt32LE((routerWin || 0) >>> 0, 12);        // data.l[0] = senderWin (router)
-    responseEv.writeUInt32LE((blobAtom || 0) >>> 0, 16);         // data.l[1] = allocated blob atom
+    responseEv.writeUInt32LE((blobId || 0) >>> 0, 16);           // data.l[1] = allocated blob ID
+    responseEv.writeUInt32LE((parsed.cookie || 0) >>> 0, 20);    // data.l[2] = client cookie
     responseEv.writeUInt32LE((parsed.cookie || 0) >>> 0, 20);    // data.l[2] = client cookie
 
     await X.SendEvent(parsed.senderWin, false, x11.eventMask.NoEventMask, responseEv);
@@ -265,21 +265,10 @@ const xblobCreate = async (senderWin, hostWin = null, typeAtom = 0, initialHardL
     hosts: primaryHost ? [primaryHost] : [],
   };
 
-  let blobIdx = xblobAtomAssignments.findIndex(slot => !slot);
-  if (blobIdx === -1) {
-    blobIdx = xblobAtomAssignments.length;
-  }
-  let blobAtom = xblobAtoms[blobIdx];
-  if (!blobAtom) {
-    blobAtom = await X.InternAtom(false, `XBLOB_BLOB_SLOT_${blobIdx}`);
-    xblobAtoms[blobIdx] = blobAtom;
-  }
-  X.SetSelectionOwner(routerWin, blobAtom, 0);
+  const blobId = nextOpaqueBlobId++;
+  xblobRegistry[blobId] = blobTrackingData;
 
-  xblobAtomAssignments[blobIdx] = blobTrackingData;
-  xblobRegistry[blobAtom] = blobTrackingData;
-
-  return blobAtom;
+  return blobId;
 };
 
 const implicitXBlobGrant = (blobId, grantee) => {
@@ -324,11 +313,6 @@ const checkForDeletion = async (blobId, regEntry) => {
   if (regEntry.links.length === 0 && regEntry.softLinks.length === 0) {
     logger.info(`deleting unlinked blob ${widString(blobId)} from hosts`, regEntry.hosts);
     delete xblobRegistry[blobId];
-
-    const blobIdx = xblobAtoms.indexOf(blobId);
-    if (blobIdx !== -1) {
-      xblobAtomAssignments[blobIdx] = undefined;
-    }
   }
 };
 

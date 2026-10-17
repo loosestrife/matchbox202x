@@ -3,16 +3,16 @@ id = "cool-clips"
 name = "Cool Clips (Desktop Clipboard & Files)"
 
 [intents."fs.SendTo"]
-exec = "node cool-clips.js"
+exec = "bun cool-clips.js"
 
 [intents."fs.SaveAs"]
-exec = "node cool-clips.js"
+exec = "bun cool-clips.js"
 
 [intents."ui.Copy"]
-exec = "node cool-clips.js"
+exec = "bun cool-clips.js"
 
 [intents."ui.Paste"]
-exec = "node cool-clips.js"
+exec = "bun cool-clips.js"
 
 [intents."ui.TextProcess"]
-exec = "node cool-clips.js"
+exec = "bun cool-clips.js"

@@ -140,7 +140,7 @@ async function runE2EPipeline() {
   } catch (_) {}
 
   // Set mock audio player command for cool-service-lighter xaudio-node
-  process.env.AUDIO_PLAYER_CMD = 'node -e "setTimeout(() => process.exit(0), 100)"';
+  process.env.AUDIO_PLAYER_CMD = 'bun -e "setTimeout(() => process.exit(0), 100)"';
 
   // Global Safety Timeout Guard
   globalTimeoutTimer = setTimeout(async () => {
@@ -173,7 +173,7 @@ async function runE2EPipeline() {
   // Step 2: Spawn cool-service-lighter supervisor
   console.log('[Step 2] Spawning cool-service-lighter supervisor...');
   const lighterScript = path.join(__dirname, '..', 'cool-service-lighter', 'index.js');
-  lighterProc = spawn('node', [lighterScript], {
+  lighterProc = spawn('bun', [lighterScript], {
     cwd: path.join(__dirname, '..'),
     env: { ...process.env },
     stdio: 'ignore'
@@ -187,7 +187,7 @@ async function runE2EPipeline() {
   // Step 3.5: Spawn cool-clips clipboard daemon
   console.log('[Step 3.5] Spawning cool-clips clipboard daemon...');
   const clipsScript = path.join(__dirname, '..', 'cool-clips.js');
-  clipsProc = spawn('node', [clipsScript], {
+  clipsProc = spawn('bun', [clipsScript], {
     cwd: path.join(__dirname, '..'),
     env: { ...process.env },
     stdio: 'ignore'
@@ -196,7 +196,7 @@ async function runE2EPipeline() {
   // Step 3.6: Spawn mock-tts-server daemon
   console.log('[Step 3.6] Spawning mock-tts-server daemon...');
   const ttsScript = path.join(__dirname, 'mock-tts.js');
-  ttsProc = spawn('node', [ttsScript], {
+  ttsProc = spawn('bun', [ttsScript], {
     cwd: __dirname,
     env: { ...process.env },
     stdio: 'ignore'
@@ -206,7 +206,7 @@ async function runE2EPipeline() {
   // Step 4: Execute final-copy-pro.js (Copy Payload - Mode A)
   const testPayloadA = 'E2E Integration Payload Mode A - ' + Date.now();
   console.log(`[Step 4] Executing final-copy-pro.js --echo "${testPayloadA}"`);
-  execSync(`node "${path.join(__dirname, '..', 'final-copy-pro.js')}" --echo "${testPayloadA}"`, {
+  execSync(`bun "${path.join(__dirname, '..', 'final-copy-pro.js')}" --echo "${testPayloadA}"`, {
     env: { ...process.env },
     timeout: STEP_EXEC_TIMEOUT_MS,
     stdio: 'ignore'
@@ -229,7 +229,7 @@ async function runE2EPipeline() {
   // Step 6: Execute final-copy-pro.js (Copy Payload - Mode B)
   const testPayloadB = 'E2E Integration Payload Mode B - ' + Date.now();
   console.log(`\n[Step 6] Executing final-copy-pro.js --echo "${testPayloadB}"`);
-  execSync(`node "${path.join(__dirname, '..', 'final-copy-pro.js')}" --echo "${testPayloadB}"`, {
+  execSync(`bun "${path.join(__dirname, '..', 'final-copy-pro.js')}" --echo "${testPayloadB}"`, {
     env: { ...process.env },
     timeout: STEP_EXEC_TIMEOUT_MS,
     stdio: 'ignore'
