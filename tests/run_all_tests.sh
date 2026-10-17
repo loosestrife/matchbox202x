@@ -36,6 +36,14 @@ xvfb-run -a bash -c "
   echo ''
   echo '--- 6. Running E2E Integration Pipeline ---'
   bun /home/user/matchbox202x/tests/test-e2e-pipeline.js
+
+  echo ''
+  echo '--- 7. Running Mock Flammenwerfer Transcode Integration Test ---'
+  bun /home/user/matchbox202x/tests/test_transcode_mock_flammenwerfer.js
+
+  echo ''
+  echo '--- 8. Running Real Final-Copy-Pro Transcode Integration Test ---'
+  bun /home/user/matchbox202x/tests/test_transcode_real_final_copy_pro.js
 "
 
 echo ""

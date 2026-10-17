@@ -262,8 +262,13 @@ invocation = "X11"
           const clipDir = '/tmp/xintent_clipboard';
           if (!fs.existsSync(clipDir)) fs.mkdirSync(clipDir, { recursive: true });
           const fileName = content.name || payload.name || `shared_file_${Date.now()}`;
-          const filePath = path.join(clipDir, fileName);
-          fs.writeFileSync(filePath, rawBuf);
+          let filePath;
+          if ((content._dataType === 'fd-rights' || content.contentEncoding === 'fd-rights') && typeof content.data === 'string' && fs.existsSync(content.data)) {
+            filePath = content.data;
+          } else {
+            filePath = path.join(clipDir, fileName);
+            fs.writeFileSync(filePath, rawBuf);
+          }
 
           content.rawBuf = rawBuf;
           content.filePath = filePath;
@@ -425,8 +430,9 @@ invocation = "X11"
 
         if ([atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
           let textBuf = Buffer.alloc(0);
-          if ((currentClipboard._dataType === 'fd-rights' || currentClipboard.contentEncoding === 'fd-rights') && typeof currentClipboard.data === 'string' && fs.existsSync(currentClipboard.data)) {
-            textBuf = fs.readFileSync(currentClipboard.data);
+          const targetFilePath = currentClipboard.filePath || currentClipboard.data;
+          if ((currentClipboard._dataType === 'fd-rights' || currentClipboard.contentEncoding === 'fd-rights') && typeof targetFilePath === 'string' && fs.existsSync(targetFilePath)) {
+            textBuf = fs.readFileSync(targetFilePath);
           } else if (isText) {
             textBuf = Buffer.from(currentClipboard.data || '', 'utf8');
           } else if (currentClipboard.fileUri) {

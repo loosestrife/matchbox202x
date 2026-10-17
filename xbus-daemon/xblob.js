@@ -283,7 +283,12 @@ const xblobUnlink = async (blobId, unlinkWin) => {
     logger.warn(`xblobUnlink: no such blob ${widString(blobId)}`);
     return;
   }
-  const link = regEntry.links.indexOf(unlinkWin);
+  let link = regEntry.links.indexOf(unlinkWin);
+  if (link === -1 && unlinkWin) {
+    const cMask = ~resourceMask();
+    link = regEntry.links.findIndex(w => w && (w & cMask) === (unlinkWin & cMask));
+  }
+
   if (link === -1) {
     logger.warn(`Attempt to unlink blob ${widString(blobId)} from window ${widString(unlinkWin)} which isn't linked`, xblobRegistry);
   } else {

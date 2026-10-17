@@ -91,7 +91,8 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobRead = async (req, res) => {
     const targetBlob = Number(req.body?.blobId || req.body?.blob || req.params?.blobId);
     const hexBlobId = toHexBlobId(targetBlob);
-    logger.info(`GET/POST /xblob/XBlobRead blob=${targetBlob}`);
+    const userAgent = req.headers['user-agent'] || 'unknown';
+    logger.info(`GET/POST /xblob/XBlobRead blob=${targetBlob} from User-Agent "${userAgent}"`);
     try {
       const blobData = await xintent.XBlobRead(X, routerWin(), targetBlob);
       res.setHeader('Matchbox-Bridge', '1.0');
@@ -104,8 +105,31 @@ module.exports = ({ X, clientWin }) => {
       if (isRawHttpRequested && !req.body?.json) {
         const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'application/octet-stream');
         const dataType = blobData._dataType || (mimeType.includes('application/json') ? 'json' : 'binary');
+        const isStream = blobData.xblobType === 'ReadableStream' || blobData.xblobType === 'MediaStream' || req.headers['x-xblob-type'] === 'ReadableStream';
 
         let bodyPayload = blobData.data !== undefined ? blobData.data : blobData;
+
+        // Check if payload is an open file descriptor or file path (e.g. /proc/self/fd/N or disk path)
+        const fdPath = typeof bodyPayload === 'string' ? bodyPayload.trim() : null;
+        if (fdPath && (fdPath.startsWith('/proc/') || fdPath.startsWith('/dev/') || fs.existsSync(fdPath))) {
+          const headers = {
+            'Content-Type': mimeType,
+            'X-XBlob-Type': blobData.xblobType || 'ReadableStream',
+            'X-Blob-Id': hexBlobId,
+            'Accept-Encoding': 'identity, base64, fd-rights',
+            'Matchbox-Bridge': '1.0'
+          };
+          if (blobData.name) {
+            headers['Content-Disposition'] = `inline; filename="${blobData.name}"`;
+          }
+          if (!isStream && blobData.size !== undefined) {
+            headers['Content-Length'] = blobData.size;
+          }
+          res.writeHead(200, headers);
+          const fileStream = fs.createReadStream(fdPath);
+          return fileStream.pipe(res);
+        }
+
         let bodyBuf;
         if (Buffer.isBuffer(bodyPayload)) {
           bodyBuf = bodyPayload;
@@ -116,7 +140,9 @@ module.exports = ({ X, clientWin }) => {
         }
 
         res.setHeader('Content-Type', mimeType);
-        res.setHeader('Content-Length', blobData.size !== undefined ? blobData.size : bodyBuf.length);
+        if (!isStream) {
+          res.setHeader('Content-Length', blobData.size !== undefined ? blobData.size : bodyBuf.length);
+        }
         const contentEnc = blobData.contentEncoding || (dataType === 'fd-rights' ? 'fd-rights' : (dataType === 'base64' ? 'base64' : null));
         if (contentEnc && contentEnc !== 'identity') {
           res.setHeader('Content-Encoding', contentEnc);

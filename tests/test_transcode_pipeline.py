@@ -55,6 +55,26 @@ async def run_simulation():
         file_size_orig = os.path.getsize(avi_path)
         logger.info(f"Generated test XviD AVI media file: '{avi_path}' ({file_size_orig} bytes)")
 
+        logger.info("\n=== STEP 1b: Simulating final-copy-pro File Payload ===")
+        # Construct exact xblobPayload emitted by final-copy-pro.js for files
+        fcp_payload = {
+            "xblobType": "File",
+            "name": os.path.basename(avi_path),
+            "type": "video/x-msvideo",
+            "size": file_size_orig,
+            "url": f"file://{avi_path}",
+            "_dataType": "fd-rights",
+            "contentEncoding": "fd-rights",
+            "data": avi_path,
+        }
+
+        from xintent_bridge import ensure_readable_fd
+        fcp_fd, fcp_mime, fcp_name = ensure_readable_fd(fcp_payload)
+        logger.info(f"Resolved final-copy-pro payload -> readable fd {fcp_fd} ('{fcp_name}', {fcp_mime})")
+        assert fcp_fd >= 0, "Expected valid file descriptor from final-copy-pro payload"
+        assert fcp_mime == "video/x-msvideo", f"Expected MIME video/x-msvideo, got {fcp_mime}"
+        os.close(fcp_fd)
+
         # Open file descriptor for input media
         input_fd = os.open(avi_path, os.O_RDONLY)
 
@@ -99,10 +119,14 @@ async def run_simulation():
 
         # Host the transcoded output on DLNA Media Manager HTTP server
         # (simulating dlna-bridge receiving the transcoded fd and hosting it for the TV)
-        # Fetch initial stream from transcoder HTTP or pipe
-        req = urllib.request.Request(stream_url)
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            transcoded_bytes = resp.read()
+        # Fetch initial stream from transcoder HTTP server using run_in_executor
+        loop = asyncio.get_event_loop()
+        def fetch_stream():
+            req = urllib.request.Request(stream_url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.read()
+
+        transcoded_bytes = await loop.run_in_executor(None, fetch_stream)
 
         logger.info(f"Downloaded transcoded live stream: {len(transcoded_bytes)} bytes")
         assert len(transcoded_bytes) > 5000, "Expected transcoded stream to contain video bytes (>5KB)"

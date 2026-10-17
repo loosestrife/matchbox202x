@@ -15,8 +15,11 @@ import os
 import re
 import shutil
 import socket
+import stat
 import struct
 import subprocess
+import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -569,12 +572,51 @@ class DLNAMediaManager:
     def host_readable_fd(self, fd: int, mime_type: str, file_name: str) -> str:
         """
         Registers an open readable file descriptor (int fd) for HTTP streaming.
+        If fd is a non-seekable pipe/FIFO, pools incoming stream bytes into an
+        anonymous seekable temporary file so DLNA renderers can seek and rewind.
         Returns the hosted HTTP URL.
         """
+        target_fd = fd
+        is_pipe = False
+        try:
+            st_mode = os.fstat(fd).st_mode
+            if stat.S_ISFIFO(st_mode) or stat.S_ISSOCK(st_mode):
+                is_pipe = True
+        except Exception:
+            pass
+
+        if is_pipe:
+            try:
+                tmp_file = tempfile.NamedTemporaryFile(delete=True)
+                pool_fd = os.dup(tmp_file.fileno())
+                tmp_file.close()
+
+                def pool_pipe_worker(src_fd: int, dst_fd: int):
+                    try:
+                        while True:
+                            chunk = os.read(src_fd, 65536)
+                            if not chunk:
+                                break
+                            os.write(dst_fd, chunk)
+                    except Exception as ex:
+                        logger.debug(f"Pipe pooling finished or ended for fd {src_fd}: {ex}")
+                    finally:
+                        try:
+                            os.close(src_fd)
+                        except Exception:
+                            pass
+
+                t = threading.Thread(target=pool_pipe_worker, args=(fd, pool_fd), daemon=True)
+                t.start()
+                target_fd = pool_fd
+                logger.info(f"Started background thread pooling pipe fd {fd} -> seekable anonymous fd {pool_fd} for '{file_name}'")
+            except Exception as e:
+                logger.error(f"Failed to pool pipe fd {fd} to anonymous file: {e}")
+
         file_id = f"file_{uuid.uuid4().hex[:8]}"
-        self.hosted_files[file_id] = (fd, mime_type, file_name)
+        self.hosted_files[file_id] = (target_fd, mime_type, file_name)
         hosted_url = f"http://{self.local_ip}:{self.http_port}/files/{file_id}"
-        logger.info(f"Hosted readable fd {fd} ('{file_name}', {mime_type}) at {hosted_url}")
+        logger.info(f"Hosted readable fd {target_fd} ('{file_name}', {mime_type}) at {hosted_url}")
         return hosted_url
 
     async def play_media(self, app_id: str, fd_or_url, mime_type: str, name: str, tx_id: int = 0, x11_client=None, data_blob_id: Optional[int] = None):
@@ -768,7 +810,54 @@ class DLNAMediaManager:
                     try:
                         clean_mime = mime_type.split(";")[0].strip().lower()
 
-                        # For growing live transcoded streams, wait briefly until initial MP4 header is ready
+                        import stat
+                        is_pipe = False
+                        try:
+                            st_mode = os.fstat(val).st_mode
+                            if stat.S_ISFIFO(st_mode) or stat.S_ISSOCK(st_mode):
+                                is_pipe = True
+                        except Exception:
+                            pass
+
+                        if is_pipe:
+                            dlna_features = "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+                            if clean_mime == "video/mp4":
+                                dlna_features = "DLNA.ORG_PN=AVC_MP4_MP_SD_AAC;" + dlna_features
+
+                            res_headers = [
+                                "HTTP/1.1 200 OK",
+                                f"Content-Type: {clean_mime}",
+                                "Accept-Ranges: none",
+                                f"contentFeatures.dlna.org: {dlna_features}",
+                                "transferMode.dlna.org: Streaming",
+                                f'Content-Disposition: inline; filename="{filename}"',
+                                "Connection: close",
+                                "\r\n"
+                            ]
+                            writer.write("\r\n".join(res_headers).encode("utf-8"))
+                            await writer.drain()
+
+                            if method.upper() == "HEAD":
+                                writer.close()
+                                return
+
+                            bytes_sent = 0
+                            while True:
+                                try:
+                                    chunk = os.read(val, 65536)
+                                    if not chunk:
+                                        break
+                                    writer.write(chunk)
+                                    await writer.drain()
+                                    bytes_sent += len(chunk)
+                                except Exception:
+                                    break
+
+                            logger.info(f"Streamed '{filename}' from pipe fd {val} -> sent: {bytes_sent} bytes")
+                            writer.close()
+                            return
+
+                        # For growing live transcoded seekable files, wait briefly until initial MP4 header is ready
                         for _ in range(30):
                             if os.fstat(val).st_size >= 1024:
                                 break

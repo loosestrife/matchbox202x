@@ -68,7 +68,15 @@ def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
     Converts any incoming XBlob payload into an open, readable file descriptor (int fd),
     mime_type, and file_name.
     """
-    if not isinstance(raw_blob, dict):
+    if isinstance(raw_blob, dict):
+        if "blob" in raw_blob and isinstance(raw_blob["blob"], dict):
+            raw_blob = raw_blob["blob"]
+        elif "data" in raw_blob and isinstance(raw_blob["data"], dict):
+            if "blob" in raw_blob["data"] and isinstance(raw_blob["data"]["blob"], dict):
+                raw_blob = raw_blob["data"]["blob"]
+            elif "_dataType" in raw_blob["data"] or "data" in raw_blob["data"]:
+                raw_blob = raw_blob["data"]
+    else:
         raw_blob = {"data": raw_blob}
 
     mime_type = raw_blob.get("type") or raw_blob.get("mimeType") or "application/octet-stream"
@@ -88,7 +96,7 @@ def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
 
         if clean_path and os.path.exists(clean_path):
             try:
-                fd = os.open(clean_path, os.O_RDWR | os.O_CLOEXEC)
+                fd = os.open(clean_path, os.O_RDONLY | os.O_CLOEXEC)
                 return (fd, mime_type, file_name)
             except Exception as e:
                 logger.warning(f"os.open failed for '{clean_path}': {e}")
@@ -331,10 +339,8 @@ class CoolTranscoderServer:
         else:
             session = self.create_session(input_url, accept_spec, title)
 
-            import tempfile
-            tmp_file = tempfile.NamedTemporaryFile(delete=True)
-            tmp_fd = os.dup(tmp_file.fileno())
-            tmp_file.close()
+            # Create live stream pipe for FFmpeg output
+            pipe_read, pipe_write = os.pipe()
 
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -344,37 +350,39 @@ class CoolTranscoderServer:
                 "-i", input_url,
             ] + session.ffmpeg_flags + ["pipe:1"]
 
-            pass_fds = []
+            pass_fds = [pipe_write]
             if input_fd is not None:
                 pass_fds.append(input_fd)
 
-            logger.info(f"Spawning FFmpeg live transcode pipeline into seekable anonymous fd {tmp_fd}: {' '.join(ffmpeg_cmd)}")
+            logger.info(f"Spawning FFmpeg live transcode pipeline into pipe write fd {pipe_write}: {' '.join(ffmpeg_cmd)}")
             proc = subprocess.Popen(
                 ffmpeg_cmd,
-                stdout=tmp_fd,
+                stdout=pipe_write,
                 stderr=subprocess.DEVNULL,
                 pass_fds=pass_fds
             )
+            # Close write side in parent process so reader encounters EOF when FFmpeg completes
+            os.close(pipe_write)
 
-            # Wait briefly for FFmpeg to write initial MP4 header & keyframe data (>= 4096 bytes)
-            for _ in range(30):
-                await asyncio.sleep(0.05)
-                try:
-                    if os.fstat(tmp_fd).st_size >= 4096:
-                        break
-                except Exception:
-                    pass
+            # Wait 300ms for FFmpeg to encode and write initial MP4 header & keyframe data into live stream pipe
+            await asyncio.sleep(0.3)
 
-            logger.info(f"FFmpeg live transcode initial buffer ready for fd {tmp_fd} (size: {os.fstat(tmp_fd).st_size} bytes)")
-
-            # Create response XBlob for seekable tmp_fd (Content-Encoding: fd-rights)
+            # Create ReadableStream XBlob for pipe_read (XBlobHost turns pipe into storage-backed fd per polyfills.md)
             resp_data_blob = 0
             if self.xintent_client and hasattr(self.xintent_client, "blob_create"):
                 try:
-                    resp_data_blob = self.xintent_client.blob_create(tmp_fd)
-                    logger.info(f"Created response dataBlob {hex(resp_data_blob)} (fd-rights) for seekable anonymous fd {tmp_fd}")
+                    blob_spec = {
+                        "xblobType": "ReadableStream",
+                        "type": session.mime_type,
+                        "name": title,
+                        "data": f"/proc/{os.getpid()}/fd/{pipe_read}",
+                        "_dataType": "fd-rights",
+                        "contentEncoding": "fd-rights"
+                    }
+                    resp_data_blob = self.xintent_client.blob_create(blob_spec)
+                    logger.info(f"Created ReadableStream response dataBlob {hex(resp_data_blob)} for live stream pipe fd {pipe_read} ('/proc/{os.getpid()}/fd/{pipe_read}')")
                 except Exception as e:
-                    logger.error(f"Error creating response blob for seekable anonymous fd {tmp_fd}: {e}")
+                    logger.error(f"Error creating response blob for live stream pipe fd {pipe_read}: {e}")
 
             stream_url = f"http://{self.local_ip}:{self.http_port}/stream/{session.session_id}"
 

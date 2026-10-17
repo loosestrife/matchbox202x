@@ -47,6 +47,26 @@
       border-radius: 4px;
       font-family: inherit;
     }
+    .form-group-row {
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .form-group-row label {
+      font-weight: normal;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    input[type="checkbox"] {
+      cursor: pointer;
+      accent-color: var(--accent);
+      width: 16px;
+      height: 16px;
+    }
     textarea {
       min-height: 100px;
       resize: vertical;
@@ -95,6 +115,12 @@
     <textarea id="payload-input"></textarea>
   </div>
 
+  <div class="form-group-row">
+    <label for="open-channel-checkbox">
+      <input type="checkbox" id="open-channel-checkbox"> Open a channel
+    </label>
+  </div>
+
   <button id="fire-btn">Fire Intent</button>
 
   <label style="margin-top: 1.5rem; display: block;" for="stream-output">Response Stream</label>
@@ -108,6 +134,7 @@
   const intentSelect = document.getElementById('intent-select');
   const appSelect = document.getElementById('app-select');
   const payloadInput = document.getElementById('payload-input');
+  const openChannelCheckbox = document.getElementById('open-channel-checkbox');
   const fireBtn = document.getElementById('fire-btn');
   const outputDiv = document.getElementById('stream-output');
 
@@ -115,11 +142,25 @@
   function updatePayloadPrefill() {
     const selectedIntent = intentSelect.value || '';
     const selectedApp = appSelect.value || '';
-    
-    payloadInput.value = JSON.stringify({
-      intent: selectedIntent,
-      app: selectedApp
-    }, null, 2);
+    const openChannel = openChannelCheckbox.checked;
+
+    let currentPayload = {};
+    try {
+      currentPayload = JSON.parse(payloadInput.value);
+    } catch (e) {
+      currentPayload = {};
+    }
+
+    currentPayload.intent = selectedIntent;
+    currentPayload.app = selectedApp;
+
+    if (openChannel) {
+      currentPayload.controlWord = 1;
+    } else {
+      delete currentPayload.controlWord;
+    }
+
+    payloadInput.value = JSON.stringify(currentPayload, null, 2);
   }
 
   // Populate App options based on currently selected intent
@@ -200,6 +241,7 @@
 
   intentSelect.addEventListener('change', updateAppOptions);
   appSelect.addEventListener('change', updatePayloadPrefill);
+  openChannelCheckbox.addEventListener('change', updatePayloadPrefill);
 
   // Dispatch intent via window.xintent and stream response body to UI
   fireBtn.addEventListener('click', async () => {
@@ -212,6 +254,12 @@
     } catch (e) {
       outputDiv.textContent = `JSON Parse Error: ${e.message}`;
       return;
+    }
+
+    if (openChannelCheckbox.checked && payload.controlWord === undefined) {
+      payload.controlWord = 1;
+    } else if (!openChannelCheckbox.checked && payload.controlWord === 1 && Object.keys(payload).length <= 3) {
+      delete payload.controlWord;
     }
 
     outputDiv.textContent = `[Request Sent] Dispatching ${intent} to ${app}...\n`;

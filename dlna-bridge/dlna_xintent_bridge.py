@@ -81,18 +81,31 @@ class DLNAXIntentBridgeDaemon:
         if self.x11_mgr.enabled:
             self.x11_mgr.attach_device_x11_window(dev, self.on_x11_device_intent)
 
+    def _log_coro_exception(self, fut, name: str):
+        try:
+            exc = fut.exception()
+            if exc:
+                logger.error(f"Unhandled exception in coroutine '{name}': {exc}", exc_info=exc)
+        except Exception as e:
+            logger.error(f"Error checking coroutine exception for '{name}': {e}", exc_info=True)
+
     def on_x11_device_intent(self, app_id: str, payload: dict):
         loop = asyncio.get_event_loop()
         intent = payload.get("intent") or "fs.SendTo"
+        logger.info(f"on_x11_device_intent received for app '{app_id}': intent='{intent}', payload_keys={list(payload.keys())}")
         if intent == "fs.SendTo":
-            asyncio.run_coroutine_threadsafe(self.handle_send_to_intent(app_id, payload), loop)
+            fut = asyncio.run_coroutine_threadsafe(self.handle_send_to_intent(app_id, payload), loop)
+            fut.add_done_callback(lambda f: self._log_coro_exception(f, "handle_send_to_intent"))
         elif intent == "media.Play":
-            asyncio.run_coroutine_threadsafe(self.handle_play_intent(app_id, payload), loop)
+            fut = asyncio.run_coroutine_threadsafe(self.handle_play_intent(app_id, payload), loop)
+            fut.add_done_callback(lambda f: self._log_coro_exception(f, "handle_play_intent"))
 
     async def handle_send_to_intent(self, app_id: str, payload: dict):
         dev = self.media_mgr.devices.get(app_id)
+        data_blob_id = payload.get("dataBlob") or payload.get("data_blob")
+        logger.info(f"handle_send_to_intent START for app_id '{app_id}' (device: '{dev.friendly_name if dev else 'NOT FOUND'}', dataBlob: {hex(data_blob_id) if data_blob_id else 'None'})")
         if not dev:
-            logger.error(f"Device for app {app_id} not found")
+            logger.error(f"Device for app '{app_id}' NOT FOUND in media_mgr.devices! Registered devices: {list(self.media_mgr.devices.keys())}")
             return
 
         tx_id = payload.get("txId") or payload.get("id") or 0
@@ -144,22 +157,27 @@ class DLNAXIntentBridgeDaemon:
             logger.error(f"Received fs.SendTo for {dev.friendly_name} with no usable payload data")
             return
 
-        # Ensure readable file descriptor is obtained regardless of Content-Encoding
-        fd, mime_type, file_name = ensure_readable_fd(raw_blob)
-        if name and name != "media_payload":
-            file_name = name
-
-        logger.info(f"Received fs.SendTo for '{dev.friendly_name}' -> readable fd {fd} ('{file_name}', {mime_type})")
-        was_transcoded = False
         try:
-            was_transcoded = await self.media_mgr.play_media(app_id, fd, mime_type, file_name, tx_id=tx_id, x11_client=dev.xintent_client, data_blob_id=data_blob_id)
-        finally:
-            if not was_transcoded and data_blob_id and dev.xintent_client and hasattr(dev.xintent_client, "blob_unlink"):
-                try:
-                    dev.xintent_client.blob_unlink(data_blob_id, win_id=dev.xintent_win_id)
-                    logger.info(f"Unlinked incoming XBlob {hex(data_blob_id)} after intent handling completed")
-                except Exception as ex_u:
-                    logger.debug(f"XBlobUnlink error for blob {hex(data_blob_id)}: {ex_u}")
+            # Ensure readable file descriptor is obtained regardless of Content-Encoding
+            logger.info(f"handle_send_to_intent: Resolving raw_blob via ensure_readable_fd()...")
+            fd, mime_type, file_name = ensure_readable_fd(raw_blob)
+            if name and name != "media_payload":
+                file_name = name
+
+            logger.info(f"handle_send_to_intent: Resolved readable fd {fd} ('{file_name}', {mime_type}) for '{dev.friendly_name}'. Calling play_media()...")
+            was_transcoded = False
+            try:
+                was_transcoded = await self.media_mgr.play_media(app_id, fd, mime_type, file_name, tx_id=tx_id, x11_client=dev.xintent_client, data_blob_id=data_blob_id)
+                logger.info(f"handle_send_to_intent: play_media completed for '{dev.friendly_name}' (was_transcoded: {was_transcoded})")
+            finally:
+                if not was_transcoded and data_blob_id and dev.xintent_client and hasattr(dev.xintent_client, "blob_unlink"):
+                    try:
+                        dev.xintent_client.blob_unlink(data_blob_id, win_id=dev.xintent_win_id)
+                        logger.info(f"Unlinked incoming XBlob {hex(data_blob_id)} after intent handling completed")
+                    except Exception as ex_u:
+                        logger.debug(f"XBlobUnlink error for blob {hex(data_blob_id)}: {ex_u}")
+        except Exception as ex_st:
+            logger.error(f"Unhandled error in handle_send_to_intent for '{dev.friendly_name}': {ex_st}", exc_info=True)
 
     async def handle_play_intent(self, app_id: str, payload: dict):
         dev = self.media_mgr.devices.get(app_id)

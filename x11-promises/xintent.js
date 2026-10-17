@@ -822,14 +822,23 @@ const sendXAudioPlayResponseV0 = (X, routerWin, opts) =>
 const sendXAudioControlV0 = (X, routerWin, opts) =>
   sendXChannelJsonFrame(atoms.XAUDIO_CONTROL_V0, X, routerWin, opts);
 
-function httpGetBlobOverSocket(sockPath, hexBlobId) {
+function buildXBlobUserAgent(win = 0, appId = 'xintent') {
+  const host = os.hostname();
+  const display = process.env.DISPLAY || '';
+  const winHex = typeof win === 'number' ? `0x${win.toString(16)}` : String(win || '0x0');
+  return `${host}:${display}/${winHex} (app=${appId})`;
+}
+
+function httpGetBlobOverSocket(sockPath, hexBlobId, userAgent) {
+  const ua = userAgent || buildXBlobUserAgent(0, 'xintent');
   return new Promise((resolve, reject) => {
     const req = http.request({
       socketPath: sockPath,
       path: `/blobs/${hexBlobId}`,
       method: 'GET',
       headers: {
-        'Accept': '*/*',
+        'User-Agent': ua,
+        'Accept': 'application/json, */*',
         'Accept-Encoding': 'identity, base64, fd-rights'
       }
     }, (res) => {
@@ -838,6 +847,12 @@ function httpGetBlobOverSocket(sockPath, hexBlobId) {
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           const bodyBuf = Buffer.concat(chunks);
+          if (res.headers['content-type']?.includes('application/json')) {
+            try {
+              const resJson = JSON.parse(bodyBuf.toString('utf8'));
+              return resolve(resJson.blob || resJson);
+            } catch (_) {}
+          }
           const headers = [];
           if (res.headers['content-type']) headers.push(`Content-Type: ${res.headers['content-type']}`);
           if (res.headers['content-length']) headers.push(`Content-Length: ${res.headers['content-length']}`);
@@ -868,7 +883,8 @@ function httpGetBlobOverSocket(sockPath, hexBlobId) {
   });
 }
 
-function httpGetBlobOverHttp(port, hexBlobId) {
+function httpGetBlobOverHttp(port, hexBlobId, userAgent) {
+  const ua = userAgent || buildXBlobUserAgent(0, 'xintent');
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: 'localhost',
@@ -876,7 +892,8 @@ function httpGetBlobOverHttp(port, hexBlobId) {
       path: `/blobs/${hexBlobId}`,
       method: 'GET',
       headers: {
-        'Accept': '*/*',
+        'User-Agent': ua,
+        'Accept': 'application/json, */*',
         'Accept-Encoding': 'identity, base64, fd-rights'
       }
     }, (res) => {
@@ -885,6 +902,12 @@ function httpGetBlobOverHttp(port, hexBlobId) {
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           const bodyBuf = Buffer.concat(chunks);
+          if (res.headers['content-type']?.includes('application/json')) {
+            try {
+              const resJson = JSON.parse(bodyBuf.toString('utf8'));
+              return resolve(resJson.blob || resJson);
+            } catch (_) {}
+          }
           const headers = [];
           if (res.headers['content-type']) headers.push(`Content-Type: ${res.headers['content-type']}`);
           if (res.headers['content-length']) headers.push(`Content-Length: ${res.headers['content-length']}`);
@@ -915,8 +938,9 @@ function httpGetBlobOverHttp(port, hexBlobId) {
   });
 }
 
-async function XBlobRead(X, routerWin, blobId, host, version) {
+async function XBlobRead(X, routerWin, blobId, host, version, clientWin = 0, appId = 'xintent') {
   const hexBlobId = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
+  const userAgent = buildXBlobUserAgent(clientWin, appId);
 
   let hostWin = routerWin;
   if (typeof host === 'number' && host > 0) {
@@ -935,7 +959,7 @@ async function XBlobRead(X, routerWin, blobId, host, version) {
     const sockPath = (await getXBlobSocketPath(X, hostWin)) || process.env.XBLOB_SOCKET_PATH;
     if (sockPath && fs.existsSync(sockPath)) {
       try {
-        const blobData = await httpGetBlobOverSocket(sockPath, hexBlobId);
+        const blobData = await httpGetBlobOverSocket(sockPath, hexBlobId, userAgent);
         if (blobData) return blobData;
       } catch (sockErr) {
         logger.warn(`XBlobRead socket GET /blobs/${hexBlobId} failed: ${sockErr.message}`);
@@ -946,7 +970,7 @@ async function XBlobRead(X, routerWin, blobId, host, version) {
   // 2. Try HTTP port GET
   const httpPort = parseInt(process.env.XINTENT_PORT || process.env.PORT || '12345', 10);
   try {
-    const blobData = await httpGetBlobOverHttp(httpPort, hexBlobId);
+    const blobData = await httpGetBlobOverHttp(httpPort, hexBlobId, userAgent);
     if (blobData) return blobData;
   } catch (httpErr) {
     logger.warn(`XBlobRead HTTP GET /blobs/${hexBlobId} failed: ${httpErr.message}`);

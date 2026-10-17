@@ -75,12 +75,9 @@ XSetProperty(dpy, blobHost, payload, atoms('STRING'), jsonPayload);
 XClientMessage(...{win, payload})
 ```
 note that
-* any other protocol to get a blob atom will have as many round trips
+* any other protocol to get a blob id will have as many round trips
 * XCreateWindow is not a round trip, so theres no point in not creating a window to have an ipc port
 * the cooperative security model in XSECURE V0 is going to look at the `_NET_WM_PID` on the window to decide security policy
-
-### XBlob V0 and `xprop`
-`xprop` tries to dump property data into the terminal and that cant be done on the XBlobHost windows because theyre full of huge binary data.
 
 # `XINTENT_INTENT_V0` and `XINTENT_EVENT_V0`
 These are XChannelJsonFrame's with {intent: fs.PickFile} and {event: fs.PickFileResponse}
@@ -88,7 +85,27 @@ These are XChannelJsonFrame's with {intent: fs.PickFile} and {event: fs.PickFile
 * When sending an intent, a client may send `Prefer: return=minimal` to tell bridges they dont have to pull any data blob's data to the sender's bus and just need to return the blob id to the sender.  The sender can then send that data blob id somewhere else, facilitating minimal network hops for bulk data (e.g. cool-ebooks sending tts intents here and audio data there).
 
 # XBLOB V0
-The goal of XBlob is to be anonymous pixmaps for arbitrary data, to be ceph/hadoop for your personal distributed computing environment.  An XBlob is identified by a 32 bit bus local blob id and has a type atom like X properties do.
+The goal of XBlob is to be anonymous pixmaps for arbitrary data, to be ceph/hadoop for your personal distributed computing environment.  An XBlob is identified by a 32 bit bus local id.
+
+## XBlob Types
+An XBlob is a server record like a window, it has a list of properties.  The important ones are
+
+|  Atom      |  Type   |  Description
+---
+| XBlobType | XA_ATOM |  Blob, File, ReadableStream, MediaStream, Directory
+| type      | STRING  |  video/x-msvideo (codecs=mpeg4,xvid,mp3)
+| name      | STRING  |  a Blob with a name is a File
+| size      | CARD64  |  a ReadableStream gets a size when it becomes a Blob
+---
+| links     | list    |  X clients with a link
+| soft links| list    |  A soft link recieves XBlobDestructor once all the hard links are unlinked
+| hosts     | list    |  A list of hosts the blob is available on
+
+* A ReadableStream starts with a pool and continues with a stream until its closed and becomes a Blob.  Concretely, its a a fd that one holder has open for appending appending.
+* A MediaStream is a pipe, no pool at the beginning.
+* The blob host is responsible for giving the reader who does a GET on a ReadableStream and asks for a fd an fd.  This makes the blob host responsible for turning a pipe it's given as a ReadableStream into a storage-backed fd.  The blob host does an inotify to find out when the producer finishes and closes the stream for writing, at which point the blob host promotes the ReadableStream to a Blob, giving it a size property, and sends XBlobStreamClosed to every process with a link.  For a MediaStram, if the blob host gets a fd instead of a pipe, it will nevertheless only transmit new data through a pipe to other processes.  Even though processes can tell when a pipe closes, the XBlobHost will send a courtesy XBlobStreamClosed.
+* All blobs and streams are of course transmissible via http
+* If there are two blob hosts on different computers in the same X session connected by an `ssh -X`, they have to route their data though the X bus master blob host.  The X bus master blob host must modify the ssh connection to include a port forward, then do an http connection to the remote blob host, after which they can transmit blobs, after which the blob host on user-server can request a blob from the blob host on user-laptop which can request it from the blob host on user-desktop, because theres no direct tunnel from user-server to user-desktop.
 
 ```http
 GET /blobs/0x67 XBlob/0.1
@@ -140,18 +157,8 @@ this is likely parsed by client libraries to
 ```js
 {xblobType, type, size, name, data, _dataType}
 ```
-* _dataType is one of text, json, base64
-* xblobType is one of File, Blob, ReadableStream, Directory, MediaStream
-* if type is multipart/mixed, and _dataType is json, the representation would be as an array of xblobs
-* if xblobType is a MediaStream, _dataType is json and data is a pseudo-rtmp packet
-```js
-{type, timestamp, streamId, seqNum, blob: {type, data}}
-```
-since it is a pseudo-rtmp packet, there is no reason for the data field to not be base64 encoded binary data.
+* _dataType is probably one of text, json, base64, identity, fd0-rights
 
-When the xblobType is a *Stream, more than one chunk can be active at a time.  therefore, the blob stream name should be extended to `XBLOB_BLOB_${blobName}_CHUNK_${ChunNum}` for hopefully a small number of ChunkNum's.  the ChunkNum's must not be overwritten until every consumer replies with a `XBlobStreamChunkReceived`, but should be reused as soon as possible.
-
-XBlob requests are always bus local since XBlob id's are bus local.  When an XBlob is linked across a bridge, both sides of the bridge need XBlob id's for it, the bridge would hold links on both sides and the nat table, and if the bridge dies, the links are automatically unlinked at the same time as the dead bridge loses the nat table.  The XBlobBroadcast is also bus local, but it is propagated across bridges accordingly as there are links.
 
 ## XBlobCreate
 an XMessageFrame with message type `XBlobCreateV0`, `data.l[1]` as the client's cookie, `data.l[2]` as the optional `typeAtom` (e.g. `atoms["audio/wav"]`, `atoms["application/json"]`), and optional `data.l[3]` as `initialHardLinker` window ID. When `initialHardLinker` is provided, `xbus-daemon` registers `data.l[3]` as the initial hard link holder in `links: [...]` and registers `data.l[0]` (`senderWin` / host) in `hosts: [...]`. The client cookie won't be needed by the real XBLOB V1 because that would use the X request sequence number. `xbus-daemon` holds `typeAtom` in `xblobRegistry[blobId]` alongside `links`, `softLinks`, and `hosts`, mirroring how the X server holds property type atoms and pixmap depth/format metadata.
@@ -183,17 +190,15 @@ an XMessageFrame with message type `XBlobAnnounceHostV0`, `data.l[1]` as the blo
 ## XBlobDropHost
 an XMessageFrame with message type `XBlobDropHostV0`, `data.l[1]` as the blob ID, and `data.l[2]` as the `XBLOB_HOST` window ID. Removes the host window from `xbus-daemon`'s `hosts` list for that blob when a host evicts its local cache copy.
 
-## XBlobStreamChunkAdvise
-an XMessageFrame with message type `XBlobStreamChunkAdviseV0` and `data.l[1]` as the main blob ID and `data.l[2]` as the chunk ID.  This is forwarded to every consumer.
-
-## XBlobStreamChunkReceived
-an XMessageFrame with message type `XBlobStreamChunkReceivedV0` and `data.l[1]` as the main blob ID and `data.l[2]` as the chunk ID.  This is forwarded to the producer.
-
 ## XBlobHost registration
 an XBlobHost claims an atom for what numa node its on, as `XBLOB_HOST_${host}`, and programs use XGetSelection() to find their local XBlobHost.  Then `XBlobCreate` returns a 32-bit bus global unique blob ID.  The XBlobHost opens a local socket and advertises its socket path in its `XBLOB_SOCKET_PATH` property on the `XBLOB_HOST` window.  `xbus-daemon` operates strictly as a Control Plane directory, holding `typeAtom`, `links: [...]`, `softLinks: [...]`, and `hosts: [...]` for each blob, without storing payload bytes.
 
 ## XBlobBroadcast
-an XMessageFrame on the local X bus with message type `XBlobBroadcastV0`, `data.l[1]` as the blob ID, `data.l[2]` as the host window ID, and `data.l[3]` as the version number. Automatically registers `data.l[2]` in `xbus-daemon`'s `hosts` list and forwards the broadcast to linkers and soft linkers. Across HTTP bridges, it can also be bridged as an `XJsonFrame` carrying `{hostName, version}`.
+an XMessageFrame on the local X bus with message type `XBlobBroadcastV0`, `data.l[1]` as the blob ID, `data.l[2]` as the host id, and `data.l[3]` as the version number. Automatically registers `data.l[2]` in `xbus-daemon`'s `hosts` list and forwards the broadcast to linkers and soft linkers.   Across HTTP bridges, it can also be bridged as an `XJsonFrame` carrying `{hostName, version}`.
+
+## XBlobStreamClosed
+an XMessageFrame with message type `XBlobStreamClosedV0`, `data.l[1]` as the blob id, `data.l[2]` as the host id, and `data.l[3]` and `data.l[4]` as its ultimate size.
+
 
 # XAUDIO V0
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.  It registers itself in its MATCHBOX_TOML as

@@ -41,7 +41,15 @@ def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
     Regardless of whether raw_blob is Content-Encoding: fd-rights or Content-Encoding: identity,
     a valid, open, readable file descriptor is guaranteed to be returned.
     """
-    if not isinstance(raw_blob, dict):
+    if isinstance(raw_blob, dict):
+        if "blob" in raw_blob and isinstance(raw_blob["blob"], dict):
+            raw_blob = raw_blob["blob"]
+        elif "data" in raw_blob and isinstance(raw_blob["data"], dict):
+            if "blob" in raw_blob["data"] and isinstance(raw_blob["data"]["blob"], dict):
+                raw_blob = raw_blob["data"]["blob"]
+            elif "_dataType" in raw_blob["data"] or "data" in raw_blob["data"]:
+                raw_blob = raw_blob["data"]
+    else:
         raw_blob = {"data": raw_blob}
 
     mime_type = raw_blob.get("type") or raw_blob.get("mimeType") or "application/octet-stream"
@@ -65,10 +73,13 @@ def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
 
         if clean_path and os.path.exists(clean_path):
             try:
-                fd = os.open(clean_path, os.O_RDWR | os.O_CLOEXEC)
+                fd = os.open(clean_path, os.O_RDONLY | os.O_CLOEXEC)
+                logger.info(f"ensure_readable_fd resolved file path '{clean_path}' -> open fd {fd} (size: {os.path.getsize(clean_path)} bytes)")
                 return (fd, mime_type, file_name)
             except Exception as e:
-                logger.warn(f"os.open failed for '{clean_path}', falling back to anonymous fd: {e}")
+                logger.error(f"ensure_readable_fd os.open failed for '{clean_path}', falling back to anonymous fd: {e}", exc_info=True)
+        else:
+            logger.warning(f"ensure_readable_fd: file path '{clean_path}' does not exist on disk, falling back to anonymous fd")
 
     # Case B: Content-Encoding: identity or raw bytes/base64/text
     # Write payload into an unlinked anonymous temporary file descriptor
@@ -267,6 +278,15 @@ async def request_media_transcode_x11(x11_client, input_target, target_accept: s
             data_blob=input_data_blob,
             sender_win_id=sender_win_id
         )
+        res = await asyncio.wait_for(future, timeout=15.0)
+        logger.info(f"request_media_transcode_x11 SUCCESS: received response {res}")
+        return res
+    except asyncio.TimeoutError:
+        logger.error(f"request_media_transcode_x11 TIMED OUT waiting for media.TranscodeResponseV0 on channel {channel_id}")
+        return None
+    except Exception as e:
+        logger.error(f"request_media_transcode_x11 failed for '{title}': {e}", exc_info=True)
+        return None
 
         res = await asyncio.wait_for(future, timeout=8.0)
         logger.info(f"Received media.TranscodeResponseV0 over X11 IPC: {res}")

@@ -22,10 +22,8 @@ def run_test():
     if not os.environ.get("XVFB_RUNNING") and shutil.which("xvfb-run"):
         print("--- Relaunching test inside isolated Xvfb server via xvfb-run ---")
         env = dict(os.environ, XVFB_RUNNING="1", PYTHONUNBUFFERED="1", PORT=TEST_PORT, XINTENT_PORT=TEST_PORT)
-        cmd = ["xvfb-run", "-a"]
-        if shutil.which("uv"):
-            cmd.extend(["uv", "run"])
-        cmd.extend(["python3"] + sys.argv)
+        python_exe = "/home/user/matchbox202x/.venv/bin/python" if os.path.exists("/home/user/matchbox202x/.venv/bin/python") else sys.executable
+        cmd = ["xvfb-run", "-a", python_exe] + sys.argv
         res = subprocess.run(cmd, env=env)
         sys.exit(res.returncode)
 
