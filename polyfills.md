@@ -200,23 +200,26 @@ an XMessageFrame on the local X bus with message type `XBlobBroadcastV0`, `data.
 an XMessageFrame with message type `XBlobStreamClosedV0`, `data.l[1]` as the blob id, `data.l[2]` as the host id, and `data.l[3]` and `data.l[4]` as its ultimate size.
 
 
-# XAUDIO V0
+# XAUDIO aka Pixmaps for Sound
 The XAUDIO server probably does something like dump audio into ffmpeg on demand.  It registers itself in its MATCHBOX_TOML as
 ```toml
 [XAudioSink]
 name = "my-speakers"
 ```
 thereby registering itself to recieve XAudio commands.  Every XAudio command with a blob attached would require an XBlobGrant of that blob to the XAudioSink, the XAudioSink then unlinks blobs when its done using them.  By default, audio commands on the bus go to the `SESSION_SPEAKERS` holder.
+Do Nothing Group has no interest in defining streaming protocols.  Do Nothing Group wants to eat doritos and have hands invalidated for typing and will implement "play this blob in this stream with this seqnum" by drawing letters with the trackball and elbowing the button.
 ## XAudioPlay
-an XChannelJsonFrame with message type `XAudioPlayV0` and payload `{OutputId, volume, loop, streamId, seqnum}` and an attached data blob.  Once the XAudioSink has finished playing, it replies with `XAudioPlayResponseV0` with payload `{OutputId, streamId, seqnum, status: 200|500}` if theres a channel open to reply on.
+an XChannelJsonFrame with message type `XAudioPlayV0` and payload `{OutputId, volume, loop, streamId, seqnum}` and an attached data blob, which, of course, may be a stream.  Once the XAudioSink has finished playing, it replies with `XAudioPlayResponseV0` with payload `{OutputId, streamId, seqnum, status: 200|500}` if theres a channel open to reply on.
 * If `streamId > 0`, the user has opted in to using streams and can queue multiple blobs on a nonzero streamId to be played in seqnum order, but, stream 0 blobs will be played when received as possible, evicting old sounds if necessary.  If the client sends `Connection: keep-alive`, the server doesnt close the channel after sending its last `XAudioPlayResponseV0`.
 * If `loop` is specified, the loop continues until an XAudioControlStream or until the channel closes.
+## XAudioControlStream
+an XChannelJsonFrame with message type `XAudioControlStreamV0` and payload `{command, pragma, streamId}`.  If there is no attached data blob, the user is accessing the user's StreamId's from XAudioPlay, if there is an attached data blob, the user is accessing the stream the blob is attached to.
+* Known commands are play, pause, stop.
+* Known pragmas are `{underrunPolicy: 'loop' or 'dead', bufferLen: .25s}`.  If the amount buffered exceeds bufferLen, the audio sink MAY drop the oldest audio.
 ## XAudioPrefetchSoundBlob
 an XChannelJsonFrame with message type `XAudioPrefetchSoundBlobV0`, payload `{OutputId}`, and an attached data blob.  XAudioSink's SHOULD download the blob data and be ready to play it.
-## ControlStream
-an XChannelJsonFrame with message type `XAudioControlStreamV0` and payload `{command, streamId}`.  If there is no attached data blob, the user is accessing the user's StreamId's from XAudioPlay, if there is an attached data blob, the user is accessing the StreamId's from the BlobId MediaStream.
 ## SeekStream
-an XChannelJsonFrame with message type `XAudioSeekStreamV0`, payload `{streamId, seekTo}`, and an attached data blob.
+When using pipes, seeks have to be done through negotiation with this.
 
 # TOML Properties
 ## MATCHBOX_TOML
