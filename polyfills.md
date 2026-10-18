@@ -79,6 +79,9 @@ note that
 * XCreateWindow is not a round trip, so theres no point in not creating a window to have an ipc port
 * the cooperative security model in XSECURE V0 is going to look at the `_NET_WM_PID` on the window to decide security policy
 
+### Content-Encoding: fd-rights
+This is not currently available, it is completely coherent for an http message to include a fd, but nodejs and bun throw away any fd included in an http message.  Client libraries attempt to transparently transform fd-rights into file-path.
+
 # `XINTENT_INTENT_V0` and `XINTENT_EVENT_V0`
 These are XChannelJsonFrame's with {intent: fs.PickFile} and {event: fs.PickFileResponse}
 * Whoever sends the event that closes the channel MAY send `{disposition: final/error/cancel}` in the payload.
@@ -93,7 +96,7 @@ An XBlob is a server record like a window, it has a list of properties.  The imp
 |  Atom      |  Type   |  Description
 ---
 | XBlobType | XA_ATOM |  Blob, File, ReadableStream, MediaStream, Directory
-| type      | STRING  |  video/x-msvideo (codecs=mpeg4,xvid,mp3)
+| type      | XA_ATOM |  video/x-msvideo (codecs=mpeg4,xvid,mp3)
 | name      | STRING  |  a Blob with a name is a File
 | size      | CARD64  |  a ReadableStream gets a size when it becomes a Blob
 ---
@@ -119,9 +122,7 @@ or for Unix domain socket file descriptor transfers:
 ```http
 PUT /blobs XBlob/0.1
 Content-Type: application/octet-stream
-Content-Length: 4
 Content-Encoding: fd-rights
-Accept-Encoding: identity, base64, fd-rights
 
 [attached fd]
 ```
@@ -133,9 +134,8 @@ Content-Type: application/json
 Accept-Encoding: identity, base64, fd-rights
 Content-Encoding: fd-rights
 X-Blob-Id: 0x67
-Location: /blobs/0x67
 
-{"status": "ok", "blobId": "0x67", "blob": "0x67", "contentEncoding": "fd-rights"}
+
 ```
 
 a file would also include
@@ -148,9 +148,6 @@ meanwhile, for streams,
 ```http
 Content-Type: multipart/mixed
 Transfer-Encoding: chunked
-Expect: 100-continue
-X-Stream-Chunk: 0
-X-Stream-Credit: 0
 ```
 
 this is likely parsed by client libraries to
@@ -158,6 +155,9 @@ this is likely parsed by client libraries to
 {xblobType, type, size, name, data, _dataType}
 ```
 * _dataType is probably one of text, json, base64, identity, fd0-rights
+
+
+While most clients would PUT/GET/POST to their local blob host for creates, reads, writes, to unlink a blob or broadcast an update, clients would send those in to the to the busmaster.
 
 
 ## XBlobCreate
