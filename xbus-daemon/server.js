@@ -8,7 +8,7 @@ const {atoms, widString, frameType, frameDesc, connectToRouter, init: xintentIni
 xintentInit({logger: new Logger({module: 'libxintent'})});
 
 const {handleXIntentIntentV0, handleXIntentEventV0, handleForwardingOfXChannelJsonFrame, parseWindowToml, parseWindowLighterToml, getAllMatchboxToml, xintentUnregisterWindow} = require('./xintent-router');
-const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0, handleXBlobAnnounceHostV0, handleXBlobDropHostV0} = require('./xblob');
+const {handleXBlobCreateV0, handleXBlobGrantV0, handleXBlobUnlinkV0, handleXBlobTransferV0, handleXAudioNodeRegisterV0, xblobUnlinkWindow, handleXBlobSoftLinkV0, handleXBlobSoftUnlinkV0, handleXBlobBroadcastV0, handleXBlobAnnounceHostV0, handleXBlobDropHostV0, handleXBlobHostConnectV0} = require('./xblob');
 const {handleXAudioGetAudioOutputsV0, handleXAudioPlayV0, handleXAudioControlV0, xaudioUnregisterWindow} = require('./xaudio');
 
 // Load Policy Engine from cool-intent-router
@@ -30,6 +30,8 @@ async function startRouter() {
     'AGGREGATE_TOML',
     'SERVICE_MANIFEST_TOML',
     'XBLOB_CREATE_RESPONSE_V0',
+    'XBLOB_X_SERVER_LOCAL_BLOB_HOST',
+    'XBLOB_X_SERVER_LOCAL_XBLOB_HOST',
   ];
   const dispatchAtoms = {
     'XINTENT_INTENT_V0': handleXIntentIntentV0,
@@ -44,6 +46,7 @@ async function startRouter() {
     'XBLOB_SOFT_UNLINK_V0': handleXBlobSoftUnlinkV0,
     'XBLOB_ANNOUNCE_HOST_V0': handleXBlobAnnounceHostV0,
     'XBLOB_DROP_HOST_V0': handleXBlobDropHostV0,
+    'XBLOB_HOST_CONNECT_V0': handleXBlobHostConnectV0,
 
     'XAUDIO_GET_AUDIO_OUTPUTS_V0': handleXAudioGetAudioOutputsV0,
     'XAUDIO_PLAY_V0': handleXAudioPlayV0,
@@ -78,6 +81,8 @@ async function startRouter() {
     if (atoms.XINTENT) X.ChangeProperty(0, root, atoms.XINTENT, atoms.WINDOW, 32, winBuffer);
     if (atoms.XCHANNEL) X.SetSelectionOwner(routerWin, atoms.XCHANNEL, 0);
     if (atoms.XINTENT) X.SetSelectionOwner(routerWin, atoms.XINTENT, 0);
+    if (atoms.XBLOB_X_SERVER_LOCAL_BLOB_HOST) X.SetSelectionOwner(routerWin, atoms.XBLOB_X_SERVER_LOCAL_BLOB_HOST, 0);
+    if (atoms.XBLOB_X_SERVER_LOCAL_XBLOB_HOST) X.SetSelectionOwner(routerWin, atoms.XBLOB_X_SERVER_LOCAL_XBLOB_HOST, 0);
   }
 
   X.ChangeProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 8, 'XCHANNEL_BUSMASTER');

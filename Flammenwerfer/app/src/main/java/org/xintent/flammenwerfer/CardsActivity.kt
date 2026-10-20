@@ -279,28 +279,48 @@ class CardsActivity : ComponentActivity() {
             val json = JSONObject(jsonPayload)
             val textToSpeak = json.optString("text", "")
                 .ifBlank { json.optString("data", "") }
+            val txId = json.optInt("txId", 0)
 
             if (textToSpeak.isNotBlank()) {
-                val speed = json.optDouble("speed", 1.0).toFloat()
+                val speed = if (json.has("speed")) {
+                    json.optDouble("speed", 1.0).toFloat()
+                } else if (json.has("rate")) {
+                    json.optDouble("rate", 1.0).toFloat()
+                } else {
+                    json.optDouble("speechRate", 1.0).toFloat()
+                }
                 localTtsEngine?.setSpeechRate(speed)
                 localTtsEngine?.speak(textToSpeak, TextToSpeech.QUEUE_ADD, null, "xintent_local_tts_${System.currentTimeMillis()}")
                 XIntentClient.addLog("[ui.TextToSpeech] Local Android Speech Engine speaking: \"${textToSpeak.take(50)}\"")
 
                 JSONObject().apply {
+                    put("event", "ui.TextToSpeechResponse")
+                    put("intent", "ui.TextToSpeechResponse")
                     put("status", "ok")
                     put("message", "Speaking via local Android TTS")
                     put("disposition", "final")
+                    put("controlWord", 2)
+                    if (txId != 0) put("txId", txId)
                 }.toString()
             } else {
                 JSONObject().apply {
+                    put("event", "ui.TextToSpeechResponse")
+                    put("intent", "ui.TextToSpeechResponse")
                     put("status", "error")
                     put("message", "No text provided for speech synthesis")
+                    put("disposition", "error")
+                    put("controlWord", 2)
+                    if (txId != 0) put("txId", txId)
                 }.toString()
             }
         } catch (e: Exception) {
             JSONObject().apply {
+                put("event", "ui.TextToSpeechResponse")
+                put("intent", "ui.TextToSpeechResponse")
                 put("status", "error")
                 put("message", e.message ?: "Failed to trigger local TTS")
+                put("disposition", "error")
+                put("controlWord", 2)
             }.toString()
         }
     }

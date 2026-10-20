@@ -1,0 +1,7 @@
+[app]
+id = "cool-intent-router"
+name = "XIntent Policy Engine & Rerouter"
+description = "Evaluates security policies, channels, and Super-I intent redirection"
+
+[intents]
+"bus.RouteIntent" = { type = "application/json" }

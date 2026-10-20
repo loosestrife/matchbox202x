@@ -278,7 +278,12 @@ class LocalAudioPlayer(
     private fun extractAudioBytesFromResponse(rawBytes: ByteArray): ByteArray? {
         if (rawBytes.isEmpty()) return null
 
-        if (rawBytes.size >= 4 && rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte()) {
+        if (rawBytes.size >= 12 &&
+            rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte() &&
+            rawBytes[2] == 'F'.code.toByte() && rawBytes[3] == 'F'.code.toByte() &&
+            rawBytes[8] == 'W'.code.toByte() && rawBytes[9] == 'A'.code.toByte() &&
+            rawBytes[10] == 'V'.code.toByte() && rawBytes[11] == 'E'.code.toByte()
+        ) {
             return rawBytes
         }
 
@@ -289,11 +294,21 @@ class LocalAudioPlayer(
                 val bodyBytes = rawBytes.copyOfRange(sepPos + 4, rawBytes.size)
                 if (bodyBytes.isEmpty()) return null
 
+                if (bodyBytes.size >= 12 &&
+                    bodyBytes[0] == 'R'.code.toByte() && bodyBytes[1] == 'I'.code.toByte() &&
+                    bodyBytes[2] == 'F'.code.toByte() && bodyBytes[3] == 'F'.code.toByte() &&
+                    bodyBytes[8] == 'W'.code.toByte() && bodyBytes[9] == 'A'.code.toByte() &&
+                    bodyBytes[10] == 'V'.code.toByte() && bodyBytes[11] == 'E'.code.toByte()
+                ) {
+                    return bodyBytes
+                }
+
                 val isBase64 = headerText.contains("base64", ignoreCase = true)
                 if (isBase64) {
                     return try {
                         val strBody = String(bodyBytes, Charsets.UTF_8).trim()
-                        Base64.decode(strBody, Base64.DEFAULT)
+                        val decoded = Base64.decode(strBody, Base64.DEFAULT)
+                        if (decoded.isNotEmpty()) decoded else bodyBytes
                     } catch (_: Exception) {
                         bodyBytes
                     }

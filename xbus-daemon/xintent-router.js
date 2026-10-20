@@ -7,7 +7,6 @@ const util = require("util");
 const execAsync = util.promisify(exec);
 const {Logger} = require('../server-tools');
 const logger = new Logger({module: 'xintent-router'});
-const policyEngine = require('../cool-intent-router');
 const {
   atoms,
   widString,
@@ -42,6 +41,8 @@ const {
   unregisterWindowRegistry,
   initXIntentRegistry,
 } = require('./xintent-registry');
+const { evaluateRoutePolicy } = require('./xintent-policy');
+const { cleanupDestroyedWindow } = require('./xintent-cleanup');
 
 const intentsAwaitingServicesQueue = {}; // intent -> [xchannelFrame]
 async function checkToDrainIntentsQueue(intentName) {
@@ -121,58 +122,27 @@ const tryToForwardTheFrame = async (xchannelFrame) => {
   }
 
   if (intent) {
-    const registryEntries = intentRegistry[intent] || [];
-    const availableTargets = registryEntries.map((e) => e.matchboxToml?.app?.id).filter(Boolean);
+    const policyResult = await evaluateRoutePolicy({
+      xchannelFrame,
+      intent,
+      parsedPayload,
+      intentRegistry,
+      windowRegistry,
+      lighterRegistry,
+      intentsAwaitingServicesQueue,
+      sendXIntentIntentV0,
+      X,
+      routerWin,
+      formatActionString,
+    });
 
-    let routeDecision = null;
-    if (policyEngine && typeof policyEngine.handleRouteIntent === 'function') {
-      try {
-        routeDecision = await policyEngine.handleRouteIntent({
-          requestId: xchannelFrame.payloadBlob,
-          senderApp: widString(senderWin),
-          requestedIntent: intent,
-          payload: parsedPayload,
-          availableTargets,
-        });
-      } catch (err) {
-        logger.error(`Error in PolicyEngine handleRouteIntent: ${err.message}`);
-      }
-    }
-
-    if (routeDecision?.decision === 'drop' || routeDecision?.decision === '401' || routeDecision?.decision === '404') {
-      logger.info(`[intent-router] PolicyEngine rejected intent ${intent} (decision: ${routeDecision.decision})`);
+    if (policyResult.status === 'rejected' || policyResult.status === 'launching') {
       return;
     }
 
-    const targetAppId = routeDecision?.targetApp || parsedPayload?.app || parsedPayload?.targetApp;
-
-    if (registryEntries.length > 0) {
-      let selectedEntry = registryEntries[0];
-
-      if (targetAppId) {
-        const matched = registryEntries.find(
-          (entry) =>
-            entry.matchboxToml?.app?.id === targetAppId ||
-            entry.matchboxToml?.app?.name === targetAppId ||
-            entry.appId === targetAppId
-        );
-        if (matched) {
-          selectedEntry = matched;
-          logger.info(`[intent-router] PolicyEngine matched target app '${targetAppId}' to service window (${widString(matched.wid)})`);
-        } else {
-          logger.info(`[intent-router] Target app '${targetAppId}' not found in active intentRegistry for ${intent}, checking windowRegistry...`);
-          for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
-            if (matchboxToml?.app?.id === targetAppId || matchboxToml?.app?.name === targetAppId) {
-              const numWid = Number(widStr);
-              selectedEntry = { wid: numWid, matchboxToml };
-              logger.info(`[intent-router] PolicyEngine matched target app '${targetAppId}' to windowRegistry window (${widString(numWid)})`);
-              break;
-            }
-          }
-        }
-      }
-
-      const { wid, matchboxToml } = selectedEntry;
+    if (policyResult.status === 'matched') {
+      const { selectedEntry, targetAppId } = policyResult;
+      const { wid } = selectedEntry;
       logger.info(`[intent-router] Found service window (${widString(wid)}) for ${actionStr} (target app: ${targetAppId || 'any'})`);
       if (channelObj) {
         channelObj.handlerWin = wid;
@@ -191,37 +161,6 @@ const tryToForwardTheFrame = async (xchannelFrame) => {
         channelObj = null;
       }
       return;
-    } else {
-      logger.info(
-        `[intent-router] No service mapped for action: ${actionStr}, falling back to lighter ${JSON.stringify(lighterRegistry, null, 2)}`,
-      );
-      const isAlreadyLaunching = intentsAwaitingServicesQueue[intent] && intentsAwaitingServicesQueue[intent].length > 0;
-      if (!intentsAwaitingServicesQueue[intent]) {
-        intentsAwaitingServicesQueue[intent] = [];
-      }
-      intentsAwaitingServicesQueue[intent].push(xchannelFrame);
-
-      if (!isAlreadyLaunching) {
-        const lighterRegistryEntry = lighterRegistry[intent];
-        if (lighterRegistryEntry && lighterRegistryEntry.length > 0) {
-          const { computer, packageName, wid, publicKeyHash } = lighterRegistryEntry[0];
-          await sendXIntentIntentV0(X, routerWin, {
-            targetWin: wid,
-            senderWin: routerWin,
-            txId: 0,
-            payload: {
-              intent: "sys.Launch",
-              computer,
-              package: packageName,
-              intendedIntent: intent,
-            },
-          });
-        } else {
-          logger.error(`no launchable service found for ${actionStr}`);
-        }
-      } else {
-        logger.info(`[intent-router] Service '${intent}' is already launching; queued ${actionStr}`);
-      }
     }
   } else {
     logger.info(`dropping xchannel frame without active channel ${actionStr}`, xchannelFrame);
@@ -306,118 +245,23 @@ async function sendXIntentIntentV0(
 }
 
 const xintentUnregisterWindow = async (destroyedWin) => {
-  const hasRegisteredIntents = Object.values(intentRegistry).some((entries) =>
-    entries.some((entry) => entry.wid === destroyedWin)
-  );
-  const hasLighterIntents = Object.values(lighterRegistry).some((entries) =>
-    entries.some((entry) => entry.wid === destroyedWin)
-  );
-  const hasWindowToml = Boolean(windowRegistry[destroyedWin]);
-  const hasLighterAudio = Object.values(lighterAudioRegistry).some(
-    (entry) => entry.wid === destroyedWin
-  );
-  const hasQueuedIntents = Object.values(intentsAwaitingServicesQueue).some(
-    (queue) => queue.some((xintent) => xintent.senderWin == destroyedWin)
-  );
-  const hasActiveChannels = Object.values(activeChannels).some(
-    (channelObj) =>
-      channelObj.senderWin === destroyedWin || channelObj.handlerWin === destroyedWin
-  );
-
-  const hasRegistrations =
-    hasRegisteredIntents ||
-    hasLighterIntents ||
-    hasWindowToml ||
-    hasLighterAudio ||
-    hasQueuedIntents ||
-    hasActiveChannels;
-
-  if (hasRegistrations) {
-    logger.info(`Unregistering window ${widString(destroyedWin)}`);
-  }
-  let registryChanged = false;
-
-  for (const intentName of Object.keys(intentRegistry)) {
-    const originalLen = intentRegistry[intentName].length;
-    intentRegistry[intentName] = intentRegistry[intentName].filter(
-      (entry) => entry.wid !== destroyedWin
-    );
-    if (intentRegistry[intentName].length !== originalLen) {
-      registryChanged = true;
-    }
-    if (intentRegistry[intentName].length === 0) {
-      delete intentRegistry[intentName];
-    }
-  }
-
-  for (const intentName of Object.keys(lighterRegistry)) {
-    const originalLen = lighterRegistry[intentName].length;
-    lighterRegistry[intentName] = lighterRegistry[intentName].filter(
-      (entry) => entry.wid !== destroyedWin
-    );
-    if (lighterRegistry[intentName].length !== originalLen) {
-      registryChanged = true;
-    }
-    if (lighterRegistry[intentName].length === 0) {
-      delete lighterRegistry[intentName];
-    }
-  }
-
-  if (unregisterWindowRegistry(destroyedWin)) {
-    registryChanged = true;
-  }
-
-  if (registryChanged) {
-    await updateAggregateToml();
-  }
-
-  for (const intentName of Object.keys(intentsAwaitingServicesQueue)) {
-    intentsAwaitingServicesQueue[intentName] = intentsAwaitingServicesQueue[intentName].filter(
-      (xintent) => !((xintent.senderWin == destroyedWin) && (xintent.payload.Accept))
-    );
-    if (intentsAwaitingServicesQueue[intentName].length === 0) {
-      delete intentsAwaitingServicesQueue[intentName];
-    }
-  }
-
-  const retryIntents = [];
-  const channels = Object.values(activeChannels);
-
-  for (const channelObj of channels) {
-    if (channelObj.senderWin === destroyedWin) {
-      if (channelObj.handlerWin && channelObj.handlerWin !== destroyedWin) {
-        logger.info(
-          `Sender ${widString(destroyedWin)} destroyed; sending sys.Cancel to handler ${widString(channelObj.handlerWin)} on channel ${channelObj.channelNum}`
-        );
-        await sendXIntentIntentV0(X, routerWin, {
-          targetWin: channelObj.handlerWin,
-          senderWin: routerWin,
-          ...getChannelToSend(channelObj.handlerWin, channelObj),
-          payload: {
-            intent: "sys.Cancel",
-            disposition: "cancel",
-            reason: "connection reset by peer",
-          },
-        });
-      }
-      closeChannel(channelObj);
-    } else if (channelObj.handlerWin === destroyedWin) {
-      logger.info(
-        `Handler ${widString(destroyedWin)} destroyed on channel ${channelObj.channelNum}; resetting handler`
-      );
-      channelObj.handlerWin = null;
-      if (channelObj.originalIntent) {
-        retryIntents.push(channelObj.originalIntent);
-      }
-    }
-  }
-
-  for (const pendingIntent of retryIntents) {
-    logger.info(
-      `Re-attempting to forward intent '${pendingIntent.payload?.intent}' after handler cleanup`
-    );
-    await tryToForwardTheFrame(pendingIntent);
-  }
+  await cleanupDestroyedWindow({
+    destroyedWin,
+    intentRegistry,
+    lighterRegistry,
+    windowRegistry,
+    lighterAudioRegistry,
+    intentsAwaitingServicesQueue,
+    activeChannels,
+    unregisterWindowRegistry,
+    updateAggregateToml,
+    sendXIntentIntentV0,
+    getChannelToSend,
+    closeChannel,
+    tryToForwardTheFrame,
+    X,
+    routerWin,
+  });
 };
 
 module.exports = {

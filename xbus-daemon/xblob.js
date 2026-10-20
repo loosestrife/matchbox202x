@@ -3,7 +3,8 @@ const os = require('os');
 const {atoms, widString, parseJsonFrame, XClientMessage} = require('../x11-promises/xintent.js');
 const {Logger} = require('../server-tools');
 const logger = new Logger({module: 'xblob'});
-const {X, rawX, x11, root, routerWin} = require('./index.js');
+const {X, x11, routerWin} = require('./index.js');
+const { sameClient, resourceMask, checkForDeletion, notifyDestructors } = require('./xblob-gc.js');
 
 const xblobRegistry = {};
 let nextOpaqueBlobId = 0x100;
@@ -32,7 +33,6 @@ const handleXBlobCreateV0 = {
     responseEv.writeUInt32LE((atoms.XBLOB_CREATE_RESPONSE_V0 || 0) >>> 0, 8);
     responseEv.writeUInt32LE((routerWin || 0) >>> 0, 12);        // data.l[0] = senderWin (router)
     responseEv.writeUInt32LE((blobId || 0) >>> 0, 16);           // data.l[1] = allocated blob ID
-    responseEv.writeUInt32LE((parsed.cookie || 0) >>> 0, 20);    // data.l[2] = client cookie
     responseEv.writeUInt32LE((parsed.cookie || 0) >>> 0, 20);    // data.l[2] = client cookie
 
     await X.SendEvent(parsed.senderWin, false, x11.eventMask.NoEventMask, responseEv);
@@ -122,7 +122,7 @@ const handleXBlobSoftUnlinkV0 = {
       if (link !== -1) {
         xblobRegistry[blobId].softLinks.splice(link, 1);
       }
-      await checkForDeletion(blobId, xblobRegistry[blobId]);
+      await checkForDeletion(blobId, xblobRegistry[blobId], xblobRegistry);
     }
   },
 };
@@ -176,6 +176,46 @@ const handleXBlobDropHostV0 = {
         logger.info(`XBlobDropHost dropped host ${widString(host)} from blob ${widString(blobId)}`);
       }
     }
+  },
+};
+
+const connectedHosts = new Map();
+
+const handleXBlobHostConnectV0 = {
+  parse: ev => {
+    const targetWin = ev.wid;
+    const senderWin = ev.data[0];
+    const hostWin = ev.data[1] || senderWin;
+    const socketPathAtom = ev.data[2];
+    const hostNameAtom = ev.data[3];
+    return { targetWin, senderWin, hostWin, socketPathAtom, hostNameAtom };
+  },
+  securityContext: parsed => {
+    return {
+      source: { window: parsed.senderWin },
+      action: 'XBlobHostConnect',
+      resources: [],
+    };
+  },
+  accept: async ({ senderWin, hostWin, socketPathAtom, hostNameAtom }, X) => {
+    const { windowRegistry } = require('./xintent-registry');
+    let socketPath = 'unknown';
+    if (socketPathAtom && X) {
+      try {
+        const prop = await X.GetProperty(0, hostWin, socketPathAtom, 0, 0, 1000);
+        if (prop && prop.data) socketPath = prop.data.toString('utf8');
+      } catch (_) {}
+    }
+    const tomlHost = windowRegistry[senderWin]?.XBlobHost?.host;
+    let hostName = tomlHost || 'unknown';
+    if (hostNameAtom && X) {
+      try {
+        const atomName = await X.GetAtomName(hostNameAtom);
+        if (atomName) hostName = atomName;
+      } catch (_) {}
+    }
+    connectedHosts.set(senderWin, { hostName, hostWin, socketPath, connectedAt: new Date() });
+    logger.info(`XBlobHostConnect registered secondary host '${hostName}' (${widString(hostWin)}, socket: ${socketPath})`);
   },
 };
 
@@ -258,10 +298,15 @@ const xblobCreate = async (senderWin, hostWin = null, typeAtom = 0, initialHardL
   const primaryHardLinker = initialHardLinker || senderWin;
   const primaryHost = initialHardLinker ? senderWin : initialHost;
 
+  const linksList = [primaryHardLinker];
+  if (senderWin && !linksList.includes(senderWin)) {
+    linksList.push(senderWin);
+  }
+
   const blobTrackingData = {
     typeAtom: typeAtom || 0,
-    links: [primaryHardLinker],
-    softLinks: primaryHost && primaryHost !== primaryHardLinker ? [primaryHost] : [],
+    links: linksList,
+    softLinks: primaryHost && primaryHost !== primaryHardLinker && !linksList.includes(primaryHost) ? [primaryHost] : [],
     hosts: primaryHost ? [primaryHost] : [],
   };
 
@@ -290,57 +335,21 @@ const xblobUnlink = async (blobId, unlinkWin) => {
   }
 
   if (link === -1) {
-    logger.warn(`Attempt to unlink blob ${widString(blobId)} from window ${widString(unlinkWin)} which isn't linked`, xblobRegistry);
+    logger.debug(`xblobUnlink: window ${widString(unlinkWin)} was not in hard links for blob ${widString(blobId)}`);
   } else {
     regEntry.links.splice(link, 1);
   }
 
   if (regEntry.links.length === 0) {
-    const notifyTargets = new Set([...regEntry.softLinks, ...regEntry.hosts]);
-    for (const notifyWin of notifyTargets) {
-      if (notifyWin && notifyWin !== routerWin) {
-        try {
-          if (X && typeof X.SendEvent === 'function') {
-            XClientMessage(X, notifyWin, atoms.XBLOB_DESTRUCTOR_V0, [
-              routerWin,
-              blobId,
-            ]);
-          }
-        } catch (_) {}
-      }
-    }
+    notifyDestructors(blobId, regEntry);
   }
 
-  await checkForDeletion(blobId, regEntry);
-};
-
-const checkForDeletion = async (blobId, regEntry) => {
-  if (regEntry.links.length === 0 && regEntry.softLinks.length === 0) {
-    logger.info(`deleting unlinked blob ${widString(blobId)} from hosts`, regEntry.hosts);
-    delete xblobRegistry[blobId];
-  }
+  await checkForDeletion(blobId, regEntry, xblobRegistry);
 };
 
 const implicitXBlobTransfer = async (blobId, fromWin, toWin) => {
   implicitXBlobGrant(blobId, toWin);
   await xblobUnlink(blobId, fromWin);
-};
-
-// Modern Xorg hands out 21-bit masks (IDs like 0x3a00003 with base 0x3a00000).
-const DEFAULT_MASK = 0x1fffff;
-let mask;
-const resourceMask = () => {
-  if (mask === undefined) {
-    mask = rawX?.display?.resource_mask || DEFAULT_MASK;
-  }
-  return mask;
-};
-const isXid = w => Number.isInteger(w) && w > 0 && w <= 0x1fffffff;
-const xClientFor = wid => isXid(wid) ? (wid & ~resourceMask()) >>> 0 : null;
-
-const sameClient = (a, b) => {
-  const ca = xClientFor(a), cb = xClientFor(b);
-  return ca != null && ca == cb;
 };
 
 const xblobUnlinkWindow = async (destroyedWin) => {
@@ -359,6 +368,7 @@ const xblobUnlinkWindow = async (destroyedWin) => {
 
 module.exports = {
   xblobRegistry,
+  connectedHosts,
   handleXBlobCreateV0,
   handleXBlobGrantV0,
   handleXBlobUnlinkV0,
@@ -368,6 +378,7 @@ module.exports = {
   handleXBlobSoftUnlinkV0,
   handleXBlobAnnounceHostV0,
   handleXBlobDropHostV0,
+  handleXBlobHostConnectV0,
   xblobCreate,
   implicitXBlobGrant,
   implicitXBlobTransfer,
