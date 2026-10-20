@@ -245,12 +245,16 @@ invocation = "X11"
             console.error(`[copy-daemon] Error: No content blob atom specified in ${payload.intent} frame`);
             return;
           }
-          const content = await XBlobRead(X, xintent.routerWin, contentAtom);
+          const content = await XBlobRead(X, xintent.routerWin, contentAtom, undefined, undefined, 0, 'cool-clips', { receiveFd: true });
 
           // Extract raw binary Buffer safely
           let rawBuf;
           if (Buffer.isBuffer(content.data)) {
             rawBuf = content.data;
+          } else if (typeof content.data === 'number' && content.data >= 0) {
+            rawBuf = fs.readFileSync(`/proc/self/fd/${content.data}`);
+          } else if (typeof content.data === 'string' && (content._dataType === 'fd-rights' || content._dataType === 'file-path' || content.contentEncoding === 'fd-rights' || content.contentEncoding === 'file-path' || content.data.startsWith('/proc/')) && fs.existsSync(content.data)) {
+            rawBuf = fs.readFileSync(content.data);
           } else if (content._dataType === 'base64' || (typeof content.data === 'string' && content.data.startsWith('data:'))) {
             const b64Str = content.data.includes(',') ? content.data.split(',')[1] : content.data;
             rawBuf = Buffer.from(b64Str, 'base64');
@@ -260,12 +264,22 @@ invocation = "X11"
 
           // Persist file payload to disk for file manager paste (text/uri-list)
           const clipDir = '/tmp/xintent_clipboard';
-          if (!fs.existsSync(clipDir)) fs.mkdirSync(clipDir, { recursive: true });
-          const fileName = content.name || payload.name || `shared_file_${Date.now()}`;
           let filePath;
-          if ((content._dataType === 'fd-rights' || content.contentEncoding === 'fd-rights') && typeof content.data === 'string' && fs.existsSync(content.data)) {
+          if (content.url && content.url.startsWith('file://')) {
+            try {
+              const parsedPath = new URL(content.url).pathname;
+              if (fs.existsSync(parsedPath)) filePath = parsedPath;
+            } catch (_) {}
+          }
+          if (!filePath && typeof content.data === 'number' && content.data >= 0) {
+            filePath = `/proc/self/fd/${content.data}`;
+          }
+          if (!filePath && typeof content.data === 'string' && fs.existsSync(content.data)) {
             filePath = content.data;
-          } else {
+          }
+          if (!filePath) {
+            if (!fs.existsSync(clipDir)) fs.mkdirSync(clipDir, { recursive: true });
+            const fileName = content.name || payload.name || `shared_file_${Date.now()}`;
             filePath = path.join(clipDir, fileName);
             fs.writeFileSync(filePath, rawBuf);
           }
@@ -431,7 +445,7 @@ invocation = "X11"
         if ([atoms.UTF8_STRING, atoms.STRING, atoms.TEXT, atoms['text/plain'], atoms['text/plain;charset=utf-8'], atoms['text/html']].includes(targetAtom)) {
           let textBuf = Buffer.alloc(0);
           const targetFilePath = currentClipboard.filePath || currentClipboard.data;
-          if ((currentClipboard._dataType === 'fd-rights' || currentClipboard.contentEncoding === 'fd-rights') && typeof targetFilePath === 'string' && fs.existsSync(targetFilePath)) {
+          if (typeof targetFilePath === 'string' && (targetFilePath.startsWith('/proc/') || targetFilePath.startsWith('/tmp/') || targetFilePath.startsWith('/dev/')) && fs.existsSync(targetFilePath)) {
             textBuf = fs.readFileSync(targetFilePath);
           } else if (isText) {
             textBuf = Buffer.from(currentClipboard.data || '', 'utf8');

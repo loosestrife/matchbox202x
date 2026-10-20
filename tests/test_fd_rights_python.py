@@ -87,14 +87,14 @@ def run_test():
         data_type = blob_result.get("_dataType") or blob_result.get("contentEncoding")
         print(f"Extracted _dataType: '{data_type}', data: '{data_val}'")
 
-        if data_type == "fd-rights" or "fd-rights" in str(blob_result.get("contentEncoding", "")):
-            print("\n[VERIFICATION PASSED] Successfully fetched Content-Encoding: fd-rights blob over UNIX socket via libxintent.py!")
+        if data_type in ("fd-rights", "file-path") or "fd-rights" in str(blob_result.get("contentEncoding", "")) or "file-path" in str(blob_result.get("contentEncoding", "")):
+            print("\n[VERIFICATION PASSED] Successfully fetched Content-Encoding: file-path / fd-rights blob over UNIX socket via libxintent.py!")
             return True
-        elif test_content in str(data_val) or test_file in str(data_val):
+        elif test_content in str(data_val) or test_file in str(data_val) or (isinstance(data_val, str) and data_val.startswith("/proc/")):
             print("\n[VERIFICATION PASSED] Successfully fetched file blob over UNIX socket via libxintent.py!")
             return True
         else:
-            print(f"[FAILED] Expected file content or fd-rights, got: {data_val}")
+            print(f"[FAILED] Expected file content, file-path or fd-rights, got: {data_val}")
             return False
 
     finally:

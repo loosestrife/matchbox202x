@@ -255,6 +255,21 @@ async function httpPutBlobsOverSocket(sockPath, blobData, senderWin, targetBlobI
   if (!senderWin) {
     throw new Error('httpPutBlobsOverSocket requires senderWin');
   }
+  if (typeof blobData === 'object' && blobData !== null) {
+    if (typeof blobData.data === 'number' && blobData.data >= 0) {
+      blobData = Object.assign({}, blobData, {
+        data: `/proc/self/fd/${blobData.data}`,
+        _dataType: 'file-path',
+        contentEncoding: 'file-path'
+      });
+    }
+  } else if (typeof blobData === 'number' && blobData >= 0) {
+    blobData = {
+      data: `/proc/self/fd/${blobData}`,
+      _dataType: 'file-path',
+      contentEncoding: 'file-path'
+    };
+  }
   return new Promise((resolve, reject) => {
     let bodyBuf;
     if (Buffer.isBuffer(blobData)) {
@@ -404,51 +419,18 @@ async function XBlobCreate(
   blobData,
   timeoutMs = 5000
 ) {
-  try {
-    const hostname = os.hostname();
-    const hostAtom = atoms[`XBLOB_HOST_${hostname}`] || (await X.InternAtom(false, `XBLOB_HOST_${hostname}`));
-    const xblobHost = (await X.GetSelectionOwner(hostAtom)) || routerWin;
-    const sockPath = (await getXBlobSocketPath(X, xblobHost)) || process.env.XBLOB_SOCKET_PATH;
+  const hostname = os.hostname();
+  const hostAtom = atoms[`XBLOB_HOST_${hostname}`] || (await X.InternAtom(false, `XBLOB_HOST_${hostname}`));
+  const xblobHost = (await X.GetSelectionOwner(hostAtom)) || routerWin;
+  const sockPath = (await getXBlobSocketPath(X, xblobHost)) || process.env.XBLOB_SOCKET_PATH;
 
-    if (sockPath && fs.existsSync(sockPath)) {
-      try {
-        const blobId = await httpPutBlobsOverSocket(sockPath, blobData, senderWin);
-        if (blobId) return blobId;
-      } catch (sockErr) {
-        logger.warn(`XBlobCreate socket PUT /blobs failed, falling back to X11 IPC: ${sockErr.message}`);
-      }
-    }
-  } catch (_) {}
-
-  let typeAtom = 0;
-  if (blobData && typeof blobData === 'object') {
-    const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'text/plain');
-    if (mimeType) {
-      typeAtom = atoms[mimeType] || (await X.InternAtom(false, mimeType));
-      if (typeAtom) atoms[mimeType] = typeAtom;
-    }
+  if (sockPath && fs.existsSync(sockPath)) {
+    const blobId = await httpPutBlobsOverSocket(sockPath, blobData, senderWin);
+    if (blobId) return blobId;
   }
 
-  const cookie = crypto.randomBytes(4).readUInt32LE(0);
-  const evBuf = buildClientMessageBuffer(routerWin, atoms.XBLOB_CREATE_V0, [
-    senderWin,
-    cookie,
-    typeAtom || 0,
-  ]);
-  const responseEv = await X.seekResponsePacket(
-    (ev) =>
-      ev &&
-      ev.type === 33 &&
-      ev.message_type === atoms.XBLOB_CREATE_RESPONSE_V0 &&
-      ev.data &&
-      ((ev.data[2] >>> 0) === (cookie >>> 0)),
-    timeoutMs
-  ).SendEvent(routerWin, false, x11.eventMask.NoEventMask, evBuf);
-
-  const blobId = responseEv.data[1];
-  await XBlobWrite(X, routerWin, senderWin, blobId, blobData, os.hostname(), null);
-
-  return blobId;
+  const httpPort = parseInt(process.env.XINTENT_PORT || process.env.PORT || '12345', 10);
+  return await httpPutBlobsOverHttp(httpPort, blobData, senderWin);
 }
 
 async function XBlobGrant(X, routerWin, senderWin, blobId, granteeWin) {
@@ -578,7 +560,7 @@ function formatXBlobAtRest(blobData) {
   const headers = [];
   headers.push(`Content-Type: ${type}`);
   headers.push(`Content-Length: ${size}`);
-  const contentEnc = blobData.contentEncoding || (dataType === 'fd-rights' || blobData._dataType === 'fd-rights' ? 'fd-rights' : (dataType === 'base64' ? 'base64' : null));
+  const contentEnc = blobData.contentEncoding || (dataType === 'fd-rights' || blobData._dataType === 'fd-rights' ? 'fd-rights' : (dataType === 'file-path' || blobData._dataType === 'file-path' ? 'file-path' : (dataType === 'base64' ? 'base64' : null)));
   if (contentEnc && contentEnc !== 'identity') {
     headers.push(`Content-Encoding: ${contentEnc}`);
   }
@@ -847,10 +829,22 @@ function httpGetBlobOverSocket(sockPath, hexBlobId, userAgent) {
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           const bodyBuf = Buffer.concat(chunks);
-          if (res.headers['content-type']?.includes('application/json')) {
+          if (res.headers['content-type']?.includes('application/json') || res.headers['content-type']?.includes('file-path')) {
             try {
               const resJson = JSON.parse(bodyBuf.toString('utf8'));
-              return resolve(resJson.blob || resJson);
+              const blobData = resJson.blob || resJson;
+              if (res.headers['content-type']?.includes('file-path') || blobData?._dataType === 'file-path' || blobData?.contentEncoding === 'file-path') {
+                const filePath = blobData.data;
+                if (typeof filePath === 'string' && fs.existsSync(filePath)) {
+                  try {
+                    const fd = fs.openSync(filePath, 'r');
+                    blobData.data = fd;
+                    blobData._dataType = 'fd-rights';
+                    blobData.contentEncoding = 'fd-rights';
+                  } catch (_) {}
+                }
+              }
+              return resolve(blobData);
             } catch (_) {}
           }
           const headers = [];
@@ -902,10 +896,22 @@ function httpGetBlobOverHttp(port, hexBlobId, userAgent) {
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           const bodyBuf = Buffer.concat(chunks);
-          if (res.headers['content-type']?.includes('application/json')) {
+          if (res.headers['content-type']?.includes('application/json') || res.headers['content-type']?.includes('file-path')) {
             try {
               const resJson = JSON.parse(bodyBuf.toString('utf8'));
-              return resolve(resJson.blob || resJson);
+              const blobData = resJson.blob || resJson;
+              if (res.headers['content-type']?.includes('file-path') || blobData?._dataType === 'file-path' || blobData?.contentEncoding === 'file-path') {
+                const filePath = blobData.data;
+                if (typeof filePath === 'string' && fs.existsSync(filePath)) {
+                  try {
+                    const fd = fs.openSync(filePath, 'r');
+                    blobData.data = fd;
+                    blobData._dataType = 'fd-rights';
+                    blobData.contentEncoding = 'fd-rights';
+                  } catch (_) {}
+                }
+              }
+              return resolve(blobData);
             } catch (_) {}
           }
           const headers = [];
@@ -938,7 +944,8 @@ function httpGetBlobOverHttp(port, hexBlobId, userAgent) {
   });
 }
 
-async function XBlobRead(X, routerWin, blobId, host, version, clientWin = 0, appId = 'xintent') {
+async function XBlobRead(X, routerWin, blobId, host, version, clientWin = 0, appId = 'xintent', options = {}) {
+  const receiveFd = (typeof options === 'object' && options !== null) ? !!options.receiveFd : !!options;
   const hexBlobId = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
   const userAgent = buildXBlobUserAgent(clientWin, appId);
 
@@ -954,13 +961,13 @@ async function XBlobRead(X, routerWin, blobId, host, version, clientWin = 0, app
     } catch (_) {}
   }
 
+  let blobData = null;
   // 1. Try socket GET
   try {
     const sockPath = (await getXBlobSocketPath(X, hostWin)) || process.env.XBLOB_SOCKET_PATH;
     if (sockPath && fs.existsSync(sockPath)) {
       try {
-        const blobData = await httpGetBlobOverSocket(sockPath, hexBlobId, userAgent);
-        if (blobData) return blobData;
+        blobData = await httpGetBlobOverSocket(sockPath, hexBlobId, userAgent);
       } catch (sockErr) {
         logger.warn(`XBlobRead socket GET /blobs/${hexBlobId} failed: ${sockErr.message}`);
       }
@@ -968,12 +975,39 @@ async function XBlobRead(X, routerWin, blobId, host, version, clientWin = 0, app
   } catch (_) {}
 
   // 2. Try HTTP port GET
-  const httpPort = parseInt(process.env.XINTENT_PORT || process.env.PORT || '12345', 10);
-  try {
-    const blobData = await httpGetBlobOverHttp(httpPort, hexBlobId, userAgent);
-    if (blobData) return blobData;
-  } catch (httpErr) {
-    logger.warn(`XBlobRead HTTP GET /blobs/${hexBlobId} failed: ${httpErr.message}`);
+  if (!blobData) {
+    const httpPort = parseInt(process.env.XINTENT_PORT || process.env.PORT || '12345', 10);
+    try {
+      blobData = await httpGetBlobOverHttp(httpPort, hexBlobId, userAgent);
+    } catch (httpErr) {
+      logger.warn(`XBlobRead HTTP GET /blobs/${hexBlobId} failed: ${httpErr.message}`);
+    }
+  }
+
+  if (blobData) {
+    if (receiveFd) {
+      if (typeof blobData.data === 'string' && fs.existsSync(blobData.data)) {
+        try {
+          const fd = fs.openSync(blobData.data, 'r');
+          blobData.data = fd;
+          blobData._dataType = 'fd-rights';
+          blobData.contentEncoding = 'fd-rights';
+        } catch (_) {}
+      }
+    } else {
+      if (typeof blobData.data === 'string' && (blobData.data.startsWith('/proc/') || fs.existsSync(blobData.data))) {
+        try {
+          blobData.data = fs.readFileSync(blobData.data);
+          blobData._dataType = 'binary';
+        } catch (_) {}
+      } else if (typeof blobData.data === 'number' && blobData.data >= 0) {
+        try {
+          blobData.data = fs.readFileSync(`/proc/self/fd/${blobData.data}`);
+          blobData._dataType = 'binary';
+        } catch (_) {}
+      }
+    }
+    return blobData;
   }
 
   throw new Error(`XBlobRead: blob ${hexBlobId} not found on XBlob host`);

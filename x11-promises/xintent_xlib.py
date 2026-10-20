@@ -396,24 +396,35 @@ def parse_xblob_at_rest(raw: Any, received_fds: Optional[List[int]] = None) -> A
     return result
 
 
-def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any) -> Optional[int]:
+def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any, sender_win: Optional[int] = None) -> Optional[int]:
     try:
         mime_type = "application/json"
         content_enc = "identity"
         fd_to_pass = None
 
         if isinstance(blob_data, int) and blob_data >= 0:
-            fd_to_pass = blob_data
-            body_bytes = str(blob_data).encode("utf-8")
+            body_bytes = f"/proc/{os.getpid()}/fd/{blob_data}".encode("utf-8")
             mime_type = "application/octet-stream"
-            content_enc = "fd-rights"
+            content_enc = "file-path"
         elif isinstance(blob_data, dict):
             d = blob_data.get("data")
             mime_type = blob_data.get("type") or ("application/octet-stream" if isinstance(d, (bytes, bytearray)) else "application/json")
-            if blob_data.get("_dataType") == "fd-rights" or blob_data.get("contentEncoding") == "fd-rights":
-                content_enc = "fd-rights"
+            if blob_data.get("_dataType") in ("fd-rights", "file-path") or blob_data.get("contentEncoding") in ("fd-rights", "file-path"):
+                content_enc = "file-path"
                 if isinstance(d, int) and d >= 0:
-                    fd_to_pass = d
+                    blob_data = dict(blob_data)
+                    blob_data["data"] = f"/proc/{os.getpid()}/fd/{d}"
+                    blob_data["_dataType"] = "file-path"
+                    blob_data["contentEncoding"] = "file-path"
+                    body_bytes = json.dumps(blob_data).encode("utf-8")
+                elif isinstance(d, str):
+                    blob_data = dict(blob_data)
+                    blob_data["_dataType"] = "file-path"
+                    blob_data["contentEncoding"] = "file-path"
+                    body_bytes = json.dumps(blob_data).encode("utf-8")
+                else:
+                    logger.error(f"XBlob fd-rights requires an integer file descriptor or file path string, got '{type(d).__name__}': {d}")
+                    raise ValueError(f"XBlob fd-rights requires an integer file descriptor or file path string, got '{type(d).__name__}': {d}")
             elif blob_data.get("_dataType") == "base64" or blob_data.get("contentEncoding") == "base64":
                 content_enc = "base64"
             elif blob_data.get("contentEncoding"):
@@ -437,10 +448,15 @@ def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any) -> Optional[in
             body_bytes = json.dumps(blob_data).encode("utf-8")
 
         xblob_type = blob_data.get("xblobType", "Blob") if isinstance(blob_data, dict) else "Blob"
+        hostname = socket.gethostname()
+        display = (os.environ.get("DISPLAY") or ":0").replace(":", "")
+        wid_hex = hex(sender_win) if sender_win else "0x0"
+        origin = f"{hostname}:{display}/{wid_hex}"
 
         req_lines = [
             "PUT /blobs HTTP/1.1",
             "Host: localhost",
+            f"Origin: {origin}",
             f"Content-Type: {mime_type}",
             f"Content-Length: {len(body_bytes)}",
             f"Content-Encoding: {content_enc}",
@@ -500,6 +516,77 @@ def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any) -> Optional[in
             return int(x_str)
     except Exception as e:
         sys.stderr.write(f"[libxintent.py debug] unix socket PUT /blobs error: {e}\n")
+        sys.stderr.flush()
+    return None
+
+
+def _http_put_blobs_http(port: int, blob_data: Any, sender_win: Optional[int] = None) -> Optional[int]:
+    try:
+        import urllib.request
+        mime_type = "application/json"
+        content_enc = "identity"
+
+        if isinstance(blob_data, dict):
+            d = blob_data.get("data")
+            mime_type = blob_data.get("type") or ("application/octet-stream" if isinstance(d, (bytes, bytearray)) else "application/json")
+            if blob_data.get("_dataType") == "base64" or blob_data.get("contentEncoding") == "base64":
+                content_enc = "base64"
+            elif blob_data.get("contentEncoding"):
+                content_enc = blob_data.get("contentEncoding")
+
+            if isinstance(d, (bytes, bytearray)):
+                body_bytes = bytes(d)
+            elif isinstance(d, str):
+                body_bytes = d.encode("utf-8")
+            elif d is not None:
+                body_bytes = json.dumps(d).encode("utf-8")
+            else:
+                body_bytes = json.dumps(blob_data).encode("utf-8")
+        elif isinstance(blob_data, (bytes, bytearray)):
+            body_bytes = bytes(blob_data)
+            mime_type = "application/octet-stream"
+        elif isinstance(blob_data, str):
+            body_bytes = blob_data.encode("utf-8")
+            mime_type = "text/plain"
+        else:
+            body_bytes = json.dumps(blob_data).encode("utf-8")
+
+        xblob_type = blob_data.get("xblobType", "Blob") if isinstance(blob_data, dict) else "Blob"
+        hostname = socket.gethostname()
+        display = (os.environ.get("DISPLAY") or ":0").replace(":", "")
+        wid_hex = hex(sender_win) if sender_win else "0x0"
+        origin = f"{hostname}:{display}/{wid_hex}"
+
+        req = urllib.request.Request(
+            f"http://localhost:{port}/blobs",
+            data=body_bytes,
+            method="PUT",
+            headers={
+                "Content-Type": mime_type,
+                "Content-Encoding": content_enc,
+                "Accept-Encoding": "identity, base64, fd-rights",
+                "X-XBlob-Type": xblob_type,
+                "Origin": origin,
+            }
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw_blob_id = resp.headers.get("X-Blob-Id")
+            if not raw_blob_id:
+                res_body = resp.read().decode("utf-8", errors="replace")
+                try:
+                    js = json.loads(res_body)
+                    raw_blob_id = js.get("blobId") or js.get("blob")
+                except Exception:
+                    pass
+            if raw_blob_id:
+                if isinstance(raw_blob_id, int):
+                    return raw_blob_id
+                x_str = str(raw_blob_id).strip()
+                if x_str.startswith("0x") or x_str.startswith("0X"):
+                    return int(x_str, 16)
+                return int(x_str)
+    except Exception as e:
+        sys.stderr.write(f"[libxintent.py debug] HTTP PUT /blobs error: {e}\n")
         sys.stderr.flush()
     return None
 
@@ -712,63 +799,15 @@ class XIntentXlibClient:
             )
 
     def blob_create(self, blob_data: Any, timeout_sec: float = 5.0) -> int:
-        """Creates an XBlob owned by client_win, translating via PUT /blobs over local UNIX socket if available."""
+        """Creates an XBlob by contacting the local XBlob Host via PUT /blobs over local UNIX socket or HTTP."""
         sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
         if sock_path and os.path.exists(sock_path):
             blob_id = _http_put_blobs_unix_socket(sock_path, blob_data)
             if blob_id:
                 return blob_id
 
-        type_atom = 0
-        if isinstance(blob_data, dict) and blob_data.get("type"):
-            mime_type = blob_data["type"]
-            type_atom = self.x11.intern_atom(mime_type)
-
-        cookie = random.randint(1, 0x7FFFFFFF)
-        router_id = self.get_router_win_id()
-        self.x11.send_client_message(
-            router_id,
-            int(self.atoms["XBLOB_CREATE_V0"]),
-            [self.client_win.id, cookie, type_atom],
-        )
-
-        start_time = time.time()
-        blob_id = 0
-        atom_resp = int(self.atoms["XBLOB_CREATE_RESPONSE_V0"])
-
-        while time.time() - start_time < timeout_sec:
-            events_to_check = list(self.pending_events_queue)
-            self.pending_events_queue.clear()
-
-            while self.x11.disp.pending_events():
-                events_to_check.append(self.x11.disp.next_event())
-
-            matched_idx = -1
-            for idx, event in enumerate(events_to_check):
-                if event.type == X.ClientMessage and int(event.client_type) == atom_resp:
-                    data32 = _extract_event_data(event)
-                    if data32 and len(data32) >= 3 and (int(data32[2]) & 0xFFFFFFFF) == (cookie & 0xFFFFFFFF):
-                        blob_id = data32[1]
-                        matched_idx = idx
-                        break
-
-            if matched_idx >= 0:
-                for idx, event in enumerate(events_to_check):
-                    if idx != matched_idx:
-                        self.pending_events_queue.append(event)
-                break
-            else:
-                self.pending_events_queue.extend(events_to_check)
-
-            time.sleep(0.01)
-
-        if not blob_id:
-            raise RuntimeError(
-                f"XBlobCreate timed out waiting for XBLOB_CREATE_RESPONSE_V0 (cookie {cookie})"
-            )
-
-        self.blob_write(blob_id, blob_data)
-        return blob_id
+        http_port = int(os.environ.get("XINTENT_PORT") or os.environ.get("PORT") or 12345)
+        return _http_put_blobs_http(http_port, blob_data) or 0
 
     def blob_write(self, blob_id: int, blob_data: Any):
         """Sends XBlob payload data to XBLOB_HOST via HTTP over UNIX socket."""
@@ -821,7 +860,7 @@ class XIntentXlibClient:
         win_hex = hex(target_win) if isinstance(target_win, int) else str(target_win)
         return f"{host}:{display}/{win_hex} (app={self.app_id})"
 
-    def blob_read(self, blob_id: int, win_id: Optional[int] = None) -> Any:
+    def blob_read(self, blob_id: int, win_id: Optional[int] = None, receive_fd: bool = False) -> Any:
         """Reads XBlob payload from XBLOB_HOST via local UNIX socket or HTTP."""
         blob_hex = hex(blob_id)
         sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
@@ -829,6 +868,31 @@ class XIntentXlibClient:
         if sock_path and os.path.exists(sock_path):
             blob_data = _http_get_blob_unix_socket(sock_path, blob_hex, user_agent=user_agent)
             if blob_data:
+                file_path = blob_data.get("data")
+                if receive_fd:
+                    if isinstance(file_path, str) and os.path.exists(file_path):
+                        try:
+                            opened_fd = os.open(file_path, os.O_RDONLY)
+                            blob_data["data"] = opened_fd
+                            blob_data["_dataType"] = "fd-rights"
+                            blob_data["contentEncoding"] = "fd-rights"
+                        except Exception:
+                            pass
+                else:
+                    if isinstance(file_path, str) and (file_path.startswith("/proc/") or os.path.exists(file_path)):
+                        try:
+                            with open(file_path, "rb") as f:
+                                blob_data["data"] = f.read()
+                                blob_data["_dataType"] = "binary"
+                        except Exception:
+                            pass
+                    elif isinstance(file_path, int) and file_path >= 0:
+                        try:
+                            with open(f"/proc/self/fd/{file_path}", "rb") as f:
+                                blob_data["data"] = f.read()
+                                blob_data["_dataType"] = "binary"
+                        except Exception:
+                            pass
                 return blob_data
 
         raise RuntimeError(

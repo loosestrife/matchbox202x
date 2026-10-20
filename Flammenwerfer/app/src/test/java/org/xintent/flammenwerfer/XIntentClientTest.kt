@@ -13,6 +13,7 @@ class XIntentClientTest {
         assertNotNull(XIntentClient.FLAMMENWERFER_MANIFEST)
         assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("[app]"))
         assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("id ="))
+        assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("\"ui.TextToSpeech\" = true"))
     }
 
     @Test
@@ -59,6 +60,35 @@ class XIntentClientTest {
     }
 
     @Test
+    fun testTrimWavBinaryBytes() {
+        // Construct a synthetic 44-byte WAV header with 10 bytes PCM = 54 bytes total, plus 4 trailing delimiter bytes
+        val wavBuf = ByteArray(58)
+        wavBuf[0] = 'R'.code.toByte(); wavBuf[1] = 'I'.code.toByte(); wavBuf[2] = 'F'.code.toByte(); wavBuf[3] = 'F'.code.toByte()
+        wavBuf[8] = 'W'.code.toByte(); wavBuf[9] = 'A'.code.toByte(); wavBuf[10] = 'V'.code.toByte(); wavBuf[11] = 'E'.code.toByte()
+        wavBuf[36] = 'd'.code.toByte(); wavBuf[37] = 'a'.code.toByte(); wavBuf[38] = 't'.code.toByte(); wavBuf[39] = 'a'.code.toByte()
+        // subchunk2Size = 10 (bytes 40-43)
+        wavBuf[40] = 10; wavBuf[41] = 0; wavBuf[42] = 0; wavBuf[43] = 0
+        // trailing 4 bytes
+        wavBuf[54] = '\r'.code.toByte(); wavBuf[55] = '\n'.code.toByte(); wavBuf[56] = '-'.code.toByte(); wavBuf[57] = '-'.code.toByte()
+
+        val trimmed = XIntentClient.trimWavBinaryBytes(wavBuf)
+        assertEquals(54, trimmed.size)
+    }
+
+    @Test
+    fun testExtractAudioBytesFromRawResponseBinary() {
+        val wavBuf = ByteArray(50)
+        wavBuf[0] = 'R'.code.toByte(); wavBuf[1] = 'I'.code.toByte(); wavBuf[2] = 'F'.code.toByte(); wavBuf[3] = 'F'.code.toByte()
+        wavBuf[8] = 'W'.code.toByte(); wavBuf[9] = 'A'.code.toByte(); wavBuf[10] = 'V'.code.toByte(); wavBuf[11] = 'E'.code.toByte()
+        wavBuf[36] = 'd'.code.toByte(); wavBuf[37] = 'a'.code.toByte(); wavBuf[38] = 't'.code.toByte(); wavBuf[39] = 'a'.code.toByte()
+        wavBuf[40] = 6; wavBuf[41] = 0; wavBuf[42] = 0; wavBuf[43] = 0
+
+        val extracted = XIntentClient.extractAudioBytesFromRawResponse(wavBuf)
+        assertNotNull(extracted)
+        assertEquals(50, extracted!!.size)
+    }
+
+    @Test
     fun testParseMediaPlayTargets() {
         val sampleTagsJson = """
         {
@@ -82,7 +112,7 @@ class XIntentClientTest {
         val targets = XIntentClient.parseMediaPlayTargets(sampleTagsJson)
         assertTrue(targets.any { it.appId == "dlna-living-room-tv" })
         assertTrue(targets.any { it.appId == "user-desktop" })
-        
+
         val dlnaTarget = targets.first { it.appId == "dlna-living-room-tv" }
         assertEquals("DLNA (Living Room TV)", dlnaTarget.name)
         assertTrue(dlnaTarget.accept.contains("video/webm"))

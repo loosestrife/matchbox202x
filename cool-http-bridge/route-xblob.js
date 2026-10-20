@@ -109,9 +109,9 @@ module.exports = ({ X, clientWin }) => {
 
         let bodyPayload = blobData.data !== undefined ? blobData.data : blobData;
 
-        // Check if payload is an open file descriptor or file path (e.g. /proc/self/fd/N or disk path)
+        // Check if payload is an open OS file descriptor (e.g. /proc/self/fd/N or /dev/fd/N)
         const fdPath = typeof bodyPayload === 'string' ? bodyPayload.trim() : null;
-        if (fdPath && (fdPath.startsWith('/proc/') || fdPath.startsWith('/dev/') || fs.existsSync(fdPath))) {
+        if (fdPath && (fdPath.startsWith('/proc/') || fdPath.startsWith('/dev/'))) {
           const headers = {
             'Content-Type': mimeType,
             'X-XBlob-Type': blobData.xblobType || 'ReadableStream',
@@ -133,6 +133,16 @@ module.exports = ({ X, clientWin }) => {
         let bodyBuf;
         if (Buffer.isBuffer(bodyPayload)) {
           bodyBuf = bodyPayload;
+        } else if (typeof bodyPayload === 'string') {
+          if (blobData._dataType === 'base64' || blobData.contentEncoding === 'base64') {
+            try {
+              bodyBuf = Buffer.from(bodyPayload, 'base64');
+            } catch (_) {
+              bodyBuf = Buffer.from(bodyPayload, 'utf8');
+            }
+          } else {
+            bodyBuf = Buffer.from(bodyPayload, 'utf8');
+          }
         } else if (typeof bodyPayload === 'object') {
           bodyBuf = Buffer.from(JSON.stringify(bodyPayload), 'utf8');
         } else {
@@ -143,7 +153,7 @@ module.exports = ({ X, clientWin }) => {
         if (!isStream) {
           res.setHeader('Content-Length', blobData.size !== undefined ? blobData.size : bodyBuf.length);
         }
-        const contentEnc = blobData.contentEncoding || (dataType === 'fd-rights' ? 'fd-rights' : (dataType === 'base64' ? 'base64' : null));
+        const contentEnc = dataType === 'fd-rights' ? 'fd-rights' : 'identity';
         if (contentEnc && contentEnc !== 'identity') {
           res.setHeader('Content-Encoding', contentEnc);
         }

@@ -1,3 +1,4 @@
+const fs = require('fs');
 const { on } = require('node:events');
 const TOML = require('@iarna/toml');
 const { Logger, HttpError, alStorage } = require('../server-tools');
@@ -255,28 +256,46 @@ const routeIntent = async (req, res) => {
         }
 
         const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'application/octet-stream');
-        const dataType = blobData._dataType || (mimeType.includes('application/json') ? 'json' : 'binary');
 
         let bodyPayload = blobData.data !== undefined ? blobData.data : blobData;
         let bodyBuf;
         if (Buffer.isBuffer(bodyPayload)) {
           bodyBuf = bodyPayload;
+        } else if (typeof bodyPayload === 'number' && bodyPayload >= 0) {
+          const fdPath = `/proc/self/fd/${bodyPayload}`;
+          try {
+            bodyBuf = fs.readFileSync(fdPath);
+          } catch (_) {
+            bodyBuf = Buffer.alloc(0);
+          }
+        } else if (typeof bodyPayload === 'string') {
+          if (fs.existsSync(bodyPayload)) {
+            try {
+              bodyBuf = fs.readFileSync(bodyPayload);
+            } catch (_) {
+              bodyBuf = Buffer.from(bodyPayload, 'utf8');
+            }
+          } else if (blobData._dataType === 'base64' || blobData.contentEncoding === 'base64') {
+            try {
+              bodyBuf = Buffer.from(bodyPayload, 'base64');
+            } catch (_) {
+              bodyBuf = Buffer.from(bodyPayload, 'utf8');
+            }
+          } else {
+            bodyBuf = Buffer.from(bodyPayload, 'utf8');
+          }
         } else if (typeof bodyPayload === 'object') {
           bodyBuf = Buffer.from(JSON.stringify(bodyPayload), 'utf8');
         } else {
           bodyBuf = Buffer.from(String(bodyPayload), 'utf8');
         }
 
-        const bodyLen = blobData.size !== undefined ? blobData.size : bodyBuf.length;
+        const bodyLen = bodyBuf.length;
 
         const headers = [
           `Content-Type: ${mimeType}`,
           `Content-Length: ${bodyLen}`,
         ];
-
-        if (dataType === 'base64') {
-          headers.push('Content-Encoding: base64');
-        }
 
         if (blobData.name) {
           headers.push(`Content-Disposition: attachment; filename="${blobData.name}"`);
@@ -294,6 +313,7 @@ const routeIntent = async (req, res) => {
         const footerBuf = Buffer.from('\r\n\r\n', 'utf8');
 
         res.write(Buffer.concat([headerBuf, bodyBuf, footerBuf]));
+        logger.info(`route-intent: [HTTP STREAM] Wrote XBlob frame part to HTTP response stream (${bodyBuf.length} bytes, type: ${mimeType})`);
         if (typeof res.flush === 'function') {
           try { res.flush(); } catch (_) {}
         }
