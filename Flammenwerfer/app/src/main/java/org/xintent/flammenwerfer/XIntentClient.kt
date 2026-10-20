@@ -223,6 +223,8 @@ name = "user-phone:flammenwerfer"
     fun setServerUrl(context: Context, url: String) = XIntentPreferences.setServerUrl(context, url)
     fun getTargetApp(context: Context, actionIndex: Int): String = XIntentPreferences.getTargetApp(context, actionIndex)
     fun setTargetApp(context: Context, actionIndex: Int, appName: String) = XIntentPreferences.setTargetApp(context, actionIndex, appName)
+    fun getTtsTargetApp(context: Context): String = XIntentPreferences.getTtsTargetApp(context)
+    fun setTtsTargetApp(context: Context, appName: String) = XIntentPreferences.setTtsTargetApp(context, appName)
 
     // Log Delegations
     fun getLogHistory(): String = XIntentLogManager.getLogHistory()
@@ -768,7 +770,7 @@ name = "user-phone:flammenwerfer"
             val responseCode = connection.responseCode
             val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
             val rawBytes = (inputStream ?: "".byteInputStream()).readBytes()
-            val audioBytes = extractAudioBytesFromRawResponse(rawBytes)
+            val (_, audioBytes) = parseMultipartRawBytes(rawBytes)
 
             if (responseCode in 200..299) {
                 addLog("$logPrefix SUCCESS -> TTS processed")

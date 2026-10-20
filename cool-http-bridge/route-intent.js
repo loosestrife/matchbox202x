@@ -313,7 +313,7 @@ const routeIntent = async (req, res) => {
         const footerBuf = Buffer.from('\r\n\r\n', 'utf8');
 
         res.write(Buffer.concat([headerBuf, bodyBuf, footerBuf]));
-        logger.info(`route-intent: [HTTP STREAM] Wrote XBlob frame part to HTTP response stream (${bodyBuf.length} bytes, type: ${mimeType})`);
+        logger.info(`route-intent: [HTTP STREAM] Wrote XBlob frame part to HTTP response stream (${bodyBuf.length} bytes, type: ${mimeType}, data_type: ${blobData?._dataType}, content_encoding: ${blobData?.contentEncoding})`);
         if (typeof res.flush === 'function') {
           try { res.flush(); } catch (_) {}
         }
@@ -355,6 +355,7 @@ const routeIntent = async (req, res) => {
             try {
               const routerWin = xintent.routerWin || (await xintent.getValidRouterWin(X, X.rootWin || 0));
               const blob = await xintent.XBlobRead(X, routerWin, blobId);
+              logger.info(`[route-intent] XBlobRead result for blobId=${blobId}: size=${blob?.size}, type=${blob?.type}, _dataType=${blob?._dataType}, contentEncoding=${blob?.contentEncoding}, isBuffer=${Buffer.isBuffer(blob?.data)}, dataLength=${Buffer.isBuffer(blob?.data) ? blob.data.length : (typeof blob?.data === 'string' ? blob.data.length : 'N/A')}`);
               if (blob && !res.writableEnded && !res.finished) {
                 const hexBlobId = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
                 writeXBlobFrame(res, blob, { 'X-Blob-Id': hexBlobId });

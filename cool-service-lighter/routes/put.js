@@ -69,10 +69,10 @@ const handlePut = async (req, res, { url, pathParts, hostBlobs, parseBlobId, toH
         }
       }
 
-      if ((requestSenderWin === null || requestSenderWin === undefined || isNaN(requestSenderWin)) && !targetBlob) {
-        logger.warn(`Rejected PUT /blobs create request: X-Sender-Win or Origin header is missing`);
+      if ((requestSenderWin === null || requestSenderWin === undefined || isNaN(requestSenderWin) || requestSenderWin <= 0) && !targetBlob) {
+        logger.warn(`Rejected PUT /blobs create request: X-Sender-Win or Origin header is missing or invalid (got ${senderWinHeader || originHeader})`);
         res.writeHead(403, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ status: 'error', message: 'X-Sender-Win or Origin header is required on PUT to create a blob' }));
+        return res.end(JSON.stringify({ status: 'error', message: 'Valid non-zero X-Sender-Win or Origin header is required on PUT to create a blob' }));
       }
 
       if (requestSenderWin !== null && requestSenderWin !== undefined && !isNaN(requestSenderWin)) {
@@ -96,17 +96,18 @@ const handlePut = async (req, res, { url, pathParts, hostBlobs, parseBlobId, toH
         const srcPath = typeof blobData.data === 'number' ? `/proc/self/fd/${blobData.data}` : String(blobData.data).trim();
         if (srcPath && (srcPath.startsWith('/proc/') || srcPath.startsWith('/dev/') || fs.existsSync(srcPath))) {
           try {
-            const openedFd = fs.openSync(srcPath, 'r');
+            const openedFd = typeof blobData.data === 'number' ? blobData.data : fs.openSync(srcPath, 'r');
+            try { fs.lseekSync(openedFd, 0, 0); } catch (_) {}
             const stats = fs.fstatSync(openedFd);
 
             blobData.openedFd = openedFd;
             blobData.data = null;
-            blobData._dataType = 'file-path';
-            blobData.contentEncoding = 'file-path';
+            blobData._dataType = 'fd-rights';
+            blobData.contentEncoding = 'fd-rights';
             blobData.size = stats.size;
             blobData.xblobType = 'Blob';
 
-            logger.info(`[xblob-host] Opened file-path/fd-rights source '${srcPath}' (FD ${openedFd}, ${stats.size} bytes) before returning 201 Created`);
+            logger.info(`[xblob-host] Stored fd-rights source '${srcPath}' (FD ${openedFd}, ${stats.size} bytes) rewinded to offset 0`);
           } catch (err) {
             logger.warn(`Failed opening file-path/fd-rights for XBlob ${toHexBlobId(blobId)}: ${err.message}`);
           }

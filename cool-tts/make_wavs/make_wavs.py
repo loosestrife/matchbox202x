@@ -70,13 +70,13 @@ def intent_server():
                         "xblobType": "File",
                         "name": file_id,
                         "size": wav_size,
-                        "data": audio_fd.fileno(),
-                        "_dataType": "fd-rights",
-                        "contentEncoding": "fd-rights"
+                        "data": out_path,
+                        "_dataType": "file-path",
+                        "contentEncoding": "file-path"
                     }
                     blob_id = server.x11_client.blob_create(blob_payload)
                 except Exception as blob_err:
-                    logger.error(f"[cool-tts] Failed to create WAV XBlob via fd: {blob_err}")
+                    logger.error(f"[cool-tts] Failed to create WAV XBlob via file-path: {blob_err}")
 
             try:
                 audio_fd.close()

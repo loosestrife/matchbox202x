@@ -457,11 +457,12 @@ def _http_put_blobs_unix_socket(socket_path: str, blob_data: Any, sender_win: Op
             "PUT /blobs HTTP/1.1",
             "Host: localhost",
             f"Origin: {origin}",
+            f"X-Sender-Win: {wid_hex}",
             f"Content-Type: {mime_type}",
             f"Content-Length: {len(body_bytes)}",
             f"Content-Encoding: {content_enc}",
             f"X-XBlob-Type: {xblob_type}",
-            "Accept-Encoding: identity, base64, fd-rights",
+            "Accept-Encoding: identity, base64, fd-rights, file-path",
             "Connection: close",
             "",
             ""
@@ -564,9 +565,10 @@ def _http_put_blobs_http(port: int, blob_data: Any, sender_win: Optional[int] = 
             headers={
                 "Content-Type": mime_type,
                 "Content-Encoding": content_enc,
-                "Accept-Encoding": "identity, base64, fd-rights",
+                "Accept-Encoding": "identity, base64, fd-rights, file-path",
                 "X-XBlob-Type": xblob_type,
                 "Origin": origin,
+                "X-Sender-Win": wid_hex,
             }
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -801,13 +803,14 @@ class XIntentXlibClient:
     def blob_create(self, blob_data: Any, timeout_sec: float = 5.0) -> int:
         """Creates an XBlob by contacting the local XBlob Host via PUT /blobs over local UNIX socket or HTTP."""
         sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
+        sender_win = self.client_win.id if self.client_win else 0
         if sock_path and os.path.exists(sock_path):
-            blob_id = _http_put_blobs_unix_socket(sock_path, blob_data)
+            blob_id = _http_put_blobs_unix_socket(sock_path, blob_data, sender_win=sender_win)
             if blob_id:
                 return blob_id
 
         http_port = int(os.environ.get("XINTENT_PORT") or os.environ.get("PORT") or 12345)
-        return _http_put_blobs_http(http_port, blob_data) or 0
+        return _http_put_blobs_http(http_port, blob_data, sender_win=sender_win) or 0
 
     def blob_write(self, blob_id: int, blob_data: Any):
         """Sends XBlob payload data to XBLOB_HOST via HTTP over UNIX socket."""

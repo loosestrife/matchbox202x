@@ -184,4 +184,15 @@ name = "$advertisedName"
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString("target_app_action_$actionIndex", cleanApp).apply()
     }
+
+    fun getTtsTargetApp(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString("tts_target_app", "cool-tts") ?: "cool-tts"
+    }
+
+    fun setTtsTargetApp(context: Context, appName: String) {
+        val cleanApp = appName.trim()
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString("tts_target_app", cleanApp).apply()
+    }
 }

@@ -67,6 +67,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var action1App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 1)) }
     var action2App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 2)) }
     var action3App by remember { mutableStateOf(XIntentClient.getTargetApp(context, 3)) }
+    var ttsTargetApp by remember { mutableStateOf(XIntentClient.getTtsTargetApp(context)) }
     var defaultRemoteDevice by remember { mutableStateOf(XIntentClient.getDefaultRemoteDevice(context)) }
     var audioRoutingMode by remember { mutableStateOf(XIntentClient.getAudioRoutingMode(context)) }
     var ttsRoutingMode by remember { mutableStateOf(XIntentClient.getTtsRoutingMode(context)) }
@@ -238,6 +239,15 @@ fun MainScreen(modifier: Modifier = Modifier) {
         )
 
         OutlinedTextField(
+            value = ttsTargetApp,
+            onValueChange = { ttsTargetApp = it },
+            label = { Text("TTS Target App (ui.TextToSpeech)") },
+            placeholder = { Text("cool-tts") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+
+        OutlinedTextField(
             value = defaultRemoteDevice,
             onValueChange = { defaultRemoteDevice = it },
             label = { Text("Default Remote Device Target") },
@@ -302,6 +312,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 XIntentClient.setTargetApp(context, 1, action1App)
                 XIntentClient.setTargetApp(context, 2, action2App)
                 XIntentClient.setTargetApp(context, 3, action3App)
+                XIntentClient.setTtsTargetApp(context, ttsTargetApp)
                 XIntentClient.setDefaultRemoteDevice(context, defaultRemoteDevice)
                 XIntentClient.setAudioRoutingMode(context, audioRoutingMode)
                 XIntentClient.setTtsRoutingMode(context, ttsRoutingMode)
@@ -610,7 +621,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             XIntentClient.sendTextToSpeechIntent(
                                 context = context,
                                 text = testText,
-                                targetApp = action1App.ifBlank { "cool-tts" },
+                                targetApp = ttsTargetApp.ifBlank { "cool-tts" },
                             )
                             isSending = false
                         }
@@ -619,7 +630,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 enabled = !isSending && testText.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Test ui.TextToSpeech Intent (--app ${action1App.ifBlank { "cool-tts" }})")
+                Text("Test ui.TextToSpeech Intent (--app ${ttsTargetApp.ifBlank { "cool-tts" }})")
             }
 
             Button(

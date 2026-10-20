@@ -1,12 +1,15 @@
 package org.xintent.flammenwerfer
 
 import android.media.AudioFormat
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
 import android.util.Base64
 import android.util.Log
+import android.widget.Toast
 import kotlinx.coroutines.runBlocking
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -49,7 +52,7 @@ class XIntentTextToSpeechService : TextToSpeechService() {
         if (text.isBlank()) return
 
         val speechRate = (request.speechRate / 100.0f).coerceIn(0.5f, 3.0f)
-        val targetApp = XIntentClient.getTargetApp(applicationContext, 1).ifBlank { "cool-tts" }
+        val targetApp = XIntentClient.getTtsTargetApp(applicationContext).ifBlank { "cool-tts" }
 
         Log.i(TAG, "Synthesizing text via $targetApp: $text")
 
@@ -93,6 +96,19 @@ class XIntentTextToSpeechService : TextToSpeechService() {
                         offset += chunkSize
                         remaining -= chunkSize
                     }
+                }
+            } else {
+                val errorDetails = if (!result.success && result.errorMessage.isNotBlank()) {
+                    ": ${result.errorMessage}"
+                } else {
+                    ""
+                }
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        applicationContext,
+                        "XIntent TTS failed to connect to bridge$errorDetails",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }

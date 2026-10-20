@@ -37,6 +37,8 @@ const handleGet = async (req, res, { url, pathParts, hostBlobs, parseBlobId, toH
       const isStream = blobData.xblobType === 'ReadableStream' || blobData.xblobType === 'MediaStream' || req.headers['x-xblob-type'] === 'ReadableStream';
       const hexBlobId = toHexBlobId(blobId);
 
+      logger.info(`[xblob-host GET /blobs] blobId=${blobId} (${hexBlobId}) stored state: size=${blobData.size}, openedFd=${blobData.openedFd}, _dataType=${blobData._dataType}, contentEncoding=${blobData.contentEncoding}, type=${mimeType}, dataIsBuffer=${Buffer.isBuffer(blobData.data)}, dataType=${typeof blobData.data}`);
+
       const wantsJson = req.headers['accept']?.includes('application/json') || url.pathname.includes('XBlobRead');
       if (wantsJson) {
         const responseObj = Object.assign({}, blobData);
@@ -56,8 +58,10 @@ const handleGet = async (req, res, { url, pathParts, hostBlobs, parseBlobId, toH
       // Handle streaming file descriptor or disk path
       let fdPath = null;
       if (blobData.openedFd !== undefined && blobData.openedFd !== null) {
+        try { fs.lseekSync(blobData.openedFd, 0, 0); } catch (_) {}
         fdPath = `/proc/self/fd/${blobData.openedFd}`;
       } else if (typeof blobData.data === 'number' && blobData.data >= 0) {
+        try { fs.lseekSync(blobData.data, 0, 0); } catch (_) {}
         fdPath = `/proc/self/fd/${blobData.data}`;
       } else if (typeof blobData.data === 'string') {
         const trimmed = blobData.data.trim();
@@ -67,30 +71,38 @@ const handleGet = async (req, res, { url, pathParts, hostBlobs, parseBlobId, toH
       }
 
       if (fdPath) {
+        let statSize = 0;
+        try {
+          if (fs.existsSync(fdPath)) {
+            statSize = fs.statSync(fdPath).size;
+          }
+        } catch (_) {}
+
+        logger.info(`[xblob-host GET /blobs] Streaming fdPath='${fdPath}' (stat size=${statSize} bytes, stored size=${blobData.size}) for blobId=${blobId}`);
+
         const responseHeaders = {
           'Content-Type': mimeType,
           'Accept-Encoding': 'identity, base64, fd-rights, file-path',
           'X-XBlob-Type': blobData.xblobType || 'ReadableStream',
           'X-Blob-Id': hexBlobId
         };
-        if (!isStream && blobData.size) {
-          responseHeaders['Content-Length'] = blobData.size;
+        if (!isStream && (blobData.size || statSize)) {
+          responseHeaders['Content-Length'] = blobData.size || statSize;
         }
         res.writeHead(200, responseHeaders);
-        logger.info(`GET: transferred ${blobData.size || 0} bytes via file-path`);
 
-        if (blobData.xblobType === 'MediaStream') {
-          if (!blobData.activeReadStream) {
-            blobData.activeReadStream = fs.createReadStream(fdPath);
-          }
-          blobData.activeReadStream.pipe(res, { end: false });
-          req.on('close', () => {
-            try { blobData.activeReadStream.unpipe(res); } catch (_) {}
-          });
-          return;
-        }
+        let bytesPiped = 0;
+        const readStream = fs.createReadStream(fdPath, { start: 0 });
+        readStream.on('data', (chunk) => {
+          bytesPiped += chunk.length;
+        });
+        readStream.on('end', () => {
+          logger.info(`[xblob-host GET /blobs] Finished piping fdPath '${fdPath}' for blob 0x${blobId.toString(16)}: ${bytesPiped} total bytes written to HTTP response`);
+        });
+        readStream.on('error', (err) => {
+          logger.error(`[xblob-host GET /blobs] Stream error on fdPath '${fdPath}' for blob 0x${blobId.toString(16)} after ${bytesPiped} bytes: ${err.message}`);
+        });
 
-        const readStream = fs.createReadStream(fdPath);
         return readStream.pipe(res);
       }
 
