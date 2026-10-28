@@ -16,39 +16,55 @@ object XIntentPreferences {
     private const val KEY_TTS_ROUTING_MODE = "tts_routing_mode"
     private const val KEY_CLIPBOARD_ROUTING_MODE = "clipboard_routing_mode"
     private const val KEY_FS_ROUTING_MODE = "fs_routing_mode"
+    private const val KEY_TTS_TARGET_APP = "tts_target_app"
 
     const val DEFAULT_SERVER_URL = "http://10.0.2.2:12345"
     const val DEFAULT_HOSTNAME = "user-phone"
     const val DEFAULT_UDP_PORT = 12346
     const val DEFAULT_REMOTE_DEVICE = "user-desktop"
 
-    fun getServerUrl(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
+    private fun getString(context: Context, key: String, default: String): String =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(key, default).orEmpty().ifBlank { default }
+
+    private fun setString(context: Context, key: String, value: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(key, value.trim()).apply()
     }
 
-    fun setServerUrl(context: Context, url: String) {
-        val cleanUrl = url.trim().removeSuffix("/")
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_SERVER_URL, cleanUrl).apply()
+    private fun getBoolean(context: Context, key: String, default: Boolean): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(key, default)
+
+    private fun setBoolean(context: Context, key: String, value: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(key, value).apply()
     }
 
-    fun getHostname(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val saved = prefs.getString(KEY_HOSTNAME, DEFAULT_HOSTNAME) ?: DEFAULT_HOSTNAME
-        return saved.ifBlank { DEFAULT_HOSTNAME }
+    private fun getRoutingMode(
+        context: Context,
+        modeKey: String,
+        legacyBoolKey: String,
+        legacyDefault: Boolean,
+        localModeName: String,
+    ): String {
+        val fallback = if (getBoolean(context, legacyBoolKey, legacyDefault)) localModeName else "normal"
+        return getString(context, modeKey, fallback)
     }
 
-    fun setHostname(context: Context, hostname: String) {
-        val cleanHostname = hostname.trim()
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_HOSTNAME, cleanHostname).apply()
-    }
+    fun getServerUrl(context: Context): String =
+        getString(context, KEY_SERVER_URL, DEFAULT_SERVER_URL)
 
-    fun getAdvertisedName(context: Context): String {
-        val host = getHostname(context)
-        return "$host:flammenwerfer"
-    }
+    fun setServerUrl(context: Context, url: String) =
+        setString(context, KEY_SERVER_URL, url.trim().removeSuffix("/"))
+
+    fun getHostname(context: Context): String =
+        getString(context, KEY_HOSTNAME, DEFAULT_HOSTNAME)
+
+    fun setHostname(context: Context, hostname: String) =
+        setString(context, KEY_HOSTNAME, hostname)
+
+    fun getAdvertisedName(context: Context): String =
+        "${getHostname(context)}:flammenwerfer"
 
     fun getManifest(context: Context): String {
         val advertisedName = getAdvertisedName(context)
@@ -68,131 +84,60 @@ name = "$advertisedName"
 """
     }
 
-    fun getUdpPort(context: Context): Int {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getInt(KEY_UDP_PORT, DEFAULT_UDP_PORT)
-    }
+    fun getUdpPort(context: Context): Int =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_UDP_PORT, DEFAULT_UDP_PORT)
 
     fun setUdpPort(context: Context, port: Int) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putInt(KEY_UDP_PORT, port).apply()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putInt(KEY_UDP_PORT, port).apply()
     }
 
-    fun getDefaultRemoteDevice(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_DEFAULT_REMOTE_DEVICE, DEFAULT_REMOTE_DEVICE) ?: DEFAULT_REMOTE_DEVICE
-    }
+    fun getDefaultRemoteDevice(context: Context): String =
+        getString(context, KEY_DEFAULT_REMOTE_DEVICE, DEFAULT_REMOTE_DEVICE)
 
-    fun setDefaultRemoteDevice(context: Context, device: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_DEFAULT_REMOTE_DEVICE, device.ifBlank { DEFAULT_REMOTE_DEVICE }).apply()
-    }
+    fun setDefaultRemoteDevice(context: Context, device: String) =
+        setString(context, KEY_DEFAULT_REMOTE_DEVICE, device.ifBlank { DEFAULT_REMOTE_DEVICE })
 
-    fun getAudioRoutingMode(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val saved = prefs.getString(KEY_AUDIO_ROUTING_MODE, null)
-        if (saved != null) return saved
-        return if (prefs.getBoolean(KEY_LOCAL_AUDIO, true)) "doLocalAudioCapture" else "normal"
-    }
+    fun getAudioRoutingMode(context: Context): String =
+        getRoutingMode(context, KEY_AUDIO_ROUTING_MODE, KEY_LOCAL_AUDIO, true, "doLocalAudioCapture")
 
-    fun setAudioRoutingMode(context: Context, mode: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_AUDIO_ROUTING_MODE, mode).apply()
-    }
+    fun setAudioRoutingMode(context: Context, mode: String) =
+        setString(context, KEY_AUDIO_ROUTING_MODE, mode)
 
-    fun getTtsRoutingMode(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val saved = prefs.getString(KEY_TTS_ROUTING_MODE, null)
-        if (saved != null) return saved
-        return if (prefs.getBoolean(KEY_LOCAL_TTS, false)) "doLocalTtsCapture" else "normal"
-    }
+    fun getTtsRoutingMode(context: Context): String =
+        getRoutingMode(context, KEY_TTS_ROUTING_MODE, KEY_LOCAL_TTS, false, "doLocalTtsCapture")
 
-    fun setTtsRoutingMode(context: Context, mode: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_TTS_ROUTING_MODE, mode).apply()
-    }
+    fun setTtsRoutingMode(context: Context, mode: String) =
+        setString(context, KEY_TTS_ROUTING_MODE, mode)
 
-    fun getClipboardRoutingMode(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val saved = prefs.getString(KEY_CLIPBOARD_ROUTING_MODE, null)
-        if (saved != null) return saved
-        return if (prefs.getBoolean(KEY_LOCAL_CLIPBOARD, false)) "doLocalClipboardCapture" else "normal"
-    }
+    fun getClipboardRoutingMode(context: Context): String =
+        getRoutingMode(context, KEY_CLIPBOARD_ROUTING_MODE, KEY_LOCAL_CLIPBOARD, false, "doLocalClipboardCapture")
 
-    fun setClipboardRoutingMode(context: Context, mode: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_CLIPBOARD_ROUTING_MODE, mode).apply()
-    }
+    fun setClipboardRoutingMode(context: Context, mode: String) =
+        setString(context, KEY_CLIPBOARD_ROUTING_MODE, mode)
 
-    fun getFsRoutingMode(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val saved = prefs.getString(KEY_FS_ROUTING_MODE, null)
-        if (saved != null) return saved
-        return if (prefs.getBoolean(KEY_LOCAL_FS, false)) "doLocalFsCapture" else "normal"
-    }
+    fun getFsRoutingMode(context: Context): String =
+        getRoutingMode(context, KEY_FS_ROUTING_MODE, KEY_LOCAL_FS, false, "doLocalFsCapture")
 
-    fun setFsRoutingMode(context: Context, mode: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_FS_ROUTING_MODE, mode).apply()
-    }
+    fun setFsRoutingMode(context: Context, mode: String) =
+        setString(context, KEY_FS_ROUTING_MODE, mode)
 
-    fun isLocalAudioEnabled(context: Context): Boolean {
-        return getAudioRoutingMode(context) == "doLocalAudioCapture"
-    }
+    fun isLocalAudioEnabled(context: Context): Boolean =
+        getAudioRoutingMode(context) == "doLocalAudioCapture"
 
-    fun setLocalAudioEnabled(context: Context, enabled: Boolean) {
-        setAudioRoutingMode(context, if (enabled) "doLocalAudioCapture" else "normal")
-    }
+    fun isLocalTtsEnabled(context: Context): Boolean =
+        getTtsRoutingMode(context) == "doLocalTtsCapture"
 
-    fun isLocalTtsEnabled(context: Context): Boolean {
-        return getTtsRoutingMode(context) == "doLocalTtsCapture"
-    }
+    fun getTargetApp(context: Context, actionIndex: Int): String =
+        getString(context, "target_app_action_$actionIndex", if (actionIndex == 2) "cool-bible" else "cool-clips")
 
-    fun setLocalTtsEnabled(context: Context, enabled: Boolean) {
-        setTtsRoutingMode(context, if (enabled) "doLocalTtsCapture" else "normal")
-    }
+    fun setTargetApp(context: Context, actionIndex: Int, appName: String) =
+        setString(context, "target_app_action_$actionIndex", appName)
 
-    fun isLocalClipboardEnabled(context: Context): Boolean {
-        return getClipboardRoutingMode(context) == "doLocalClipboardCapture"
-    }
+    fun getTtsTargetApp(context: Context): String =
+        getString(context, KEY_TTS_TARGET_APP, "cool-tts")
 
-    fun setLocalClipboardEnabled(context: Context, enabled: Boolean) {
-        setClipboardRoutingMode(context, if (enabled) "doLocalClipboardCapture" else "normal")
-    }
-
-    fun isLocalFsEnabled(context: Context): Boolean {
-        return getFsRoutingMode(context) == "doLocalFsCapture"
-    }
-
-    fun setLocalFsEnabled(context: Context, enabled: Boolean) {
-        setFsRoutingMode(context, if (enabled) "doLocalFsCapture" else "normal")
-    }
-
-    fun getTargetApp(context: Context, actionIndex: Int): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val defaultApp = when (actionIndex) {
-            1 -> "cool-clips"
-            2 -> "cool-bible"
-            3 -> "cool-clips"
-            else -> "cool-clips"
-        }
-        return prefs.getString("target_app_action_$actionIndex", defaultApp) ?: defaultApp
-    }
-
-    fun setTargetApp(context: Context, actionIndex: Int, appName: String) {
-        val cleanApp = appName.trim()
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString("target_app_action_$actionIndex", cleanApp).apply()
-    }
-
-    fun getTtsTargetApp(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString("tts_target_app", "cool-tts") ?: "cool-tts"
-    }
-
-    fun setTtsTargetApp(context: Context, appName: String) {
-        val cleanApp = appName.trim()
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString("tts_target_app", cleanApp).apply()
-    }
+    fun setTtsTargetApp(context: Context, appName: String) =
+        setString(context, KEY_TTS_TARGET_APP, appName)
 }

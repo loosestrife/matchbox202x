@@ -4,7 +4,7 @@ LDFLAGS = -shared -ldl -lX11 -lm
 
 all: libxoss.so xoss test_glquake_sim
 
-libxoss.so: libxoss.c
+libxoss.so: libxoss.c xoss_internal.h xoss_ioctl.h
 	$(CC) $(CFLAGS) -shared -o $@ libxoss.c $(LDFLAGS)
 
 xoss: xoss.c

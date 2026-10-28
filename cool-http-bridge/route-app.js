@@ -1,71 +1,76 @@
 const path = require('path');
 const fs = require('fs');
-const {Logger, HttpError} = require('../server-tools');
-const {packageRegistry} = require('./package-registry');
+const { Logger, HttpError } = require('../server-tools');
+const { packageRegistry } = require('./package-registry');
 
-const logger = new Logger({module: 'route-app'});
+const logger = new Logger({ module: 'route-app' });
+
+function normalizeTargetPath(params) {
+  const raw = params.path || params[0] || params.card || params['0'];
+  if (Array.isArray(raw)) return raw.join('/');
+  return typeof raw === 'string' ? raw : '';
+}
+
+function tryServeFavicon(res, appName, targetPath) {
+  if (appName === 'favicon.ico') {
+    res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
+    return true;
+  }
+  if (targetPath !== 'favicon.ico') return false;
+
+  const pkg = packageRegistry[appName];
+  const localFavicon = pkg?._path ? path.join(pkg._path, 'favicon.ico') : null;
+  if (localFavicon && fs.existsSync(localFavicon) && fs.statSync(localFavicon).isFile()) {
+    res.sendFile(localFavicon);
+    return true;
+  }
+  res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
+  return true;
+}
+
+function findPackageByAppName(appName) {
+  if (packageRegistry[appName]) return packageRegistry[appName];
+  const strippedApp = appName.replace(/s$/, '');
+  return Object.values(packageRegistry).find((p) => {
+    const base = path.basename(p._path);
+    return p.app?.id === appName || base === appName || base.replace(/s$/, '') === strippedApp;
+  });
+}
+
+function resolveAppSubPath(pkg, appName, targetPath) {
+  const cards = pkg.cards || [];
+  if (!targetPath) {
+    const cardId = pkg.app.main?.card || cards[0]?.id;
+    if (!cardId) throw new HttpError(400, `no main card configured for ${appName}`);
+    const card = cards.find((c) => c.id == cardId);
+    if (!card) throw new HttpError(404, `card ${cardId} not found in package ${appName}`);
+    return card.path;
+  }
+  const matchedCard = cards.find((c) => c.id == targetPath);
+  return matchedCard ? matchedCard.path : targetPath;
+}
 
 module.exports.routeApp = (req, res) => {
   const appName = req.params.app;
-  let rawTargetPath = req.params.path || req.params[0] || req.params.card || req.params['0'];
-  if (Array.isArray(rawTargetPath)) {
-    rawTargetPath = rawTargetPath.join('/');
-  }
-  const targetPath = (typeof rawTargetPath === 'string') ? rawTargetPath : '';
+  const targetPath = normalizeTargetPath(req.params);
 
   logger.info(`request for app ${appName} path ${targetPath || '(main)'}`);
-
-  if (appName === 'favicon.ico') {
-    return res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
-  }
-
-  if (targetPath === 'favicon.ico') {
-    const pkg = packageRegistry[appName];
-    if (pkg && pkg._path) {
-      const localFavicon = path.join(pkg._path, 'favicon.ico');
-      if (fs.existsSync(localFavicon) && fs.statSync(localFavicon).isFile()) {
-        return res.sendFile(localFavicon);
-      }
-    }
-    return res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
-  }
+  if (tryServeFavicon(res, appName, targetPath)) return;
 
   logger.debug('packages are', Object.keys(packageRegistry));
-  const package = packageRegistry[appName] ||
-    Object.values(packageRegistry).find(p => p.app?.id === appName || path.basename(p._path) === appName || path.basename(p._path).replace(/s$/, '') === appName.replace(/s$/, ''));
-  logger.debug('package raw TOML is', package?._rawToml || package);
-  if (!package) throw new HttpError(400, `package ${appName} not found`);
-  const app = package.app;
-  logger.debug('package.app', app);
-  if (!app) throw new HttpError(400, `package ${appName} is not an app`);
+  const pkg = findPackageByAppName(appName);
+  logger.debug('package raw TOML is', pkg?._rawToml || pkg);
+  if (!pkg) throw new HttpError(400, `package ${appName} not found`);
+  logger.debug('package.app', pkg.app);
+  if (!pkg.app) throw new HttpError(400, `package ${appName} is not an app`);
 
-  // 1. Determine relative path or card
-  let subPath = targetPath;
-  if (!subPath) {
-    const cardId = app.main?.card || (package.cards && package.cards[0]?.id);
-    if (!cardId) throw new HttpError(400, `no main card configured for ${appName}`);
-    const card = (package.cards || []).find(c => c.id == cardId);
-    if (!card) throw new HttpError(404, `card ${cardId} not found in package ${appName}`);
-    subPath = card.path;
-  } else {
-    // Check if targetPath matches a card ID first (e.g. "main")
-    const card = (package.cards || []).find(c => c.id == subPath);
-    if (card) {
-      subPath = card.path;
-    }
-  }
+  const subPath = resolveAppSubPath(pkg, appName, targetPath);
+  const filePath = path.isAbsolute(subPath) ? subPath : path.join(pkg._path, subPath);
 
-  // 2. Resolve target file path relative to package directory
-  let filePath = subPath;
-  if (!path.isAbsolute(filePath)) {
-    filePath = path.join(package._path, filePath);
-  }
-
-  // Prevent directory traversal outside package._path
-  const resolvedPackagePath = path.resolve(package._path);
+  const resolvedPackagePath = path.resolve(pkg._path);
   const resolvedFilePath = path.resolve(filePath);
   if (!resolvedFilePath.startsWith(resolvedPackagePath)) {
-    throw new HttpError(403, `Access denied: path outside app directory`);
+    throw new HttpError(403, 'Access denied: path outside app directory');
   }
 
   if (fs.existsSync(resolvedFilePath) && fs.statSync(resolvedFilePath).isFile()) {
@@ -83,7 +88,7 @@ module.exports.getApps = () => Object.fromEntries(
       name: pkg.app.name || appId,
       description: pkg.app.description || '',
       mainCard: pkg.app.main?.card || (pkg.cards && pkg.cards[0]?.id) || null,
-      cards: (pkg.cards || []).map(card => card.id)
-    }
+      cards: (pkg.cards || []).map((card) => card.id),
+    },
   ])
 );

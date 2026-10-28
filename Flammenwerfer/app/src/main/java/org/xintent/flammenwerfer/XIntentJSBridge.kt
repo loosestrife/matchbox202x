@@ -2,144 +2,123 @@ package org.xintent.flammenwerfer
 
 import android.webkit.JavascriptInterface
 import kotlinx.coroutines.runBlocking
+import org.xintent.flammenwerfer.config.XIntentPreferences
+import org.xintent.flammenwerfer.core.XIntentLogManager
 
 class XIntentJSBridge(private val activity: CardsActivity) {
 
     @Suppress("unused")
     @JavascriptInterface
-    fun getDefaultRemoteDevice(): String {
-        return XIntentClient.getDefaultRemoteDevice(activity.applicationContext)
-    }
+    fun getDefaultRemoteDevice(): String =
+        XIntentPreferences.getDefaultRemoteDevice(activity.applicationContext)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun getAudioRoutingMode(): String {
-        return XIntentClient.getAudioRoutingMode(activity.applicationContext)
-    }
+    fun getAudioRoutingMode(): String =
+        XIntentPreferences.getAudioRoutingMode(activity.applicationContext)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun getTtsRoutingMode(): String {
-        return XIntentClient.getTtsRoutingMode(activity.applicationContext)
-    }
+    fun getTtsRoutingMode(): String =
+        XIntentPreferences.getTtsRoutingMode(activity.applicationContext)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun getClipboardRoutingMode(): String {
-        return XIntentClient.getClipboardRoutingMode(activity.applicationContext)
-    }
+    fun getClipboardRoutingMode(): String =
+        XIntentPreferences.getClipboardRoutingMode(activity.applicationContext)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun getFsRoutingMode(): String {
-        return XIntentClient.getFsRoutingMode(activity.applicationContext)
-    }
+    fun getFsRoutingMode(): String =
+        XIntentPreferences.getFsRoutingMode(activity.applicationContext)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun isLocalAudioEnabled(): Boolean {
-        return XIntentClient.isLocalAudioEnabled(activity.applicationContext)
-    }
+    fun isLocalAudioEnabled(): Boolean =
+        XIntentPreferences.isLocalAudioEnabled(activity.applicationContext)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalAudioPlay(jsonPayload: String): String {
-        return activity.triggerLocalAudioPlay(jsonPayload)
-    }
+    fun handleLocalAudioPlay(jsonPayload: String): String =
+        activity.triggerLocalAudioPlay(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalPrefetch(jsonPayload: String): String {
-        return activity.triggerLocalPrefetch(jsonPayload)
-    }
+    fun handleLocalPrefetch(jsonPayload: String): String =
+        activity.triggerLocalPrefetch(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalAudioControl(jsonPayload: String): String {
-        return activity.triggerLocalAudioControl(jsonPayload)
-    }
+    fun handleLocalAudioControl(jsonPayload: String): String =
+        activity.triggerLocalAudioControl(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun isLocalTtsEnabled(): Boolean {
-        return XIntentClient.isLocalTtsEnabled(activity.applicationContext)
-    }
+    fun isLocalTtsEnabled(): Boolean =
+        XIntentPreferences.isLocalTtsEnabled(activity.applicationContext)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalTts(jsonPayload: String): String {
-        return activity.triggerLocalTts(jsonPayload)
-    }
+    fun handleLocalTts(jsonPayload: String): String =
+        activity.triggerLocalTts(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun isLocalClipboardEnabled(): Boolean {
-        return XIntentClient.isLocalClipboardEnabled(activity.applicationContext)
-    }
+    fun isLocalClipboardEnabled(): Boolean =
+        getClipboardRoutingMode() == "doLocalClipboardCapture"
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalCopy(jsonPayload: String): String {
-        return activity.triggerLocalCopy(jsonPayload)
-    }
+    fun handleLocalCopy(jsonPayload: String): String =
+        activity.triggerLocalCopy(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalPaste(): String {
-        return activity.triggerLocalPaste()
-    }
+    fun handleLocalPaste(): String =
+        activity.triggerLocalPaste()
 
     @Suppress("unused")
     @JavascriptInterface
-    fun isLocalFsEnabled(): Boolean {
-        return XIntentClient.isLocalFsEnabled(activity.applicationContext)
-    }
+    fun isLocalFsEnabled(): Boolean =
+        getFsRoutingMode() == "doLocalFsCapture"
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalPickFile(jsonPayload: String): String {
-        return activity.triggerLocalPickFile(jsonPayload)
-    }
+    fun handleLocalPickFile(jsonPayload: String): String =
+        activity.triggerLocalPickFile(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalSendTo(jsonPayload: String): String {
-        return activity.triggerLocalSendTo(jsonPayload)
-    }
+    fun handleLocalSendTo(jsonPayload: String): String =
+        activity.triggerLocalSendTo(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
-    fun handleLocalSaveAs(jsonPayload: String): String {
-        return activity.triggerLocalSendTo(jsonPayload)
-    }
+    fun handleLocalSaveAs(jsonPayload: String): String =
+        activity.triggerLocalSendTo(jsonPayload)
 
     @Suppress("unused")
     @JavascriptInterface
     fun logMessage(msg: String) {
-        XIntentClient.addLog(msg)
+        XIntentLogManager.addLog(msg)
     }
 
     @Suppress("unused")
     @JavascriptInterface
-    fun fetchApiTagsJson(): String {
-        return runBlocking {
-            val res = XIntentClient.fetchApiTags(activity.applicationContext)
-            if (res.success) res.responseBody else "{}"
-        }
+    fun fetchApiTagsJson(): String = runBlocking {
+        val res = XIntentCatalogParser.fetchApiTags(activity.applicationContext)
+        if (res.success) res.responseBody else "{}"
     }
 
     @Suppress("unused")
     @JavascriptInterface
-    fun postIntent(namespace: String, action: String, appName: String, jsonPayload: String): String {
-        return runBlocking {
-            val res = XIntentClient.sendTextProcessIntent(
-                context = activity.applicationContext,
-                text = jsonPayload,
-                targetApp = appName,
-                namespace = namespace,
-                action = action,
-            )
-            res.responseBody
-        }
+    fun postIntent(namespace: String, action: String, appName: String, jsonPayload: String): String = runBlocking {
+        XIntentDispatcher.sendTextProcessIntent(
+            context = activity.applicationContext,
+            text = jsonPayload,
+            targetApp = appName,
+            namespace = namespace,
+            action = action,
+        ).responseBody
     }
 }

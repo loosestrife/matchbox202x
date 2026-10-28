@@ -1,5 +1,6 @@
 package org.xintent.flammenwerfer
 
+import android.content.Context
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.os.CancellationSignal
@@ -9,6 +10,8 @@ import android.provider.DocumentsProvider
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.runBlocking
+import org.xintent.flammenwerfer.config.XIntentPreferences
+import org.xintent.flammenwerfer.protocol.XIntentProtocolParser
 import java.io.File
 import java.io.FileOutputStream
 
@@ -57,8 +60,8 @@ abstract class BaseXIntentDocumentsProvider(
         row.add(
             DocumentsContract.Root.COLUMN_FLAGS,
             DocumentsContract.Root.FLAG_SUPPORTS_CREATE or
-                    DocumentsContract.Root.FLAG_SUPPORTS_RECENTS or
-                    DocumentsContract.Root.FLAG_SUPPORTS_SEARCH
+                DocumentsContract.Root.FLAG_SUPPORTS_RECENTS or
+                DocumentsContract.Root.FLAG_SUPPORTS_SEARCH
         )
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*\nimage/*\nvideo/*\naudio/*\napplication/*")
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ic_launcher)
@@ -68,11 +71,10 @@ abstract class BaseXIntentDocumentsProvider(
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         val row = result.newRow()
-
         if (documentId == DOC_ID_ROOT) {
             row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DOC_ID_ROOT)
             row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, rootTitle)
-            row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
+            row.add(DocumentsContract.Document.MIME_TYPE_DIR.let { DocumentsContract.Document.COLUMN_MIME_TYPE }, DocumentsContract.Document.MIME_TYPE_DIR)
             row.add(DocumentsContract.Document.COLUMN_SIZE, 0L)
             row.add(
                 DocumentsContract.Document.COLUMN_FLAGS,
@@ -86,8 +88,7 @@ abstract class BaseXIntentDocumentsProvider(
             row.add(DocumentsContract.Document.COLUMN_SIZE, if (file.exists()) file.length() else 0L)
             row.add(
                 DocumentsContract.Document.COLUMN_FLAGS,
-                DocumentsContract.Document.FLAG_SUPPORTS_WRITE or
-                        DocumentsContract.Document.FLAG_SUPPORTS_DELETE,
+                DocumentsContract.Document.FLAG_SUPPORTS_WRITE or DocumentsContract.Document.FLAG_SUPPORTS_DELETE,
             )
         }
         return result
@@ -99,7 +100,6 @@ abstract class BaseXIntentDocumentsProvider(
         sortOrder: String?,
     ): Cursor {
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
-
         val cacheDir = context?.cacheDir
         if (cacheDir != null && cacheDir.exists()) {
             cacheDir.listFiles()?.filter { it.name.startsWith("blob_") || it.name.startsWith("picked_") }?.forEach { file ->
@@ -117,14 +117,9 @@ abstract class BaseXIntentDocumentsProvider(
         return result
     }
 
-    override fun createDocument(
-        parentDocumentId: String,
-        mimeType: String,
-        displayName: String,
-    ): String {
+    override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
         val docId = "blob_${System.currentTimeMillis()}_$displayName"
-        val file = File(context?.cacheDir, docId)
-        file.createNewFile()
+        File(context?.cacheDir, docId).createNewFile()
         return docId
     }
 
@@ -135,76 +130,63 @@ abstract class BaseXIntentDocumentsProvider(
     ): ParcelFileDescriptor {
         val isWrite = mode.contains("w") || mode.contains("rwt")
         val ctx = context ?: throw IllegalStateException("Context is null")
-
         val file = File(ctx.cacheDir, documentId)
-        if (!file.exists()) {
-            file.createNewFile()
-        }
+        if (!file.exists()) file.createNewFile()
 
         if (!isWrite && file.length() == 0L) {
-            // Trigger fs.PickFile over HTTP bridge with defaultHoldOpenForWrite
-            runBlocking {
-                val targetApp = XIntentClient.getDefaultRemoteDevice(ctx)
-                val res = XIntentClient.sendPickFileIntent(ctx, holdOpenForWrite = defaultHoldOpenForWrite, targetApp = targetApp)
-                if (res.success && res.rawBytes.isNotEmpty()) {
-                    val fileData = XIntentClient.extractFileFromPickFileResponse(res.rawBytes)
-                    if (fileData != null && fileData.second.isNotEmpty()) {
-                        file.writeBytes(fileData.second)
-                    } else {
-                        val extracted = XIntentClient.extractReplacementText(res.responseBody)
-                        if (!extracted.isNullOrBlank()) {
-                            file.writeText(extracted)
-                        }
-                    }
-                }
+            populateDocumentFromRemotePick(ctx, file)
+        }
+        if (isWrite) {
+            return createWriteWatcherPipe(ctx, file)
+        }
+        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
+
+    private fun populateDocumentFromRemotePick(ctx: Context, file: File) = runBlocking {
+        val targetApp = XIntentPreferences.getDefaultRemoteDevice(ctx)
+        val res = XIntentDispatcher.sendPickFileIntent(ctx, holdOpenForWrite = defaultHoldOpenForWrite, targetApp = targetApp)
+        if (!res.success || res.rawBytes.isEmpty()) return@runBlocking
+
+        val fileData = XIntentProtocolParser.extractFileFromPickFileResponse(res.rawBytes)
+        if (fileData != null && fileData.second.isNotEmpty()) {
+            file.writeBytes(fileData.second)
+        } else {
+            XIntentCatalogParser.extractReplacementText(res.responseBody)?.takeIf { it.isNotBlank() }?.let {
+                file.writeText(it)
             }
         }
+    }
 
-        val pfdMode = when {
-            mode.contains("w") -> ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_CREATE
-            else -> ParcelFileDescriptor.MODE_READ_ONLY
-        }
+    private fun createWriteWatcherPipe(ctx: Context, file: File): ParcelFileDescriptor {
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readSide = pipe[0]
+        val writeSide = pipe[1]
+        val blobId = System.currentTimeMillis() and 0xFFFFFFFFL
+        val fileName = file.name.removePrefix("blob_")
 
-        if (isWrite) {
-            // Watch descriptor closing to broadcast XBlobBroadcast event
-            val pipe = ParcelFileDescriptor.createPipe()
-            val readSide = pipe[0]
-            val writeSide = pipe[1]
-
-            val blobId = System.currentTimeMillis() and 0xFFFFFFFFL
-            val fileName = file.name.removePrefix("blob_")
-
-            Thread {
-                try {
-                    ParcelFileDescriptor.AutoCloseInputStream(readSide).use { inputStream ->
-                        FileOutputStream(file).use { outputStream ->
-                            inputStream.copyTo(outputStream)
-                        }
-                    }
-
-                    val bytes = file.readBytes()
-                    val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
-
-                    runBlocking {
-                        XIntentClient.sendXBlobBroadcast(
-                            context = ctx,
-                            blobId = blobId,
-                            name = fileName,
-                            type = "*/*",
-                            size = bytes.size.toLong(),
-                            dataType = "base64",
-                            data = base64Data,
-                        )
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error in XBlobBroadcast write watcher", e)
+        Thread {
+            try {
+                ParcelFileDescriptor.AutoCloseInputStream(readSide).use { inputStream ->
+                    FileOutputStream(file).use { outputStream -> inputStream.copyTo(outputStream) }
                 }
-            }.start()
-
-            return writeSide
-        }
-
-        return ParcelFileDescriptor.open(file, pfdMode)
+                val bytes = file.readBytes()
+                val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                runBlocking {
+                    XIntentDispatcher.sendXBlobBroadcast(
+                        context = ctx,
+                        blobId = blobId,
+                        name = fileName,
+                        type = "*/*",
+                        size = bytes.size.toLong(),
+                        dataType = "base64",
+                        data = base64Data,
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in XBlobBroadcast write watcher", e)
+            }
+        }.start()
+        return writeSide
     }
 }
 

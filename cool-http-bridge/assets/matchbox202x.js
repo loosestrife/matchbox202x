@@ -17,19 +17,146 @@
     return forwardedBy;
   }
 
+  function applyIntentPreferences(payload, options) {
+    const opts = (typeof options === 'object' && options !== null) ? options : {};
+    if (opts.Prefer) payload.Prefer = opts.Prefer;
+    const minimalRequested =
+      opts.receive_data === false ||
+      opts.receiveData === false ||
+      payload.receive_data === false ||
+      payload.receiveData === false;
+    if (minimalRequested) {
+      payload.Prefer = 'return=minimal';
+    }
+    if (payload.controlWord === undefined && payload.Accept) {
+      payload.controlWord = 1;
+    }
+  }
+
+  function formatControlWordHeader(controlWord) {
+    if (controlWord === undefined) return null;
+    const ctrlStrings = [];
+    if (controlWord & 1) ctrlStrings.push('SYN');
+    if (controlWord & 2) ctrlStrings.push('FIN');
+    return ctrlStrings.length > 0 ? ctrlStrings.join(',') : null;
+  }
+
+  function buildIntentHeaders(payload) {
+    const headers = { 'Content-Type': 'application/json' };
+    const ctrlHeader = formatControlWordHeader(payload.controlWord);
+    if (ctrlHeader) headers['X-Channel-Control'] = ctrlHeader;
+    if (payload.Accept) headers['Accept'] = payload.Accept;
+    if (payload.Prefer) headers['Prefer'] = payload.Prefer;
+    if (payload.headers && typeof payload.headers === 'object') {
+      Object.assign(headers, payload.headers);
+    }
+    const conn = payload.Connection || payload.connection;
+    if (conn) headers['Connection'] = conn;
+    headers['X-Forwarded-By'] = getForwardedByHeader(payload['X-Forwarded-By']);
+    return headers;
+  }
+
+  function parseFrameHeaders(headerText) {
+    const headers = {};
+    headerText.split(/\r?\n/).forEach((line) => {
+      const colon = line.indexOf(':');
+      if (colon !== -1) {
+        headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+      }
+    });
+    return headers;
+  }
+
+  function detectMultipartBoundary(buffer) {
+    if (!buffer.includes('MatchboxFrameBoundary')) return null;
+    const lines = buffer.split(/\r?\n/);
+    for (const line of lines) {
+      if (line.includes('MatchboxFrameBoundary')) {
+        return line.trim().replace(/^--/, '').replace(/--$/, '');
+      }
+    }
+    return null;
+  }
+
+  function findHeaderSeparatorIndex(part) {
+    const crlfIdx = part.indexOf('\r\n\r\n');
+    return crlfIdx !== -1 ? crlfIdx : part.indexOf('\n\n');
+  }
+
+  function parseMultipartPart(part, requireValidJson) {
+    const trimmed = part.trim();
+    if (!trimmed || trimmed.startsWith('--')) return null;
+    const headerEnd = findHeaderSeparatorIndex(part);
+    if (headerEnd === -1) return null;
+
+    const headerText = part.slice(0, headerEnd);
+    const bodyText = part.slice(headerEnd).trim();
+    let json = null;
+    try {
+      json = JSON.parse(bodyText);
+    } catch (_) {
+      if (requireValidJson) return null;
+    }
+    if (requireValidJson && !json) return null;
+    return { headers: parseFrameHeaders(headerText), json, body: bodyText };
+  }
+
+  function processMultipartBuffer(buffer, boundary, onFrame) {
+    const parts = buffer.split('--' + boundary);
+    let remainingBuffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const frame = parseMultipartPart(part, false);
+      if (frame && typeof onFrame === 'function') {
+        onFrame(frame);
+      }
+    }
+
+    const trailingFrame = parseMultipartPart(remainingBuffer, true);
+    if (trailingFrame) {
+      if (typeof onFrame === 'function') onFrame(trailingFrame);
+      remainingBuffer = '';
+    }
+    return remainingBuffer;
+  }
+
+  function formatErrorDetails(errObj) {
+    if (!errObj) return String(errObj);
+    const keys = ['message', 'name', 'code', 'type', 'stack'];
+    const details = keys.filter((k) => errObj[k]).map((k) => `${k}=${errObj[k]}`);
+    return details.length > 0 ? details.join(', ') : String(errObj);
+  }
+
+  function parseWsAudioEventData(rawData) {
+    if (typeof rawData !== 'string' || (!rawData.includes('Content-Type:') && !rawData.includes('MatchboxFrameBoundary'))) {
+      return JSON.parse(rawData);
+    }
+    const parts = window.xintent ? window.xintent.parseMultipartResponse(rawData) : [];
+    if (parts.length === 0) return null;
+    const first = parts[0].json || parts[0].body;
+    if (parts.length > 1 && parts[1].body) {
+      return Object.assign({}, typeof first === 'object' ? first : { data: first }, { blob: parts[1].body });
+    }
+    return first;
+  }
+
+  function normalizePlayOptions(cookieOrOptions, seqnum, sample) {
+    if (typeof cookieOrOptions === 'object' && cookieOrOptions !== null) {
+      return cookieOrOptions;
+    }
+    return {
+      cookie: cookieOrOptions,
+      seqnum: seqnum,
+      sample: sample || seqnum,
+    };
+  }
+
   // --- window.xintent ---
   window.xintent = window.xintent || {
     SYN: 1,
     FIN: 2,
     SYN_FIN: 3,
 
-    /**
-     * Dispatch an intent to the matchbox202x platform
-     * @param {string} intent - e.g., 'ui.TextToSpeech'
-     * @param {Object} payload - Data payload to send with intent
-     * @param {string} [app='localhost'] - Target application or node
-     * @returns {Promise<Response>}
-     */
     intent: async function(intent, payload = {}, app = 'localhost', options = {}) {
       const parts = intent.split('.');
       if (parts.length < 2) {
@@ -38,42 +165,8 @@
       const [namespace, action] = parts;
       const endpoint = `/intent/${namespace}/${action}?app=${encodeURIComponent(app)}`;
 
-      const headers = { 'Content-Type': 'application/json' };
-
-      const opts = (typeof options === 'object' && options !== null) ? options : {};
-      if (opts.Prefer) payload.Prefer = opts.Prefer;
-      if (opts.receive_data === false || opts.receiveData === false) payload.Prefer = 'return=minimal';
-
-      if (payload.receive_data === false || payload.receiveData === false) {
-        payload.Prefer = 'return=minimal';
-      }
-
-      // Auto-infer SYN control word if expecting a stream (has Accept header) but not specified
-      if (payload.controlWord === undefined && payload.Accept) {
-        payload.controlWord = 1;
-      }
-
-      if (payload.controlWord !== undefined) {
-        const ctrlStrings = [];
-        if (payload.controlWord & 1) ctrlStrings.push('SYN');
-        if (payload.controlWord & 2) ctrlStrings.push('FIN');
-        if (ctrlStrings.length > 0) {
-          headers['X-Channel-Control'] = ctrlStrings.join(',');
-        }
-      }
-      if (payload.Accept) {
-        headers['Accept'] = payload.Accept;
-      }
-      if (payload.Prefer) {
-        headers['Prefer'] = payload.Prefer;
-      }
-      if (payload.headers && typeof payload.headers === 'object') {
-        Object.assign(headers, payload.headers);
-      }
-      if (payload.Connection || payload.connection) {
-        headers['Connection'] = payload.Connection || payload.connection;
-      }
-      headers['X-Forwarded-By'] = getForwardedByHeader(payload['X-Forwarded-By']);
+      applyIntentPreferences(payload, options);
+      const headers = buildIntentHeaders(payload);
 
       try {
         const response = await fetch(endpoint, {
@@ -96,12 +189,6 @@
       }
     },
 
-    /**
-     * Reads and yields multipart frames in real-time from an active Fetch Response stream.
-     * @param {Response} response
-     * @param {function(frame: { headers: Record<string, string>, json?: any, body?: string }): void} onFrame
-     * @returns {Promise<void>}
-     */
     readMultipartStream: async function(response, onFrame) {
       if (!response || !response.body) return;
       const reader = response.body.getReader();
@@ -125,94 +212,16 @@
           chunkCount++;
           buffer += decoder.decode(value, { stream: true });
         }
-
-        if (!boundary && buffer.includes('MatchboxFrameBoundary')) {
-          const lines = buffer.split(/\r?\n/);
-          for (const line of lines) {
-            if (line.includes('MatchboxFrameBoundary')) {
-              let b = line.trim();
-              if (b.startsWith('--')) b = b.slice(2);
-              if (b.endsWith('--')) b = b.slice(0, -2);
-              boundary = b;
-              break;
-            }
-          }
+        if (!boundary) {
+          boundary = detectMultipartBoundary(buffer);
         }
-
         if (boundary) {
-          const delimiter = '--' + boundary;
-          let parts = buffer.split(delimiter);
-
-          // We will retain the last part in buffer only if it is incomplete
-          let remainingBuffer = parts.pop() || '';
-
-          for (const part of parts) {
-            const trimmed = part.trim();
-            if (!trimmed || trimmed === '--' || trimmed.startsWith('--')) continue;
-
-            const headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
-            if (headerEnd === -1) continue;
-
-            const headerText = part.slice(0, headerEnd);
-            const bodyText = part.slice(headerEnd).trim();
-
-            const headers = {};
-            headerText.split(/\r?\n/).forEach(line => {
-              const colon = line.indexOf(':');
-              if (colon !== -1) {
-                headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
-              }
-            });
-
-            let json = null;
-            try {
-              json = JSON.parse(bodyText);
-            } catch (_) {}
-
-            if (typeof onFrame === 'function') {
-              onFrame({ headers, json, body: bodyText });
-            }
-          }
-
-          // Check if remainingBuffer itself contains a complete, valid frame
-          const remainingTrimmed = remainingBuffer.trim();
-          if (remainingTrimmed && remainingTrimmed !== '--' && !remainingTrimmed.startsWith('--')) {
-            const headerEnd = remainingBuffer.indexOf('\r\n\r\n') !== -1 ? remainingBuffer.indexOf('\r\n\r\n') : remainingBuffer.indexOf('\n\n');
-            if (headerEnd !== -1) {
-              const headerText = remainingBuffer.slice(0, headerEnd);
-              const bodyText = remainingBuffer.slice(headerEnd).trim();
-              let json = null;
-              try {
-                json = JSON.parse(bodyText);
-                if (json) {
-                  const headers = {};
-                  headerText.split(/\r?\n/).forEach(line => {
-                    const colon = line.indexOf(':');
-                    if (colon !== -1) {
-                      headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
-                    }
-                  });
-                  if (typeof onFrame === 'function') {
-                    onFrame({ headers, json, body: bodyText });
-                  }
-                  remainingBuffer = '';
-                }
-              } catch (_) {}
-            }
-          }
-
-          buffer = remainingBuffer;
+          buffer = processMultipartBuffer(buffer, boundary, onFrame);
         }
-
         if (done) break;
       }
     },
 
-    /**
-     * Parses a multipart/mixed response text string into an array of frame objects.
-     * @param {string} responseText
-     * @returns {Array<{ headers: Record<string, string>, json?: any, body?: string }>}
-     */
     parseMultipartResponse: function(responseText) {
       const parts = [];
       if (!responseText || typeof responseText !== 'string') return parts;
@@ -226,41 +235,20 @@
         return parts;
       }
 
-      const lines = responseText.split(/\r?\n/);
-      const boundary = lines[0].trim();
+      const boundary = responseText.split(/\r?\n/)[0].trim();
       const rawParts = responseText.split(boundary).filter(p => p.trim() && !p.includes('--\r') && !p.includes('--\n'));
 
       for (const part of rawParts) {
-        const headerEnd = part.indexOf('\r\n\r\n') !== -1 ? part.indexOf('\r\n\r\n') : part.indexOf('\n\n');
-        if (headerEnd === -1) continue;
-
-        const headerText = part.slice(0, headerEnd);
-        const bodyText = part.slice(headerEnd).trim();
-
-        const headers = {};
-        headerText.split(/\r?\n/).forEach(line => {
-          const colon = line.indexOf(':');
-          if (colon !== -1) {
-            const k = line.slice(0, colon).trim().toLowerCase();
-            const v = line.slice(colon + 1).trim();
-            headers[k] = v;
-          }
-        });
-
-        try {
-          const json = JSON.parse(bodyText);
-          parts.push({ headers, json, body: bodyText });
-        } catch (_) {
-          parts.push({ headers, body: bodyText });
+        const frame = parseMultipartPart(part, false);
+        if (frame) {
+          const entry = { headers: frame.headers, body: frame.body };
+          if (frame.json !== null) entry.json = frame.json;
+          parts.push(entry);
         }
       }
       return parts;
     },
 
-    /**
-     * Retrieve intent and app registration tags from the bridge API
-     * @returns {Promise<{intents: Record<string, string[]>, apps: Record<string, any>}>}
-     */
     getTags: async function() {
       const res = await fetch('/api/tags', {
         headers: { 'X-Forwarded-By': getForwardedByHeader() }
@@ -274,11 +262,6 @@
 
   // --- window.xblob ---
   window.xblob = window.xblob || {
-    /**
-     * Create an XBlob on the bridge
-     * @param {Object} blobData - Content payload
-     * @returns {Promise<{ status: string, blobId: number, blob: number }>}
-     */
     XBlobCreate: async function(blobData = {}) {
       const isFdRights = blobData._dataType === 'fd-rights' || blobData.contentEncoding === 'fd-rights';
       const isBase64 = blobData._dataType === 'base64' || blobData.contentEncoding === 'base64';
@@ -306,12 +289,6 @@
       return res.json();
     },
 
-    /**
-     * Transfer an XBlob to a grantee
-     * @param {number|string} blobId
-     * @param {number|string|null} [grantee=null]
-     * @returns {Promise<{ status: string, blobId: number }>}
-     */
     XBlobTransfer: async function(blobId, grantee = null) {
       const res = await fetch('/xblob/XBlobTransfer', {
         method: 'POST',
@@ -322,12 +299,6 @@
       return res.json();
     },
 
-    /**
-     * Grant rights to an XBlob
-     * @param {number|string} blobId
-     * @param {number|string|null} [grantee=null]
-     * @returns {Promise<{ status: string, blobId: number }>}
-     */
     XBlobGrant: async function(blobId, grantee = null) {
       const res = await fetch('/xblob/XBlobGrant', {
         method: 'POST',
@@ -338,11 +309,6 @@
       return res.json();
     },
 
-    /**
-     * Unlink an XBlob
-     * @param {number|string} blobId
-     * @returns {Promise<{ status: string, blobId: number }>}
-     */
     XBlobUnlink: async function(blobId) {
       const res = await fetch('/xblob/XBlobUnlink', {
         method: 'POST',
@@ -353,13 +319,6 @@
       return res.json();
     },
 
-    /**
-     * Broadcast an XBlob update
-     * @param {number|string} blobId
-     * @param {string|null} [host=null]
-     * @param {number|null} [version=null]
-     * @returns {Promise<{ status: string, blobId: number }>}
-     */
     XBlobBroadcast: async function(blobId, host = null, version = null) {
       const res = await fetch('/xblob/XBlobBroadcast', {
         method: 'POST',
@@ -370,11 +329,6 @@
       return res.json();
     },
 
-    /**
-     * Read an XBlob from the bridge
-     * @param {number|string} blobId
-     * @returns {Promise<Object>}
-     */
     XBlobRead: async function(blobId) {
       const hexBlob = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
       const res = await fetch(`/blobs/${hexBlob}`, {
@@ -382,7 +336,7 @@
         headers: { 'Accept-Encoding': 'identity, base64, fd-rights', 'X-Forwarded-By': getForwardedByHeader() }
       });
       if (!res.ok) {
-        const fallbackRes = await fetch(`/xblob/XBlobRead`, {
+        const fallbackRes = await fetch('/xblob/XBlobRead', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
           body: JSON.stringify({ blobId: blobId, blob: blobId })
@@ -404,7 +358,6 @@
     }
   };
 
-  // Method aliases
   window.xblob.create = window.xblob.XBlobCreate;
   window.xblob.read = window.xblob.XBlobRead;
   window.xblob.transfer = window.xblob.XBlobTransfer;
@@ -414,11 +367,6 @@
 
   // --- window.xaudio ---
   window.xaudio = window.xaudio || {
-    /**
-     * Connect a dedicated WebSocket for real-time XAudio response events
-     * @param {function(frame: any): void} [onFrameHandler=null]
-     * @returns {WebSocket}
-     */
     connectXAudioWs: function(onFrameHandler = null, sinkName = 'user-desktop-speakers') {
       this._wsListeners = this._wsListeners || new Set();
       if (typeof onFrameHandler === 'function') {
@@ -437,35 +385,15 @@
         this._ws = ws;
 
         ws.onerror = (errEv) => {
-          const details = [];
-          if (errEv) {
-            if (errEv.message) details.push(`message=${errEv.message}`);
-            if (errEv.name) details.push(`name=${errEv.name}`);
-            if (errEv.code) details.push(`code=${errEv.code}`);
-            if (errEv.type) details.push(`type=${errEv.type}`);
-          }
-          const detailStr = details.length > 0 ? details.join(', ') : String(errEv);
-          console.warn(`[xaudio] WebSocket error on ${wsUrl}: ${detailStr}`, errEv);
+          console.warn(`[xaudio] WebSocket error on ${wsUrl}: ${formatErrorDetails(errEv)}`, errEv);
         };
 
         ws.onmessage = (event) => {
           try {
-            let frame = null;
-            if (typeof event.data === 'string' && (event.data.includes('Content-Type:') || event.data.includes('MatchboxFrameBoundary'))) {
-              const parts = window.xintent ? window.xintent.parseMultipartResponse(event.data) : [];
-              if (parts.length > 0) {
-                frame = parts[0].json || parts[0].body;
-                if (parts.length > 1 && parts[1].body) {
-                  frame = Object.assign({}, typeof frame === 'object' ? frame : { data: frame }, { blob: parts[1].body });
-                }
-              }
-            } else {
-              frame = JSON.parse(event.data);
-            }
-            if (frame) {
-              for (const listener of this._wsListeners) {
-                try { listener(frame); } catch (_) {}
-              }
+            const frame = parseWsAudioEventData(event.data);
+            if (!frame) return;
+            for (const listener of this._wsListeners) {
+              try { listener(frame); } catch (_) {}
             }
           } catch (_) {}
         };
@@ -476,38 +404,13 @@
 
         return ws;
       } catch (err) {
-        const errDetails = [];
-        if (err) {
-          if (err.message) errDetails.push(`message=${err.message}`);
-          if (err.name) errDetails.push(`name=${err.name}`);
-          if (err.code) errDetails.push(`code=${err.code}`);
-          if (err.stack) errDetails.push(`stack=${err.stack}`);
-        }
-        const errStr = errDetails.length > 0 ? errDetails.join(', ') : String(err);
-        console.warn(`[xaudio] Could not establish /xaudio WebSocket to ${wsUrl}: ${errStr}`, err);
+        console.warn(`[xaudio] Could not establish /xaudio WebSocket to ${wsUrl}: ${formatErrorDetails(err)}`, err);
         return null;
       }
     },
 
-    /**
-     * Play a sound sample/blob on XAudioSink with sequential ordering & automatic transfer
-     * @param {Object|string|number} cookieOrOptions - Options object or cookie string
-     * @param {number} [seqnum=0] - Sequence number
-     * @param {number|string} [sample=null] - XBlob ID
-     * @returns {Promise<Response>}
-     */
     XAudioPlay: async function(cookieOrOptions = {}, seqnum = 0, sample = null) {
-      let options = {};
-      if (typeof cookieOrOptions === 'object' && cookieOrOptions !== null) {
-        options = cookieOrOptions;
-      } else {
-        options = {
-          cookie: cookieOrOptions,
-          seqnum: seqnum,
-          sample: sample || seqnum,
-        };
-      }
-
+      const options = normalizePlayOptions(cookieOrOptions, seqnum, sample);
       const cookie = options.cookie || options.Cookie || options.OutputId || 'default';
       const seq = options.seqnum ?? options.seq ?? 0;
       const blobId = options.sample || options.blob || options.blobId || options.BlobId;
@@ -559,11 +462,6 @@
       return window.xintent.intent('xaudio.PlaySoundBlob', payload, app);
     },
 
-    /**
-     * Prefetch a sound blob on XAudioSink
-     * @param {Object} options
-     * @returns {Promise<Response>}
-     */
     prefetchSoundBlob: async function(options = {}) {
       const cookie = options.cookie || options.Cookie || options.OutputId || 'default';
       const blobId = options.sample || options.blob || options.blobId || options.BlobId;
@@ -587,16 +485,12 @@
       }, app);
     },
 
-    /**
-     * Send control commands to XAudio (stop, pause, etc.)
-     * @param {Object|string} options
-     * @returns {Promise<Response>}
-     */
     controlStream: async function(options = {}) {
+      const isObj = typeof options === 'object' && options !== null;
       const command = typeof options === 'string' ? options : (options.command || 'stop');
-      const cookie = (typeof options === 'object') ? (options.cookie || options.OutputId || 'default') : 'default';
-      const streamId = (typeof options === 'object') ? (options.streamId ?? options.stream ?? 1) : 1;
-      const app = (typeof options === 'object' && options.app) ? options.app : 'localhost';
+      const cookie = isObj ? (options.cookie || options.OutputId || 'default') : 'default';
+      const streamId = isObj ? (options.streamId ?? options.stream ?? 1) : 1;
+      const app = (isObj && options.app) ? options.app : 'localhost';
       return window.xintent.intent('xaudio.ControlStream', {
         intent: 'xaudio.ControlStream',
         command: command,
@@ -604,15 +498,10 @@
         OutputId: cookie,
         streamId: streamId,
         app: app,
-        ...(typeof options === 'object' ? options : {})
+        ...(isObj ? options : {})
       }, app);
     },
 
-    /**
-     * Seek a stream to a specific position
-     * @param {Object} options
-     * @returns {Promise<Response>}
-     */
     seekStream: async function(options = {}) {
       const seekTo = options.seekTo ?? 0;
       const streamId = options.streamId ?? options.stream ?? 1;

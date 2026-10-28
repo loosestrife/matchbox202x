@@ -10,13 +10,12 @@ the open, readable file descriptor directly to the DLNA Media Manager.
 
 import asyncio
 import base64
-import json
 import logging
 import os
-import sys
+import random
 import tempfile
 import urllib.parse
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 logger = logging.getLogger("xintent_bridge")
 
@@ -31,76 +30,84 @@ try:
 except Exception as e:
     logger.warning(f"Failed to import xintent_xlib: {e}")
     HAS_XINTENT_XLIB = False
+    XIntentXlibClient = None
+
+
+def _unwrap_blob_dict(raw_blob) -> dict:
+    if not isinstance(raw_blob, dict):
+        return {"data": raw_blob}
+    if isinstance(raw_blob.get("blob"), dict):
+        return raw_blob["blob"]
+    data_field = raw_blob.get("data")
+    if isinstance(data_field, dict):
+        if isinstance(data_field.get("blob"), dict):
+            return data_field["blob"]
+        if "_dataType" in data_field or "data" in data_field:
+            return data_field
+    return raw_blob
+
+
+def _try_open_fd_rights(blob_val) -> Optional[int]:
+    if isinstance(blob_val, int) and blob_val >= 0:
+        dup_fd = os.dup(blob_val)
+        try:
+            os.lseek(dup_fd, 0, os.SEEK_SET)
+        except Exception:
+            pass
+        return dup_fd
+
+    clean_path = str(blob_val or "").strip()
+    if clean_path.startswith("file://"):
+        clean_path = urllib.parse.unquote(clean_path.removeprefix("file://"))
+
+    if not clean_path or not os.path.exists(clean_path):
+        logger.warning(f"ensure_readable_fd: file path '{clean_path}' does not exist on disk, falling back to anonymous fd")
+        return None
+
+    try:
+        fd = os.open(clean_path, os.O_RDONLY | os.O_CLOEXEC)
+        logger.info(f"ensure_readable_fd resolved file path '{clean_path}' -> open fd {fd} (size: {os.path.getsize(clean_path)} bytes)")
+        return fd
+    except Exception as e:
+        logger.error(f"ensure_readable_fd os.open failed for '{clean_path}', falling back to anonymous fd: {e}", exc_info=True)
+        return None
+
+
+def _decode_blob_bytes(blob_val, data_type: Optional[str]) -> bytes:
+    if isinstance(blob_val, (bytes, bytearray)):
+        return bytes(blob_val)
+    if data_type == "base64" and isinstance(blob_val, str):
+        try:
+            return base64.b64decode(blob_val.strip())
+        except Exception:
+            return blob_val.encode("utf-8")
+    if isinstance(blob_val, str):
+        return blob_val.encode("utf-8")
+    return str(blob_val or "").encode("utf-8")
 
 
 def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
     """
     Converts any incoming XBlob payload into an open, readable file descriptor (int fd),
     mime_type, and file_name.
-    
-    Regardless of whether raw_blob is Content-Encoding: fd-rights or Content-Encoding: identity,
-    a valid, open, readable file descriptor is guaranteed to be returned.
     """
-    if isinstance(raw_blob, dict):
-        if "blob" in raw_blob and isinstance(raw_blob["blob"], dict):
-            raw_blob = raw_blob["blob"]
-        elif "data" in raw_blob and isinstance(raw_blob["data"], dict):
-            if "blob" in raw_blob["data"] and isinstance(raw_blob["data"]["blob"], dict):
-                raw_blob = raw_blob["data"]["blob"]
-            elif "_dataType" in raw_blob["data"] or "data" in raw_blob["data"]:
-                raw_blob = raw_blob["data"]
-    else:
-        raw_blob = {"data": raw_blob}
+    unwrapped = _unwrap_blob_dict(raw_blob)
+    mime_type = unwrapped.get("type") or unwrapped.get("mimeType") or "application/octet-stream"
+    file_name = unwrapped.get("name") or "media_payload"
+    data_type = unwrapped.get("_dataType") or unwrapped.get("contentEncoding")
+    blob_val = unwrapped.get("data")
 
-    mime_type = raw_blob.get("type") or raw_blob.get("mimeType") or "application/octet-stream"
-    file_name = raw_blob.get("name") or "media_payload"
-    data_type = raw_blob.get("_dataType") or raw_blob.get("contentEncoding")
-    blob_val = raw_blob.get("data")
-
-    # Case A: Content-Encoding: fd-rights
     if data_type == "fd-rights":
-        if isinstance(blob_val, int) and blob_val >= 0:
-            dup_fd = os.dup(blob_val)
-            try:
-                os.lseek(dup_fd, 0, os.SEEK_SET)
-            except Exception:
-                pass
-            return (dup_fd, mime_type, file_name)
+        fd = _try_open_fd_rights(blob_val)
+        if fd is not None:
+            return (fd, mime_type, file_name)
 
-        clean_path = str(blob_val or "").strip()
-        if clean_path.startswith("file://"):
-            clean_path = urllib.parse.unquote(clean_path.removeprefix("file://"))
-
-        if clean_path and os.path.exists(clean_path):
-            try:
-                fd = os.open(clean_path, os.O_RDONLY | os.O_CLOEXEC)
-                logger.info(f"ensure_readable_fd resolved file path '{clean_path}' -> open fd {fd} (size: {os.path.getsize(clean_path)} bytes)")
-                return (fd, mime_type, file_name)
-            except Exception as e:
-                logger.error(f"ensure_readable_fd os.open failed for '{clean_path}', falling back to anonymous fd: {e}", exc_info=True)
-        else:
-            logger.warning(f"ensure_readable_fd: file path '{clean_path}' does not exist on disk, falling back to anonymous fd")
-
-    # Case B: Content-Encoding: identity or raw bytes/base64/text
-    # Write payload into an unlinked anonymous temporary file descriptor
-    if isinstance(blob_val, (bytes, bytearray)):
-        payload_bytes = bytes(blob_val)
-    elif data_type == "base64" and isinstance(blob_val, str):
-        try:
-            payload_bytes = base64.b64decode(blob_val.strip())
-        except Exception:
-            payload_bytes = blob_val.encode("utf-8")
-    elif isinstance(blob_val, str):
-        payload_bytes = blob_val.encode("utf-8")
-    else:
-        payload_bytes = str(blob_val or "").encode("utf-8")
-
+    payload_bytes = _decode_blob_bytes(blob_val, data_type)
     tmp_file = tempfile.NamedTemporaryFile(delete=True)
     tmp_file.write(payload_bytes)
     tmp_file.flush()
     tmp_file.seek(0)
 
-    # Duplicate open fd so it stays open independently after closing tmp_file handle
     dup_fd = os.dup(tmp_file.fileno())
     tmp_file.close()
     return (dup_fd, mime_type, file_name)
@@ -179,82 +186,87 @@ class X11DeviceManager:
             dev.xintent_win_id = None
 
 
+def _prepare_transcode_x11_input(x11_client, input_target, sender_win_id: Optional[int]) -> Tuple[int, Optional[str]]:
+    if isinstance(input_target, int) and input_target >= 0x100:
+        logger.info(f"Reusing existing XBlob {hex(input_target)} directly for media.Transcode")
+        return input_target, None
+
+    if isinstance(input_target, int):
+        try:
+            os.lseek(input_target, 0, os.SEEK_SET)
+        except Exception:
+            pass
+        try:
+            blob_id = x11_client.blob_create(input_target, win_id=sender_win_id)
+            logger.info(f"Created input dataBlob {hex(blob_id)} for media.Transcode input fd {input_target}")
+            return blob_id, None
+        except Exception as e:
+            logger.debug(f"Error creating blob for input fd {input_target}: {e}")
+            return 0, None
+
+    if isinstance(input_target, str):
+        if input_target.startswith(("http://", "https://")):
+            return 0, input_target
+        if os.path.exists(input_target):
+            try:
+                open_fd = os.open(input_target, os.O_RDWR | os.O_CLOEXEC)
+                blob_id = x11_client.blob_create(open_fd, win_id=sender_win_id)
+                logger.info(f"Created input dataBlob {hex(blob_id)} for media.Transcode input path '{input_target}'")
+                return blob_id, None
+            except Exception as e:
+                logger.debug(f"Error creating blob for input path '{input_target}': {e}")
+                return 0, input_target
+
+    return 0, None
+
+
+def _resolve_transcode_x11_response(x11_client, payload: dict, sender_win_id: Optional[int]) -> Optional[Tuple[object, str]]:
+    data_val = payload.get("payload") or payload
+    if not isinstance(data_val, dict):
+        return None
+    if data_val.get("status") == "error":
+        logger.error(f"Cool Transcoder returned error over X11 IPC: {data_val.get('errorMessage')}")
+        return None
+
+    resp_blob_id = payload.get("dataBlob") or payload.get("data_blob") or data_val.get("dataBlob") or data_val.get("data_blob")
+    mime_type = data_val.get("mimeType") or "video/mp4"
+
+    if resp_blob_id and hasattr(x11_client, "blob_read"):
+        try:
+            raw_blob = x11_client.blob_read(resp_blob_id)
+            try:
+                x11_client.blob_unlink(resp_blob_id, win_id=sender_win_id)
+            except Exception:
+                pass
+            if raw_blob:
+                fd, _, _ = ensure_readable_fd(raw_blob)
+                return (fd, mime_type)
+        except Exception as e:
+            logger.error(f"Error reading response dataBlob {hex(resp_blob_id)}: {e}")
+
+    url = data_val.get("url")
+    return (url, mime_type) if url else None
+
+
 async def request_media_transcode_x11(x11_client, input_target, target_accept: str, title: str = "Transcoded Stream", sender_win_id: Optional[int] = None) -> Optional[Tuple[object, str]]:
     """
     Dispatches media.Transcode intent directly over X11 IPC bus to cool-transcoder using a dataBlob
     and awaits the transcoded stream response (returning (transcoded_target, mime_type)).
     """
-    if not x11_client or not hasattr(x11_client, "client_win") or not x11_client.client_win:
+    if not x11_client or not getattr(x11_client, "client_win", None):
         return None
 
     router_id = x11_client.get_router_win_id()
     if not router_id:
         return None
 
-    import random
     channel_id = random.randint(100000, 999999)
     future = asyncio.get_event_loop().create_future()
-
-    input_data_blob = 0
-    input_url = None
-
-    # Check if input_target is an existing XBlob ID (e.g. 0x102 / > 256)
-    if isinstance(input_target, int) and input_target >= 0x100:
-        input_data_blob = input_target
-        logger.info(f"Reusing existing XBlob {hex(input_data_blob)} directly for media.Transcode")
-    elif isinstance(input_target, int):
-        try:
-            os.lseek(input_target, 0, os.SEEK_SET)
-        except Exception:
-            pass
-        try:
-            input_data_blob = x11_client.blob_create(input_target, win_id=sender_win_id)
-            logger.info(f"Created input dataBlob {hex(input_data_blob)} for media.Transcode input fd {input_target}")
-        except Exception as e:
-            logger.debug(f"Error creating blob for input fd {input_target}: {e}")
-    elif isinstance(input_target, str):
-        if input_target.startswith("http://") or input_target.startswith("https://"):
-            input_url = input_target
-        elif os.path.exists(input_target):
-            try:
-                open_fd = os.open(input_target, os.O_RDWR | os.O_CLOEXEC)
-                input_data_blob = x11_client.blob_create(open_fd, win_id=sender_win_id)
-                logger.info(f"Created input dataBlob {hex(input_data_blob)} for media.Transcode input path '{input_target}'")
-            except Exception as e:
-                logger.debug(f"Error creating blob for input path '{input_target}': {e}")
-                input_url = input_target
+    input_data_blob, input_url = _prepare_transcode_x11_input(x11_client, input_target, sender_win_id)
 
     def response_handler(payload):
         if not future.done():
-            data_val = payload.get("payload") or payload
-            if isinstance(data_val, dict):
-                if data_val.get("status") == "error":
-                    logger.error(f"Cool Transcoder returned error over X11 IPC: {data_val.get('errorMessage')}")
-                    future.set_result(None)
-                    return
-
-                resp_blob_id = payload.get("dataBlob") or payload.get("data_blob") or data_val.get("dataBlob") or data_val.get("data_blob")
-                mime_type = data_val.get("mimeType") or "video/mp4"
-
-                if resp_blob_id and hasattr(x11_client, "blob_read"):
-                    try:
-                        raw_blob = x11_client.blob_read(resp_blob_id)
-                        try:
-                            x11_client.blob_unlink(resp_blob_id, win_id=sender_win_id)
-                        except Exception:
-                            pass
-                        if raw_blob:
-                            fd, mime, name = ensure_readable_fd(raw_blob)
-                            future.set_result((fd, mime_type))
-                            return
-                    except Exception as e:
-                        logger.error(f"Error reading response dataBlob {hex(resp_blob_id)}: {e}")
-
-                url = data_val.get("url")
-                if url:
-                    future.set_result((url, mime_type))
-                else:
-                    future.set_result(None)
+            future.set_result(_resolve_transcode_x11_response(x11_client, payload, sender_win_id))
 
     x11_client.register_handler("media.TranscodeResponseV0", response_handler)
 
@@ -274,7 +286,7 @@ async def request_media_transcode_x11(x11_client, input_target, target_accept: s
             target_win_id=router_id,
             payload=payload,
             channel=channel_id,
-            control_word=1,  # SYN = 1
+            control_word=1,
             data_blob=input_data_blob,
             sender_win_id=sender_win_id
         )
@@ -287,13 +299,3 @@ async def request_media_transcode_x11(x11_client, input_target, target_accept: s
     except Exception as e:
         logger.error(f"request_media_transcode_x11 failed for '{title}': {e}", exc_info=True)
         return None
-
-        res = await asyncio.wait_for(future, timeout=8.0)
-        logger.info(f"Received media.TranscodeResponseV0 over X11 IPC: {res}")
-        return res
-    except asyncio.TimeoutError:
-        logger.warning(f"Timeout waiting for media.TranscodeResponseV0 over X11 IPC for '{title}'")
-    except Exception as e:
-        logger.error(f"Error requesting media.Transcode over X11: {e}")
-
-    return None

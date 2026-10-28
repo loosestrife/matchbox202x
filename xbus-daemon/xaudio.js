@@ -1,26 +1,23 @@
 // xaudio.js for xbus-daemon
 const { Logger } = require('../server-tools');
 const logger = new Logger({ module: 'xaudio' });
-const { atoms, widString, frameType, frameDesc, parseXIntentIntentV0, sendXIntentIntentV0, sendXIntentEventV0, sendXAudioPlayV0, sendXAudioControlV0 } = require('../x11-promises/xintent.js');
-const { X, root, routerWin } = require('./index.js');
-const { activeChannels, newChannel, closeChannel, getChannel, getChannelToSend, getChannelForMessage } = require('./xchannel');
-const { lighterAudioRegistry, windowRegistry } = require('./xintent-registry');
+const xintent = require('../x11-promises/xintent.js');
+const daemon = require('./index.js');
+const xchannel = require('./xchannel');
+const registry = require('./xintent-registry');
 
 async function findXAudioSinkWindow() {
-  if (atoms.SESSION_SPEAKERS) {
+  if (xintent.atoms.SESSION_SPEAKERS) {
     try {
-      const speakersOwner = await X.GetSelectionOwner(atoms.SESSION_SPEAKERS);
-      if (speakersOwner) {
-        return speakersOwner;
-      }
+      const speakersOwner = await daemon.X.GetSelectionOwner(xintent.atoms.SESSION_SPEAKERS);
+      if (speakersOwner) return speakersOwner;
     } catch (_) {}
   }
-  const lighterEntries = lighterAudioRegistry ? Object.values(lighterAudioRegistry) : [];
-  const lighterEntry = lighterEntries[0];
-  if (lighterEntry && lighterEntry.wid) {
-    return lighterEntry.wid;
+  const lighterEntries = registry.lighterAudioRegistry ? Object.values(registry.lighterAudioRegistry) : [];
+  if (lighterEntries[0]?.wid) {
+    return lighterEntries[0].wid;
   }
-  for (const [widStr, matchboxToml] of Object.entries(windowRegistry || {})) {
+  for (const [widStr, matchboxToml] of Object.entries(registry.windowRegistry || {})) {
     if (matchboxToml && matchboxToml.XAudioSink) {
       return parseInt(widStr, 10);
     }
@@ -29,28 +26,32 @@ async function findXAudioSinkWindow() {
 }
 
 const handleXAudioGetAudioOutputsV0 = {
-  parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev, { unlinkPayloadBlob: false }),
+  parse: async (ev) => xintent.parseXIntentIntentV0(daemon.X, daemon.routerWin, ev, { unlinkPayloadBlob: false }),
   securityContext: (parsed) => ({
     source: { window: parsed.senderWin },
     action: 'XAudio.GetAudioOutputs',
   }),
   accept: async (parsed) => {
     const outputs = [];
-    for (const [pkgName, entry] of Object.entries(lighterAudioRegistry)) {
+    for (const [pkgName, entry] of Object.entries(registry.lighterAudioRegistry)) {
       if (entry.pkg && entry.pkg.XAudioSink) {
-        outputs.push({ package: pkgName, sink: entry.pkg.XAudioSink, wid: widString(entry.wid) });
+        outputs.push({ package: pkgName, sink: entry.pkg.XAudioSink, wid: xintent.widString(entry.wid) });
       }
     }
-    for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
+    for (const [widStr, matchboxToml] of Object.entries(registry.windowRegistry)) {
       if (matchboxToml && matchboxToml.XAudioSink) {
-        outputs.push({ app: matchboxToml.app?.id || `win-${widStr}`, sink: matchboxToml.XAudioSink, wid: widString(parseInt(widStr, 10)) });
+        outputs.push({
+          app: matchboxToml.app?.id || `win-${widStr}`,
+          sink: matchboxToml.XAudioSink,
+          wid: xintent.widString(parseInt(widStr, 10)),
+        });
       }
     }
     logger.info(`XAudioGetAudioOutputs returned ${outputs.length} outputs`);
     if (parsed.channel || parsed.senderWin) {
-      await sendXIntentEventV0(X, routerWin, {
+      await xintent.sendXIntentEventV0(daemon.X, daemon.routerWin, {
         targetWin: parsed.senderWin,
-        senderWin: routerWin,
+        senderWin: daemon.routerWin,
         channel: parsed.channel,
         controlWord: 3,
         payload: {
@@ -64,7 +65,7 @@ const handleXAudioGetAudioOutputsV0 = {
 };
 
 const handleXAudioPlayV0 = {
-  parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev, { unlinkPayloadBlob: false }),
+  parse: async (ev) => xintent.parseXIntentIntentV0(daemon.X, daemon.routerWin, ev, { unlinkPayloadBlob: false }),
   securityContext: (parsed) => ({
     source: { window: parsed.senderWin },
     action: 'XAudio.Play',
@@ -73,14 +74,14 @@ const handleXAudioPlayV0 = {
     const { senderWin, channel, controlWord = 1, payload, payloadBlob, dataBlob } = parsed;
     const isSyn = (controlWord & 1) !== 0;
 
-    let channelObj = getChannelForMessage(parsed);
+    let channelObj = xchannel.getChannelForMessage(parsed);
     if (isSyn && !channelObj) {
-      channelObj = newChannel(senderWin, channel, parsed);
+      channelObj = xchannel.newChannel(senderWin, channel, parsed);
     }
 
     const sinkWin = await findXAudioSinkWindow();
     if (!sinkWin) {
-      logger.error(`XAudioPlay: No active XAudioSink window found for sender ${widString(senderWin)}`);
+      logger.error(`XAudioPlay: No active XAudioSink window found for sender ${xintent.widString(senderWin)}`);
       return;
     }
 
@@ -88,14 +89,14 @@ const handleXAudioPlayV0 = {
       channelObj.handlerWin = sinkWin;
     }
 
-    logger.info(`[xaudio] Routing ${frameDesc(parsed)} to sink window ${widString(sinkWin)} (dataBlob: ${widString(dataBlob)})`);
+    logger.info(`[xaudio] Routing ${xintent.frameDesc(parsed)} to sink window ${xintent.widString(sinkWin)} (dataBlob: ${xintent.widString(dataBlob)})`);
 
-    const dispatchFn = sendXAudioPlayV0 || sendXIntentIntentV0;
-    await dispatchFn(X, routerWin, {
+    const dispatchFn = xintent.sendXAudioPlayV0 || xintent.sendXIntentIntentV0;
+    await dispatchFn(daemon.X, daemon.routerWin, {
       targetWin: sinkWin,
-      senderWin: routerWin,
+      senderWin: daemon.routerWin,
       controlWord,
-      ...getChannelToSend(sinkWin, channelObj),
+      ...xchannel.getChannelToSend(sinkWin, channelObj),
       payload,
       payloadBlob,
       dataBlob,
@@ -104,25 +105,25 @@ const handleXAudioPlayV0 = {
 };
 
 const handleXAudioControlV0 = {
-  parse: async (ev) => parseXIntentIntentV0(X, routerWin, ev, { unlinkPayloadBlob: false }),
+  parse: async (ev) => xintent.parseXIntentIntentV0(daemon.X, daemon.routerWin, ev, { unlinkPayloadBlob: false }),
   securityContext: (parsed) => ({
     source: { window: parsed.senderWin },
     action: 'XAudio.Control',
   }),
   accept: async (parsed) => {
-    const { senderWin, channel, controlWord = 1, payload, payloadBlob, dataBlob } = parsed;
+    const { controlWord = 1, payload, payloadBlob, dataBlob } = parsed;
 
-    let channelObj = getChannelForMessage(parsed);
+    const channelObj = xchannel.getChannelForMessage(parsed);
     const sinkWin = (channelObj && channelObj.handlerWin) ? channelObj.handlerWin : await findXAudioSinkWindow();
 
     if (sinkWin) {
-      logger.info(`[xaudio] Routing ${frameDesc(parsed)} to sink window ${widString(sinkWin)}`);
-      const dispatchFn = sendXAudioControlV0 || sendXIntentIntentV0;
-      await dispatchFn(X, routerWin, {
+      logger.info(`[xaudio] Routing ${xintent.frameDesc(parsed)} to sink window ${xintent.widString(sinkWin)}`);
+      const dispatchFn = xintent.sendXAudioControlV0 || xintent.sendXIntentIntentV0;
+      await dispatchFn(daemon.X, daemon.routerWin, {
         targetWin: sinkWin,
-        senderWin: routerWin,
+        senderWin: daemon.routerWin,
         controlWord,
-        ...getChannelToSend(sinkWin, channelObj),
+        ...xchannel.getChannelToSend(sinkWin, channelObj),
         payload,
         payloadBlob,
         dataBlob,
@@ -132,10 +133,10 @@ const handleXAudioControlV0 = {
 };
 
 const xaudioUnregisterWindow = (destroyedWin) => {
-  for (const channelObj of Object.values(activeChannels)) {
+  for (const channelObj of Object.values(xchannel.activeChannels)) {
     if (channelObj.senderWin === destroyedWin || channelObj.handlerWin === destroyedWin) {
-      logger.info(`xaudioUnregisterWindow: closing channel ${channelObj.channelNum} for destroyed window ${widString(destroyedWin)}`);
-      closeChannel(channelObj);
+      logger.info(`xaudioUnregisterWindow: closing channel ${channelObj.channelNum} for destroyed window ${xintent.widString(destroyedWin)}`);
+      xchannel.closeChannel(channelObj);
     }
   }
 };
