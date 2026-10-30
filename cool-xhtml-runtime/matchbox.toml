@@ -1,0 +1,10 @@
+[app]
+id = "cool-xhtml-runtime"
+name = "Cool XHTML Runtime"
+description = "Desktop XHTML Card Runtime & Live Migration Receiver"
+
+[intents."xhtml.LiveMigrate"]
+exec = "bun run index.js"
+
+[intents."fs.Open"]
+exec = "bun run index.js"

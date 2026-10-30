@@ -91,6 +91,8 @@ const PROTOCOL_ATOMS = [
   "XAUDIO_PREFETCH_SOUND_BLOB_V0",
   "XAUDIO_SEEK_STREAM_V0",
   "XAUDIO_GET_AUDIO_OUTPUTS_V0",
+  "XHTML_CORK_WINDOW_V0",
+  "XHTML_MIGRATE_WINDOW_V0",
   "SESSION_SPEAKERS",
   "message/http",
 ];
@@ -356,6 +358,25 @@ async function XBlobTransfer(X, routerWin, senderWin, blobId, granteeWin) {
   return XClientMessage(X, routerWin, atoms.XBLOB_TRANSFER_V0, [senderWin, blobId, granteeWin]);
 }
 
+async function XHtmlCorkWindow(X, routerWin, senderWin, targetCardWin) {
+  const target = routerWin || senderWin || 0;
+  logger.debug(`XHtmlCorkWindow(X, ${widString(target)}, ${widString(senderWin || 0)}, ${widString(targetCardWin || 0)})`);
+  return XClientMessage(X, target, atoms.XHTML_CORK_WINDOW_V0, [
+    senderWin || 0,
+    targetCardWin || senderWin || 0,
+  ]);
+}
+
+async function XHtmlMigrateWindow(X, routerWin, senderWin, oldCardWin, newCardWin) {
+  const target = routerWin || senderWin || 0;
+  logger.debug(`XHtmlMigrateWindow(X, ${widString(target)}, ${widString(senderWin || 0)}, ${widString(oldCardWin || 0)}, ${widString(newCardWin || 0)})`);
+  return XClientMessage(X, target, atoms.XHTML_MIGRATE_WINDOW_V0, [
+    senderWin || 0,
+    oldCardWin || 0,
+    newCardWin || 0,
+  ]);
+}
+
 async function resolveXBlobHostWin(X, routerWin, host) {
   if (typeof host === "number" && host > 0) return host;
   try {
@@ -483,6 +504,8 @@ module.exports = {
   XBlobWrite,
   XBlobBroadcast,
   XBlobStreamClosed,
+  XHtmlCorkWindow,
+  XHtmlMigrateWindow,
   formatXBlobAtRest,
   parseXBlobAtRest,
   getXBlobSocketPath,

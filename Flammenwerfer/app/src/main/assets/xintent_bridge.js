@@ -83,6 +83,12 @@
       'Accept': (payload && payload.Accept) ? payload.Accept : '*/*',
       'X-Forwarded-By': 'flammenwerfer-web-card'
     };
+    if (window.xhtml && window.xhtml.cardWin) {
+      headers['X-Card-Window'] = String(window.xhtml.cardWin);
+    }
+    if (payload && payload.txId !== undefined) {
+      headers['X-Tx-Id'] = String(payload.txId);
+    }
     if (controlWord !== undefined) {
       var ctrlStrings = [];
       if (controlWord & 1) ctrlStrings.push('SYN');
@@ -485,5 +491,127 @@
     }
   };
 
-  console.log('[Flammenwerfer] Attached window.xintent and window.xaudio runtime library.');
+  window.xhtml = window.xhtml || {
+    cardWin: null,
+    cardApp: 'xhtml-card',
+    cardId: 'main',
+    heldBlobs: new Set(),
+    softLinkedBlobs: new Set(),
+    openChannels: new Map(),
+    onfreeze: null,
+    onthaw: null,
+
+    ensureCardSession: async function() {
+      if (this.cardWin) return this.cardWin;
+      try {
+        var parts = (window.location.pathname || '').split('/').filter(Boolean);
+        if (parts[0] === 'apps' && parts[1]) {
+          this.cardApp = parts[1];
+          this.cardId = parts[2] || 'main';
+        }
+        var res = await fetch('/api/card-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': 'flammenwerfer-web-card' },
+          body: JSON.stringify({ appId: this.cardApp, cardId: this.cardId })
+        });
+        if (res.ok) {
+          var data = await res.json();
+          if (data.cardWin) this.cardWin = data.cardWin;
+        }
+      } catch (_) {}
+      return this.cardWin;
+    },
+
+    serializeState: async function() {
+      await this.ensureCardSession();
+      var customState = null;
+      if (typeof this.onfreeze === 'function') {
+        try { customState = await this.onfreeze(); } catch (_) {}
+      }
+      var ls = {};
+      var ss = {};
+      try {
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (k !== null) ls[k] = localStorage.getItem(k);
+        }
+        for (var j = 0; j < sessionStorage.length; j++) {
+          var sk = sessionStorage.key(j);
+          if (sk !== null) ss[sk] = sessionStorage.getItem(sk);
+        }
+      } catch (_) {}
+      var inputs = {};
+      try {
+        var els = document.querySelectorAll('input, select, textarea');
+        for (var m = 0; m < els.length; m++) {
+          var el = els[m];
+          var key = el.id ? '#' + el.id : (el.name ? '[name="' + el.name + '"]' : 'input:' + m);
+          if (el.type === 'checkbox' || el.type === 'radio') {
+            inputs[key] = { checked: Boolean(el.checked), value: el.value };
+          } else if (el.type !== 'file') {
+            inputs[key] = el.value;
+          }
+        }
+      } catch (_) {}
+      return {
+        version: '0.1',
+        cardApp: this.cardApp,
+        cardId: this.cardId,
+        cardWin: this.cardWin,
+        url: window.location ? window.location.href : '',
+        timestamp: Date.now(),
+        storage: { localStorage: ls, sessionStorage: ss },
+        domState: { scroll: { x: window.scrollX || 0, y: window.scrollY || 0 }, inputs: inputs },
+        heldBlobs: Array.from(this.heldBlobs),
+        softLinkedBlobs: Array.from(this.softLinkedBlobs),
+        openChannels: Array.from(this.openChannels.values()).map((ch) => ({
+          txId: ch.txId,
+          intent: ch.intent || null,
+          app: ch.app || null
+        })),
+        customState: customState
+      };
+    },
+
+    liveMigrate: async function(targetApp, options) {
+      var resolvedTarget = targetApp || (window.xintent.getDefaultRemoteDevice() + ':cool-xhtml-runtime');
+      var snapshot = await this.serializeState();
+      var createHeaders = {
+        'Content-Type': 'application/json',
+        'X-Forwarded-By': 'flammenwerfer-web-card'
+      };
+      if (this.cardWin) createHeaders['X-Card-Window'] = String(this.cardWin);
+      var blobRes = await fetch('/blobs', {
+        method: 'PUT',
+        headers: createHeaders,
+        body: JSON.stringify({
+          xblobType: 'Blob',
+          type: 'application/json',
+          name: this.cardApp + '-' + this.cardId + '.xhtml-snapshot.json',
+          data: snapshot
+        })
+      });
+      var blobJson = await blobRes.json();
+      var stateBlobId = blobJson.blobId || blobJson.blob;
+      if (this.heldBlobs) this.heldBlobs.delete(String(stateBlobId));
+
+      logNative('[xhtml.LiveMigrate 🚀] Migrating card ' + this.cardApp + '/' + this.cardId + ' (cardWin=' + this.cardWin + ', stateBlob=' + stateBlobId + ') to ' + resolvedTarget);
+      var res = await window.xintent.intent('xhtml.LiveMigrate', Object.assign({
+        intent: 'xhtml.LiveMigrate',
+        app: resolvedTarget,
+        cardApp: this.cardApp,
+        cardId: this.cardId,
+        oldCardWin: this.cardWin,
+        dataBlob: stateBlobId,
+        controlWord: 1
+      }, options || {}), resolvedTarget);
+
+      var parts = typeof res.parseMultipart === 'function' ? await res.parseMultipart() : [];
+      var result = (parts[0] && parts[0].json) || { status: res.ok ? 'ok' : 'error' };
+      callNative('onCardMigrated');
+      return result;
+    }
+  };
+
+  console.log('[Flammenwerfer] Attached window.xintent, window.xaudio, and window.xhtml runtime library.');
 })();

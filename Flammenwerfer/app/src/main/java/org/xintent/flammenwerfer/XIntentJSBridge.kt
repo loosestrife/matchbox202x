@@ -99,6 +99,18 @@ class XIntentJSBridge(private val activity: CardsActivity) {
 
     @Suppress("unused")
     @JavascriptInterface
+    fun handleLiveMigrate(targetApp: String) {
+        activity.triggerLiveMigrate(targetApp)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun onCardMigrated() {
+        activity.handleCardMigrated()
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
     fun logMessage(msg: String) {
         XIntentLogManager.addLog(msg)
     }

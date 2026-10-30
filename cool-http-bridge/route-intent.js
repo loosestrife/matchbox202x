@@ -112,7 +112,7 @@ function wakeTargetDeviceIfNeeded(targetApp) {
   }
 }
 
-function registerHttpStreamChannel({ req, res, txId, intent, payload, reqControlWord }) {
+function registerHttpStreamChannel({ req, res, senderWin, txId, intent, payload, reqControlWord }) {
   const state = { headersSent: false };
   const boundary = 'MatchboxFrameBoundary_' + Date.now().toString(16);
 
@@ -124,17 +124,20 @@ function registerHttpStreamChannel({ req, res, txId, intent, payload, reqControl
       state,
       boundary,
       logger,
+      senderWin,
       txId,
       intent,
       payload,
       broadcastWsFrame,
       activeHttpAudioStreams,
       channelNatTable: server.channelNatTable,
+      deleteChannelSession: server.deleteChannelSession,
       resolve,
     });
 
-    server.channelNatTable[txId] = {
+    server.setChannelSession(senderWin, txId, {
       txId,
+      cardWin: senderWin,
       type: 'http',
       res,
       intent,
@@ -143,23 +146,23 @@ function registerHttpStreamChannel({ req, res, txId, intent, payload, reqControl
       createdAt: Date.now(),
       messageFromX: handleMessageFromX,
       writeFrame: handleMessageFromX,
-    };
+    });
 
     res.on('close', () => {
       if (!res.writableEnded && !res.finished) {
         logger.info(`[HTTP STREAM ABORTED] Client closed connection prematurely for txId ${txId}`);
-        delete server.channelNatTable[txId];
+        server.deleteChannelSession(senderWin, txId);
         resolve();
       }
     });
   });
 }
 
-async function handleStreamedIntent({ req, res, intent, payload, txId, reqControlWord }) {
-  const responsePromise = registerHttpStreamChannel({ req, res, txId, intent, payload, reqControlWord });
+async function handleStreamedIntent({ req, res, senderWin, intent, payload, txId, reqControlWord }) {
+  const responsePromise = registerHttpStreamChannel({ req, res, senderWin, txId, intent, payload, reqControlWord });
   const rawBlob = helpers.extractRawBlobRef(req, payload);
   const routerWin = await xintent.getValidRouterWin(X, root);
-  const dataBlob = await resolveDataBlob(rawBlob, X, routerWin, clientWin);
+  const dataBlob = await resolveDataBlob(rawBlob, X, routerWin, senderWin);
   const dispatchFn = helpers.resolveIntentDispatchFn(intent);
 
   const isXAudioPlay = intent.startsWith('xaudio.Play') || intent === 'XAudioPlay' || intent === 'XAudioPlayV0';
@@ -171,7 +174,7 @@ async function handleStreamedIntent({ req, res, intent, payload, txId, reqContro
     const primarySession = activeHttpAudioStreams.get(cookie);
     logger.info(`route-intent: [XAUDIO STREAM] Active primary stream connection exists for cookie '${cookie}'. Forwarding seqnum ${payload.seqnum} on primary txId ${primarySession.txId} and returning 202 Accepted.`);
     await dispatchFn(X, routerWin, {
-      senderWin: clientWin,
+      senderWin,
       payload,
       txId: primarySession.txId,
       controlWord: reqControlWord,
@@ -187,7 +190,7 @@ async function handleStreamedIntent({ req, res, intent, payload, txId, reqContro
   }
 
   await dispatchFn(X, routerWin, {
-    senderWin: clientWin,
+    senderWin,
     payload,
     txId,
     controlWord: reqControlWord,
@@ -202,6 +205,7 @@ const routeIntent = async (req, res) => {
   const intent = `${namespace}.${action}`;
   const payload = helpers.validateAndNormalizeIntentPayload(req, intent);
   const targetApp = payload.app;
+  const senderWin = server.parseWindowId(req.headers['x-card-window'] || payload.cardWin) || clientWin;
 
   const logPayload = helpers.buildIntentLogPayload(req, payload);
   helpers.applyRequestHeadersToPayload(req, payload);
@@ -210,21 +214,23 @@ const routeIntent = async (req, res) => {
   logger.info(`[INTENT] ${intent}${targetApp ? ` -> Target: ${targetApp}` : ''}`, logPayload);
   wakeTargetDeviceIfNeeded(targetApp);
 
-  const txId = server.getNextTxId();
+  const requestedTxId = Number(req.headers['x-tx-id'] || payload.txId || 0);
+  const txId = (requestedTxId > 0 && requestedTxId < 16777216) ? requestedTxId : server.getNextTxId();
+  server.advanceTxIdPast(txId);
   const { reqControlWord, opensChannel } = helpers.parseChannelControlOptions(req, payload);
 
   try {
     if (opensChannel) {
-      return await handleStreamedIntent({ req, res, intent, payload, txId, reqControlWord });
+      return await handleStreamedIntent({ req, res, senderWin, intent, payload, txId, reqControlWord });
     }
 
     const rawBlob = helpers.extractRawBlobRef(req, payload);
     const routerWin = await xintent.getValidRouterWin(X, root);
-    const dataBlob = await resolveDataBlob(rawBlob, X, routerWin, clientWin);
+    const dataBlob = await resolveDataBlob(rawBlob, X, routerWin, senderWin);
     const dispatchFn = helpers.resolveIntentDispatchFn(intent);
 
     await dispatchFn(X, routerWin, {
-      senderWin: clientWin,
+      senderWin,
       payload,
       txId,
       controlWord: reqControlWord,
@@ -232,7 +238,8 @@ const routeIntent = async (req, res) => {
     });
 
     res.setHeader('Matchbox-Bridge', '1.0');
-    res.status(200).json({ status: 'ok', intent, targetApp });
+    res.setHeader('X-Tx-Id', String(txId));
+    res.status(200).json({ status: 'ok', intent, targetApp, txId });
   } catch (err) {
     logger.error(
       `[ROUTE INTENT ERROR] ${intent}${targetApp ? ` to ${targetApp}` : ''} failed: ${err.message}`,

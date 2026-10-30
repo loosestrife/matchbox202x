@@ -26,15 +26,45 @@ function isRejectedDecision(decision) {
   return decision === 'drop' || decision === '401' || decision === '404';
 }
 
+function parseHostQualifiedAppId(targetAppId) {
+  if (!targetAppId || typeof targetAppId !== 'string' || !targetAppId.includes(':')) {
+    return { targetHost: null, targetPkg: targetAppId || null };
+  }
+  const idx = targetAppId.indexOf(':');
+  return {
+    targetHost: targetAppId.slice(0, idx),
+    targetPkg: targetAppId.slice(idx + 1),
+  };
+}
+
+function matchesAppIdOrPkg(appObj, targetAppId, targetPkg) {
+  if (!appObj) return false;
+  return (
+    appObj.id === targetAppId ||
+    appObj.name === targetAppId ||
+    (Boolean(targetPkg) && (appObj.id === targetPkg || appObj.name === targetPkg))
+  );
+}
+
 function selectTargetServiceEntry(registryEntries, windowRegistry, intent, targetAppId) {
   if (!targetAppId) return registryEntries[0];
+  const { targetHost, targetPkg } = parseHostQualifiedAppId(targetAppId);
 
-  const matched = registryEntries.find(
-    (entry) =>
-      entry.matchboxToml?.app?.id === targetAppId ||
-      entry.matchboxToml?.app?.name === targetAppId ||
-      entry.appId === targetAppId
-  );
+  const hostMatched = targetHost
+    ? registryEntries.find(
+        (entry) =>
+          matchesAppIdOrPkg(entry.matchboxToml?.app, targetAppId, targetPkg) &&
+          entry.matchboxToml?.computer?.host === targetHost
+      )
+    : null;
+  const matched =
+    hostMatched ||
+    registryEntries.find(
+      (entry) =>
+        matchesAppIdOrPkg(entry.matchboxToml?.app, targetAppId, targetPkg) ||
+        entry.appId === targetAppId ||
+        (Boolean(targetPkg) && entry.appId === targetPkg)
+    );
   if (matched) {
     logger.info(`[intent-router] PolicyEngine matched target app '${targetAppId}' to service window (${widString(matched.wid)})`);
     return matched;
@@ -42,7 +72,7 @@ function selectTargetServiceEntry(registryEntries, windowRegistry, intent, targe
 
   logger.info(`[intent-router] Target app '${targetAppId}' not found in active intentRegistry for ${intent}, checking windowRegistry...`);
   for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
-    if (matchboxToml?.app?.id === targetAppId || matchboxToml?.app?.name === targetAppId) {
+    if (matchesAppIdOrPkg(matchboxToml?.app, targetAppId, targetPkg)) {
       const numWid = Number(widStr);
       logger.info(`[intent-router] PolicyEngine matched target app '${targetAppId}' to windowRegistry window (${widString(numWid)})`);
       return { wid: numWid, matchboxToml };
@@ -51,10 +81,28 @@ function selectTargetServiceEntry(registryEntries, windowRegistry, intent, targe
   return registryEntries[0];
 }
 
+function selectLighterEntry(lighterEntries, targetAppId) {
+  if (!lighterEntries || lighterEntries.length === 0) return null;
+  if (!targetAppId) return lighterEntries[0];
+  const { targetHost, targetPkg } = parseHostQualifiedAppId(targetAppId);
+  if (targetHost && targetPkg) {
+    const exact = lighterEntries.find(
+      (e) => (e.packageName === targetPkg || e.name === targetPkg) && e.computer?.host === targetHost
+    );
+    if (exact) return exact;
+  }
+  if (targetPkg) {
+    const pkgMatch = lighterEntries.find((e) => e.packageName === targetPkg || e.name === targetPkg);
+    if (pkgMatch) return pkgMatch;
+  }
+  return lighterEntries[0];
+}
+
 async function queueAndLaunchService({
   xchannelFrame,
   intent,
   actionStr,
+  targetAppId,
   lighterRegistry,
   intentsAwaitingServicesQueue,
   sendXIntentIntentV0,
@@ -77,8 +125,9 @@ async function queueAndLaunchService({
   }
 
   const lighterRegistryEntry = lighterRegistry[intent];
-  if (lighterRegistryEntry && lighterRegistryEntry.length > 0) {
-    const { computer, packageName, wid } = lighterRegistryEntry[0];
+  const chosenLighter = selectLighterEntry(lighterRegistryEntry, targetAppId);
+  if (chosenLighter) {
+    const { computer, packageName, wid } = chosenLighter;
     await sendXIntentIntentV0(X, routerWin, {
       targetWin: wid,
       senderWin: routerWin,
@@ -88,6 +137,7 @@ async function queueAndLaunchService({
         computer,
         package: packageName,
         intendedIntent: intent,
+        targetApp: targetAppId || undefined,
       },
     });
   } else {
@@ -129,7 +179,7 @@ async function evaluateRoutePolicy(ctx) {
     return { status: 'matched', selectedEntry, targetAppId };
   }
 
-  return await queueAndLaunchService({ ...ctx, actionStr });
+  return await queueAndLaunchService({ ...ctx, actionStr, targetAppId });
 }
 
 module.exports = {

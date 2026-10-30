@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import org.json.JSONObject
 import org.xintent.flammenwerfer.audio.LocalAudioPlayer
+import org.xintent.flammenwerfer.config.XIntentPreferences
 import org.xintent.flammenwerfer.core.XIntentLogManager
 import org.xintent.flammenwerfer.ui.theme.FlammenwerferTheme
 import java.util.Locale
@@ -144,6 +145,28 @@ class CardsActivity : ComponentActivity() {
 
     fun dispatchJsXAudioResponse(responseJson: JSONObject) {
         runOnUiThread { CardsWebViewSupport.evaluateXAudioFrame(cardWebView, responseJson) }
+    }
+
+    fun triggerLiveMigrate(targetApp: String? = null) {
+        val resolvedTarget = targetApp?.takeIf { it.isNotBlank() }
+            ?: "${XIntentPreferences.getDefaultRemoteDevice(applicationContext)}:cool-xhtml-runtime"
+        localTtsEngine?.stop()
+        localAudioPlayer?.release()
+        XIntentLogManager.addLog("[CardsActivity 🚀] Triggering xhtml.LiveMigrate to $resolvedTarget")
+        runOnUiThread {
+            cardWebView?.evaluateJavascript(
+                "if (window.xhtml && typeof window.xhtml.liveMigrate === 'function') { window.xhtml.liveMigrate('$resolvedTarget'); }",
+                null,
+            )
+        }
+    }
+
+    fun handleCardMigrated() {
+        XIntentLogManager.addLog("[CardsActivity ✅] Card migration completed; closing local card view")
+        if (isPinned) {
+            togglePinCard(false)
+        }
+        runOnUiThread { finish() }
     }
 
     fun triggerLocalPrefetch(jsonPayload: String): String =

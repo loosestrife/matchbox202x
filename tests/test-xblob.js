@@ -187,6 +187,38 @@ async function runUnitTests() {
     console.log('  -> PASS');
   }
 
+  // Test 7: migrateWindowBlobs atomic transfer of links and softLinks without GC
+  {
+    console.log('[Test 7] migrateWindowBlobs atomic transfer of links and softLinks');
+    const oldWin = 0x700001;
+    const newWin = 0x800001;
+    const hardBlob = 0x300007;
+    const softBlob = 0x300008;
+
+    xblobRegistry[hardBlob] = {
+      links: [oldWin],
+      softLinks: [],
+      hosts: [0x200001],
+    };
+    xblobRegistry[softBlob] = {
+      links: [0x200001],
+      softLinks: [oldWin],
+      hosts: [0x200001],
+    };
+
+    const { migratedLinks, migratedSoftLinks } = xblobModule.migrateWindowBlobs(oldWin, newWin);
+    assert(migratedLinks.includes(hardBlob), 'hardBlob should be in migratedLinks');
+    assert(migratedSoftLinks.includes(softBlob), 'softBlob should be in migratedSoftLinks');
+    assert.deepStrictEqual(xblobRegistry[hardBlob].links, [newWin], 'hardBlob links should now contain only newWin');
+    assert.deepStrictEqual(xblobRegistry[softBlob].softLinks, [newWin], 'softBlob softLinks should now contain only newWin');
+
+    // Unlinking oldWin after migration must not destroy either blob
+    xblobModule.xblobUnlinkWindow(oldWin);
+    assert(xblobRegistry[hardBlob], 'hardBlob must survive xblobUnlinkWindow(oldWin)');
+    assert(xblobRegistry[softBlob], 'softBlob must survive xblobUnlinkWindow(oldWin)');
+    console.log('  -> PASS');
+  }
+
   console.log('\nAll XBlob unit tests passed successfully!\n');
   process.exit(0);
 }

@@ -88,11 +88,53 @@ const xblobUnlinkWindow = async (destroyedWin) => {
   for (const blobIdStr of blobIds) {
     const blobId = Number(blobIdStr);
     const regEntry = xblobRegistry[blobId];
-    if (!regEntry?.links) continue;
-    while (regEntry.links.includes(destroyedWin)) {
-      await xblobUnlink(blobId, destroyedWin);
+    if (!regEntry) continue;
+    if (regEntry.links) {
+      while (regEntry.links.includes(destroyedWin)) {
+        await xblobUnlink(blobId, destroyedWin);
+      }
+    }
+    if (regEntry.softLinks) {
+      const sIdx = regEntry.softLinks.indexOf(destroyedWin);
+      if (sIdx !== -1) {
+        regEntry.softLinks.splice(sIdx, 1);
+        await gc.checkForDeletion(blobId, regEntry, xblobRegistry);
+      }
     }
   }
+};
+
+const migrateWindowBlobs = (oldWin, newWin) => {
+  const migratedLinks = [];
+  const migratedSoftLinks = [];
+  if (!oldWin || !newWin || oldWin === newWin) {
+    return { migratedLinks, migratedSoftLinks };
+  }
+
+  for (const [blobIdStr, regEntry] of Object.entries(xblobRegistry)) {
+    const blobId = Number(blobIdStr);
+    if (!regEntry) continue;
+
+    if (Array.isArray(regEntry.links) && regEntry.links.includes(oldWin)) {
+      if (!regEntry.links.includes(newWin)) {
+        regEntry.links.push(newWin);
+      }
+      regEntry.links = regEntry.links.filter((w) => w !== oldWin);
+      migratedLinks.push(blobId);
+      logger.info(`migrateWindowBlobs: transferred hard link on blob ${xintent.widString(blobId)} from ${xintent.widString(oldWin)} to ${xintent.widString(newWin)}`);
+    }
+
+    if (Array.isArray(regEntry.softLinks) && regEntry.softLinks.includes(oldWin)) {
+      if (!regEntry.softLinks.includes(newWin)) {
+        regEntry.softLinks.push(newWin);
+      }
+      regEntry.softLinks = regEntry.softLinks.filter((w) => w !== oldWin);
+      migratedSoftLinks.push(blobId);
+      logger.info(`migrateWindowBlobs: transferred soft link on blob ${xintent.widString(blobId)} from ${xintent.widString(oldWin)} to ${xintent.widString(newWin)}`);
+    }
+  }
+
+  return { migratedLinks, migratedSoftLinks };
 };
 
 module.exports = {
@@ -102,4 +144,5 @@ module.exports = {
   xblobUnlink,
   implicitXBlobTransfer,
   xblobUnlinkWindow,
+  migrateWindowBlobs,
 };

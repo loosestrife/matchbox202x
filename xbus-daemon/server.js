@@ -48,6 +48,8 @@ function buildDispatchAtomsMap() {
     XAUDIO_PLAY_V0: xaudio.handleXAudioPlayV0,
     XAUDIO_PLAY_RESPONSE_V0: router.handleForwardingOfXChannelJsonFrame,
     XAUDIO_CONTROL_V0: xaudio.handleXAudioControlV0,
+    XHTML_CORK_WINDOW_V0: router.handleXHtmlCorkWindowV0,
+    XHTML_MIGRATE_WINDOW_V0: router.handleXHtmlMigrateWindowV0,
   };
 }
 
@@ -111,9 +113,9 @@ function extractIntentNameFromParsed(parsed) {
 
 function applySecurityDecision(securityPolicy, handler, parsed) {
   if (securityPolicy === 'accept') {
-    handler.accept(parsed);
+    return handler.accept(parsed);
   } else if ((securityPolicy === '401' || securityPolicy === '404') && typeof handler[securityPolicy] === 'function') {
-    handler[securityPolicy](parsed);
+    return handler[securityPolicy](parsed);
   } else if (securityPolicy === 'disconnect') {
     logger.info('disconnecting misbehaving client', xintent.widString(parsed.sender));
   }
@@ -139,7 +141,7 @@ async function processDispatchedClientMessage(ev, msgTypeName, handler) {
       { X: daemon.X, atoms: xintent.atoms }
     );
   }
-  applySecurityDecision(securityPolicy, handler, parsed);
+  await applySecurityDecision(securityPolicy, handler, parsed);
 }
 
 async function handleRouterClientMessage(ev, dispatchTable, enqueueClientTask) {

@@ -44,6 +44,10 @@ xvfb-run -a bash -c "
   echo ''
   echo '--- 8. Running Real Final-Copy-Pro Transcode Integration Test ---'
   bun /home/user/matchbox202x/tests/test_transcode_real_final_copy_pro.js
+
+  echo ''
+  echo '--- 9. Running XHTML LiveMigrate E2E Test ---'
+  bun /home/user/matchbox202x/tests/test_xhtml_live_migrate.js
 "
 
 echo ""

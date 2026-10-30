@@ -233,6 +233,7 @@ fun CardScreen(
                 context.startActivity(intent)
             },
             onTogglePin = { activity?.togglePinCard(!(activity.isPinned)) },
+            onMigrate = { activity?.triggerLiveMigrate() },
             onReload = { webViewRef?.reload() },
         )
 
@@ -265,6 +266,7 @@ private fun CardTopToolbar(
     onClose: () -> Unit,
     onOpenSettings: () -> Unit,
     onTogglePin: () -> Unit,
+    onMigrate: () -> Unit = {},
     onReload: () -> Unit,
 ) {
     Row(
@@ -284,6 +286,7 @@ private fun CardTopToolbar(
         ) {
             Text(if (isPinned) "📌 Pinned" else "📌 Pin")
         }
+        OutlinedButton(onClick = onMigrate) { Text("Migrate ↗") }
         Spacer(modifier = Modifier.weight(1f))
         Button(onClick = onReload) { Text("Reload") }
     }

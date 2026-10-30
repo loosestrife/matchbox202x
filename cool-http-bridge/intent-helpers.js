@@ -97,9 +97,10 @@ function writeXBlobFrame(res, state, boundary, logger, blobData, customHeaders =
   }
 }
 
-function buildFrameCustomHeaders(blobId, controlWord) {
+function buildFrameCustomHeaders(blobId, controlWord, txId) {
   const headers = {};
   if (blobId) headers['X-Attached-Blob-Id'] = blobId;
+  if (txId !== undefined) headers['X-Tx-Id'] = String(txId);
   if (controlWord !== undefined) {
     const ctrlStrings = [];
     if (controlWord & 1) ctrlStrings.push('SYN');
@@ -124,23 +125,27 @@ async function fetchAndWriteAttachedBlob({ X, res, state, boundary, logger, blob
   }
 }
 
-function finalizeStreamOnFin({ res, state, boundary, logger, txId, controlWord, eventData, activeHttpAudioStreams, channelNatTable, resolve }) {
+function finalizeStreamOnFin({ res, state, boundary, logger, senderWin, txId, controlWord, eventData, activeHttpAudioStreams, channelNatTable, deleteChannelSession, resolve }) {
   logger.info('Closing HTTP stream (FIN received)', { txId, controlWord });
   if (state.headersSent) {
     res.write(`--${boundary}--\r\n`);
     res.end();
   } else {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'X-Tx-Id': String(txId) });
     res.end(JSON.stringify(eventData));
   }
   const cookieKey = eventData?.cookie || eventData?.OutputId;
   if (cookieKey) activeHttpAudioStreams.delete(cookieKey);
-  delete channelNatTable[txId];
+  if (typeof deleteChannelSession === 'function') {
+    deleteChannelSession(senderWin, txId);
+  } else {
+    delete channelNatTable[txId];
+  }
   resolve();
 }
 
 function createMessageFromXHandler(ctx) {
-  const { X, req, res, state, boundary, logger, txId, intent, payload, broadcastWsFrame, activeHttpAudioStreams, channelNatTable, resolve } = ctx;
+  const { X, req, res, state, boundary, logger, senderWin, txId, intent, payload, broadcastWsFrame, activeHttpAudioStreams, channelNatTable, deleteChannelSession, resolve } = ctx;
   return async (msg) => {
     if (res.writableEnded || res.finished) return;
 
@@ -153,7 +158,7 @@ function createMessageFromXHandler(ctx) {
       broadcastWsFrame(eventData);
     }
 
-    const customIntentHeaders = buildFrameCustomHeaders(blobId, controlWord);
+    const customIntentHeaders = buildFrameCustomHeaders(blobId, controlWord, txId);
     writeJsonFrame(res, state, boundary, eventData, customIntentHeaders);
 
     const preferVal = String(eventData?.Prefer || payload?.Prefer || req.headers['prefer'] || '').toLowerCase();
@@ -165,7 +170,7 @@ function createMessageFromXHandler(ctx) {
 
     const isFin = controlWord !== undefined && (controlWord & 2) !== 0;
     if (isFin && !res.writableEnded && !res.finished) {
-      finalizeStreamOnFin({ res, state, boundary, logger, txId, controlWord, eventData, activeHttpAudioStreams, channelNatTable, resolve });
+      finalizeStreamOnFin({ res, state, boundary, logger, senderWin, txId, controlWord, eventData, activeHttpAudioStreams, channelNatTable, deleteChannelSession, resolve });
     }
   };
 }

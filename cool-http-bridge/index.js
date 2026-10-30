@@ -15,6 +15,8 @@ const EXCLUDED_XBLOB_UPLOAD_PATHS = [
   '/XBlobTransfer',
   '/XBlobGrant',
   '/XBlobUnlink',
+  '/XBlobSoftLink',
+  '/XBlobSoftUnlink',
   '/XBlobBroadcast',
   '/broadcast',
 ];
@@ -43,7 +45,7 @@ function logXBlobUploadStart(logger, req) {
   logger.info(`Started receiving XBlob upload from ${source}${fileName ? `: "${fileName}"` : ''} (${mimeType}, ${sizeStr})`);
 }
 
-function registerRoutes(app, logger, intentRoutes, xblobRoutes) {
+function registerRoutes(app, logger, intentRoutes, xblobRoutes, { X, root }) {
   app.use(serverTools.loggerMiddleware);
   app.use(['/xblob', '/blobs'], (req, res, next) => {
     logXBlobUploadStart(logger, req);
@@ -53,7 +55,11 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes) {
   app.use(express.json({ limit: '2gb', type: ['application/json', 'application/*+json'] }));
   app.use(express.text({ limit: '2gb', type: ['text/plain', 'text/html', 'text/xml', 'text/css'] }));
   app.use((req, res, next) => {
-    if (typeof req.body === 'string' && req.body.trim()) {
+    if (!isXBlobUploadRequest(req) && Buffer.isBuffer(req.body) && req.body.length > 0) {
+      try {
+        req.body = JSON.parse(req.body.toString('utf8'));
+      } catch (_) {}
+    } else if (typeof req.body === 'string' && req.body.trim()) {
       try {
         req.body = JSON.parse(req.body);
       } catch (_) {
@@ -64,7 +70,7 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes) {
   });
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Card-Window, X-Tx-Id, X-Channel-Control, X-Attached-Blob-Id, Prefer');
     next();
   });
 
@@ -81,9 +87,53 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes) {
   app.delete('/blobs/:blobId', xblobRoutes.routeXBlobUnlink);
   app.delete('/xblob/:blobId', xblobRoutes.routeXBlobUnlink);
   app.delete('/xblob', xblobRoutes.routeXBlobUnlink);
+  app.post('/xblob/XBlobSoftLink', xblobRoutes.routeXBlobSoftLink);
+  app.post('/xblob/XBlobSoftUnlink', xblobRoutes.routeXBlobSoftUnlink);
   app.post('/xblob/XBlobBroadcast', xblobRoutes.routeXBlobBroadcast);
   app.post('/blobs/:blobId/broadcast', xblobRoutes.routeXBlobBroadcast);
   app.post('/xblob/:blobId/broadcast', xblobRoutes.routeXBlobBroadcast);
+
+  app.post('/api/card-session', async (req, res) => {
+    const appId = req.body?.appId || req.body?.app || 'xhtml-card';
+    const cardId = req.body?.cardId || req.body?.card || 'main';
+    let wid = serverGlobals.parseWindowId(req.body?.cardWin || req.headers['x-card-window']);
+    if (!wid) {
+      wid = await xintent.createClientWindow(X, root, `${appId}:${cardId}`);
+      X.ChangeProperty(0, wid, xintent.atoms.WM_NAME, xintent.atoms.STRING, 8, Buffer.from(`${appId}:${cardId}`, 'utf8'));
+      logger.info(`Allocated dedicated X11 card proxy window ${xintent.widString(wid)} for ${appId}/${cardId}`);
+    }
+    const record = serverGlobals.registerCardWindow(wid, appId, cardId);
+    res.json({ status: 'ok', cardWin: record.widHex, wid: record.wid, appId: record.appId, cardId: record.cardId });
+  });
+
+  app.post('/api/card-hydrated', (req, res) => {
+    const wid = serverGlobals.parseWindowId(req.body?.cardWin || req.headers['x-card-window']);
+    if (!wid) {
+      return res.status(400).json({ status: 'error', message: 'Invalid cardWin' });
+    }
+    const record = serverGlobals.registerCardWindow(wid, req.body?.cardApp, req.body?.cardId);
+    record.hydratedReport = {
+      ...(req.body || {}),
+      userAgent: req.headers['user-agent'] || 'unknown',
+      hydratedAt: Date.now(),
+    };
+    logger.info(`Browser hydrated card window ${record.widHex} (${record.appId}/${record.cardId}) via ${record.hydratedReport.userAgent}`);
+    res.json({ status: 'ok', cardWin: record.widHex });
+  });
+
+  app.delete('/api/card-session/:cardWin', async (req, res) => {
+    const wid = serverGlobals.parseWindowId(req.params.cardWin);
+    if (!wid) {
+      return res.status(400).json({ status: 'error', message: 'Invalid cardWin' });
+    }
+    const widHex = xintent.widString(wid);
+    delete serverGlobals.cardWindows[widHex];
+    try {
+      X.DestroyWindow(wid);
+      logger.info(`Destroyed X11 card proxy window ${widHex}`);
+    } catch (_) {}
+    res.json({ status: 'ok', cardWin: widHex });
+  });
 
   const serveFavicon = (req, res) => res.sendFile(path.join(__dirname, 'assets', 'favicon.ico'));
   app.get('/favicon.ico', serveFavicon);
@@ -115,8 +165,18 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes) {
       activeStreams: intentRoutes.getActiveAudioStreams(),
       deviceProxyWindows: serverGlobals.deviceProxyWindows,
       proxyWindowToDevice: serverGlobals.proxyWindowToDevice,
+      cardWindows: Object.values(serverGlobals.cardWindows).map((c) => ({
+        wid: c.wid,
+        widHex: c.widHex,
+        appId: c.appId,
+        cardId: c.cardId,
+        hasWs: Boolean(c.ws && c.ws.readyState === WebSocket.OPEN),
+        hydratedReport: c.hydratedReport || null,
+        createdAt: c.createdAt,
+      })),
       activeXChannels: Object.entries(serverGlobals.channelNatTable).map(([txId, session]) => ({
         txId: Number(txId),
+        cardWin: session.cardWin ? `0x${session.cardWin.toString(16)}` : null,
         type: session.type || (session.ws ? 'websocket' : 'http'),
         xaudioSink: session.xaudioSink || null,
         intent: session.intent || null,
@@ -167,7 +227,7 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes) {
 
   const app = express();
   app.set('json spaces', 2);
-  registerRoutes(app, logger, intentRoutes, xblobRoutes);
+  registerRoutes(app, logger, intentRoutes, xblobRoutes, { X, root });
 
   const server = http.createServer(app);
   setupWebSocketServer(server, { X, root, clientWin, logger, wsClients });

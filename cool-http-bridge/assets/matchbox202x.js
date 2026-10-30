@@ -41,19 +41,36 @@
     return ctrlStrings.length > 0 ? ctrlStrings.join(',') : null;
   }
 
+  function getActiveCardWin() {
+    if (window.xhtml && window.xhtml.cardWin) return window.xhtml.cardWin;
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const fromUrl = params.get('cardWin');
+      if (fromUrl) return fromUrl;
+    } catch (_) {}
+    return null;
+  }
+
+  function applyCardWinHeader(headers) {
+    const cardWin = getActiveCardWin();
+    if (cardWin) headers['X-Card-Window'] = String(cardWin);
+    return headers;
+  }
+
   function buildIntentHeaders(payload) {
     const headers = { 'Content-Type': 'application/json' };
     const ctrlHeader = formatControlWordHeader(payload.controlWord);
     if (ctrlHeader) headers['X-Channel-Control'] = ctrlHeader;
     if (payload.Accept) headers['Accept'] = payload.Accept;
     if (payload.Prefer) headers['Prefer'] = payload.Prefer;
+    if (payload.txId !== undefined) headers['X-Tx-Id'] = String(payload.txId);
     if (payload.headers && typeof payload.headers === 'object') {
       Object.assign(headers, payload.headers);
     }
     const conn = payload.Connection || payload.connection;
     if (conn) headers['Connection'] = conn;
     headers['X-Forwarded-By'] = getForwardedByHeader(payload['X-Forwarded-By']);
-    return headers;
+    return applyCardWinHeader(headers);
   }
 
   function parseFrameHeaders(headerText) {
@@ -197,12 +214,32 @@
       let boundary = null;
       let totalBytesReceived = 0;
       let chunkCount = 0;
+      let trackedTxId = null;
 
       response.getBytesReceived = () => totalBytesReceived;
       response.getChunkCount = () => chunkCount;
       window.xintent.lastStreamMetrics = {
         getBytesReceived: () => totalBytesReceived,
         getChunkCount: () => chunkCount,
+      };
+
+      const wrappedOnFrame = (frame) => {
+        if (frame && frame.headers) {
+          const txHeader = frame.headers['x-tx-id'];
+          if (txHeader && window.xhtml) {
+            trackedTxId = Number(txHeader);
+            const ctrl = frame.headers['x-channel-control'] || '';
+            if (ctrl.includes('FIN') || (frame.json && frame.json.disposition === 'final')) {
+              window.xhtml.openChannels.delete(trackedTxId);
+            } else {
+              window.xhtml.openChannels.set(trackedTxId, {
+                txId: trackedTxId,
+                onFrame: onFrame,
+              });
+            }
+          }
+        }
+        if (typeof onFrame === 'function') onFrame(frame);
       };
 
       while (true) {
@@ -216,7 +253,7 @@
           boundary = detectMultipartBoundary(buffer);
         }
         if (boundary) {
-          buffer = processMultipartBuffer(buffer, boundary, onFrame);
+          buffer = processMultipartBuffer(buffer, boundary, wrappedOnFrame);
         }
         if (done) break;
       }
@@ -269,40 +306,48 @@
 
       const res = await fetch('/blobs', {
         method: 'PUT',
-        headers: {
+        headers: applyCardWinHeader({
           'Content-Type': blobData.type || 'application/json',
           'Content-Encoding': contentEncoding,
           'Accept-Encoding': 'identity, base64, fd-rights',
           'X-Forwarded-By': getForwardedByHeader()
-        },
+        }),
         body: typeof blobData === 'string' ? blobData : JSON.stringify(blobData)
       });
+      let out;
       if (!res.ok) {
         const fallbackRes = await fetch('/xblob/XBlobCreate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+          headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
           body: JSON.stringify(blobData)
         });
         if (!fallbackRes.ok) throw new Error(`XBlobCreate failed: HTTP ${fallbackRes.status}`);
-        return fallbackRes.json();
+        out = await fallbackRes.json();
+      } else {
+        out = await res.json();
       }
-      return res.json();
+      const createdId = out?.blobId || out?.blob;
+      if (createdId && window.xhtml?.heldBlobs) {
+        window.xhtml.heldBlobs.add(String(createdId));
+      }
+      return out;
     },
 
     XBlobTransfer: async function(blobId, grantee = null) {
       const res = await fetch('/xblob/XBlobTransfer', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+        headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
         body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
       });
       if (!res.ok) throw new Error(`XBlobTransfer failed: HTTP ${res.status}`);
+      if (window.xhtml?.heldBlobs) window.xhtml.heldBlobs.delete(String(blobId));
       return res.json();
     },
 
     XBlobGrant: async function(blobId, grantee = null) {
       const res = await fetch('/xblob/XBlobGrant', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+        headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
         body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
       });
       if (!res.ok) throw new Error(`XBlobGrant failed: HTTP ${res.status}`);
@@ -312,17 +357,40 @@
     XBlobUnlink: async function(blobId) {
       const res = await fetch('/xblob/XBlobUnlink', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+        headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
         body: JSON.stringify({ blobId: blobId, blob: blobId })
       });
       if (!res.ok) throw new Error(`XBlobUnlink failed: HTTP ${res.status}`);
+      if (window.xhtml?.heldBlobs) window.xhtml.heldBlobs.delete(String(blobId));
+      return res.json();
+    },
+
+    XBlobSoftLink: async function(blobId, grantee = null) {
+      const res = await fetch('/xblob/XBlobSoftLink', {
+        method: 'POST',
+        headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
+        body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
+      });
+      if (!res.ok) throw new Error(`XBlobSoftLink failed: HTTP ${res.status}`);
+      if (window.xhtml?.softLinkedBlobs) window.xhtml.softLinkedBlobs.add(String(blobId));
+      return res.json();
+    },
+
+    XBlobSoftUnlink: async function(blobId, grantee = null) {
+      const res = await fetch('/xblob/XBlobSoftUnlink', {
+        method: 'POST',
+        headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
+        body: JSON.stringify({ blobId: blobId, blob: blobId, grantee: grantee })
+      });
+      if (!res.ok) throw new Error(`XBlobSoftUnlink failed: HTTP ${res.status}`);
+      if (window.xhtml?.softLinkedBlobs) window.xhtml.softLinkedBlobs.delete(String(blobId));
       return res.json();
     },
 
     XBlobBroadcast: async function(blobId, host = null, version = null) {
       const res = await fetch('/xblob/XBlobBroadcast', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+        headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
         body: JSON.stringify({ blobId: blobId, blob: blobId, host: host, version: version })
       });
       if (!res.ok) throw new Error(`XBlobBroadcast failed: HTTP ${res.status}`);
@@ -333,12 +401,12 @@
       const hexBlob = typeof blobId === 'number' ? `0x${blobId.toString(16)}` : String(blobId);
       const res = await fetch(`/blobs/${hexBlob}`, {
         method: 'GET',
-        headers: { 'Accept-Encoding': 'identity, base64, fd-rights', 'X-Forwarded-By': getForwardedByHeader() }
+        headers: applyCardWinHeader({ 'Accept-Encoding': 'identity, base64, fd-rights', 'X-Forwarded-By': getForwardedByHeader() })
       });
       if (!res.ok) {
         const fallbackRes = await fetch('/xblob/XBlobRead', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+          headers: applyCardWinHeader({ 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() }),
           body: JSON.stringify({ blobId: blobId, blob: blobId })
         });
         if (!fallbackRes.ok) throw new Error(`XBlobRead failed: HTTP ${fallbackRes.status}`);
@@ -363,6 +431,8 @@
   window.xblob.transfer = window.xblob.XBlobTransfer;
   window.xblob.grant = window.xblob.XBlobGrant;
   window.xblob.unlink = window.xblob.XBlobUnlink;
+  window.xblob.softLink = window.xblob.XBlobSoftLink;
+  window.xblob.softUnlink = window.xblob.XBlobSoftUnlink;
   window.xblob.broadcast = window.xblob.XBlobBroadcast;
 
   // --- window.xaudio ---
@@ -519,4 +589,328 @@
       }, app);
     }
   };
+
+  function inferCardIdentity() {
+    let cardApp = 'xhtml-card';
+    let cardId = 'main';
+    try {
+      const parts = (window.location.pathname || '').split('/').filter(Boolean);
+      if (parts[0] === 'apps' && parts[1]) {
+        cardApp = parts[1];
+        cardId = parts[2] || 'main';
+      }
+    } catch (_) {}
+    return { cardApp, cardId };
+  }
+
+  function snapshotWebStorage(storageObj) {
+    const out = {};
+    try {
+      if (!storageObj) return out;
+      for (let i = 0; i < storageObj.length; i++) {
+        const k = storageObj.key(i);
+        if (k !== null) out[k] = storageObj.getItem(k);
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  function restoreWebStorage(storageObj, map) {
+    try {
+      if (!storageObj || !map || typeof map !== 'object') return;
+      for (const [k, v] of Object.entries(map)) {
+        storageObj.setItem(k, String(v));
+      }
+    } catch (_) {}
+  }
+
+  function snapshotDomInputs() {
+    const inputs = {};
+    try {
+      if (typeof document === 'undefined' || !document.querySelectorAll) return inputs;
+      const els = document.querySelectorAll('input, select, textarea');
+      els.forEach((el, idx) => {
+        const key = el.id ? `#${el.id}` : (el.name ? `[name="${el.name}"]` : `input:${idx}`);
+        if (el.type === 'checkbox' || el.type === 'radio') {
+          inputs[key] = { checked: Boolean(el.checked), value: el.value };
+        } else if (el.type !== 'file') {
+          inputs[key] = el.value;
+        }
+      });
+    } catch (_) {}
+    return inputs;
+  }
+
+  function restoreDomInputs(inputs) {
+    try {
+      if (typeof document === 'undefined' || !inputs || typeof inputs !== 'object') return;
+      if (inputs['#intent-select'] !== undefined) {
+        const intentEl = document.querySelector('#intent-select');
+        if (intentEl && intentEl.value !== String(inputs['#intent-select'])) {
+          intentEl.value = String(inputs['#intent-select']);
+          try { intentEl.dispatchEvent(new Event('change')); } catch (_) {}
+        }
+      }
+      for (const [selector, val] of Object.entries(inputs)) {
+        if (selector.startsWith('input:') || selector === '#intent-select') continue;
+        const el = document.querySelector(selector);
+        if (!el) continue;
+        if (val && typeof val === 'object' && 'checked' in val) {
+          el.checked = Boolean(val.checked);
+        } else {
+          el.value = String(val ?? '');
+        }
+      }
+    } catch (_) {}
+  }
+
+  // --- window.xhtml ---
+  const initialIdentity = inferCardIdentity();
+  window.xhtml = window.xhtml || {
+    cardWin: getActiveCardWin(),
+    cardApp: initialIdentity.cardApp,
+    cardId: initialIdentity.cardId,
+    heldBlobs: new Set(),
+    softLinkedBlobs: new Set(),
+    openChannels: new Map(),
+    onfreeze: null,
+    onthaw: null,
+    _cardWs: null,
+
+    ensureCardSession: async function(options = {}) {
+      const existing = getActiveCardWin();
+      if (existing) {
+        this.cardWin = existing;
+      }
+      const appId = options.cardApp || this.cardApp || 'xhtml-card';
+      const cardId = options.cardId || this.cardId || 'main';
+      try {
+        const res = await fetch('/api/card-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
+          body: JSON.stringify({ appId, cardId, cardWin: this.cardWin || undefined })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.cardWin) this.cardWin = data.cardWin;
+        }
+      } catch (_) {}
+      return this.cardWin;
+    },
+
+    connectCardWs: function(reattachTxIds = []) {
+      if (!this.cardWin) return null;
+      const wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+      const txParam = Array.isArray(reattachTxIds) && reattachTxIds.length > 0
+        ? `&reattachTxIds=${encodeURIComponent(reattachTxIds.join(','))}`
+        : '';
+      const wsUrl = `${wsProtocol}//${window.location.host}/ws?cardWin=${encodeURIComponent(this.cardWin)}&appId=${encodeURIComponent(this.cardApp)}&cardId=${encodeURIComponent(this.cardId)}${txParam}`;
+      try {
+        const ws = new WebSocket(wsUrl, 'message-http');
+        this._cardWs = ws;
+        ws.onmessage = (event) => {
+          try {
+            const frame = parseWsAudioEventData(event.data);
+            if (!frame) return;
+            const txId = Number(frame.txId || frame.channel || 0);
+            if (txId && this.openChannels.has(txId)) {
+              const ch = this.openChannels.get(txId);
+              if (typeof ch.onFrame === 'function') {
+                ch.onFrame({ headers: { 'x-tx-id': String(txId) }, json: frame, body: JSON.stringify(frame) });
+              }
+              if ((frame.controlWord & 2) !== 0 || frame.disposition === 'final') {
+                this.openChannels.delete(txId);
+              }
+            }
+            if (typeof this.onevent === 'function') {
+              this.onevent(frame);
+            }
+          } catch (_) {}
+        };
+        return ws;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    serializeState: async function() {
+      await this.ensureCardSession();
+      let customState = null;
+      if (typeof this.onfreeze === 'function') {
+        try {
+          customState = await this.onfreeze();
+        } catch (err) {
+          console.warn('[xhtml] onfreeze hook error:', err);
+        }
+      }
+      return {
+        version: '0.1',
+        cardApp: this.cardApp,
+        cardId: this.cardId,
+        cardWin: this.cardWin,
+        url: window.location ? window.location.href : '',
+        timestamp: Date.now(),
+        storage: {
+          localStorage: snapshotWebStorage(window.localStorage),
+          sessionStorage: snapshotWebStorage(window.sessionStorage),
+        },
+        domState: {
+          scroll: { x: window.scrollX || 0, y: window.scrollY || 0 },
+          inputs: snapshotDomInputs(),
+        },
+        heldBlobs: Array.from(this.heldBlobs),
+        softLinkedBlobs: Array.from(this.softLinkedBlobs),
+        openChannels: Array.from(this.openChannels.values()).map((ch) => ({
+          txId: ch.txId,
+          intent: ch.intent || null,
+          app: ch.app || null,
+        })),
+        customState,
+      };
+    },
+
+    hydrateState: async function(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return false;
+      if (snapshot.cardApp) this.cardApp = snapshot.cardApp;
+      if (snapshot.cardId) this.cardId = snapshot.cardId;
+
+      if (snapshot.storage || snapshot.localStorage || snapshot.sessionStorage) {
+        restoreWebStorage(window.localStorage, snapshot.storage?.localStorage || snapshot.localStorage);
+        restoreWebStorage(window.sessionStorage, snapshot.storage?.sessionStorage || snapshot.sessionStorage);
+      }
+      if (snapshot.domState) {
+        restoreDomInputs(snapshot.domState.inputs);
+        setTimeout(() => restoreDomInputs(snapshot.domState.inputs), 150);
+        setTimeout(() => restoreDomInputs(snapshot.domState.inputs), 500);
+        if (snapshot.domState.scroll && typeof window.scrollTo === 'function') {
+          try { window.scrollTo(snapshot.domState.scroll.x || 0, snapshot.domState.scroll.y || 0); } catch (_) {}
+        }
+      }
+      if (Array.isArray(snapshot.heldBlobs)) {
+        snapshot.heldBlobs.forEach((b) => this.heldBlobs.add(String(b)));
+      }
+      if (Array.isArray(snapshot.softLinkedBlobs)) {
+        snapshot.softLinkedBlobs.forEach((b) => this.softLinkedBlobs.add(String(b)));
+      }
+
+      const txIdsToReattach = Array.isArray(snapshot.openChannels)
+        ? snapshot.openChannels.map((c) => Number(c.txId)).filter((n) => !isNaN(n) && n > 0)
+        : [];
+      if (txIdsToReattach.length > 0) {
+        for (const ch of snapshot.openChannels) {
+          if (ch.txId && !this.openChannels.has(Number(ch.txId))) {
+            this.openChannels.set(Number(ch.txId), { txId: Number(ch.txId), intent: ch.intent, app: ch.app });
+          }
+        }
+        this.connectCardWs(txIdsToReattach);
+      }
+
+      if (typeof this.onthaw === 'function') {
+        try {
+          await this.onthaw(snapshot.customState, snapshot);
+        } catch (err) {
+          console.warn('[xhtml] onthaw hook error:', err);
+        }
+      }
+      if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+        try {
+          window.dispatchEvent(new CustomEvent('xhtml:thaw', { detail: snapshot }));
+        } catch (_) {}
+      }
+      return true;
+    },
+
+    liveMigrate: async function(targetApp = 'user-laptop:cool-xhtml-runtime', options = {}) {
+      const snapshot = await this.serializeState();
+      const created = await window.xblob.XBlobCreate({
+        xblobType: 'Blob',
+        type: 'application/json',
+        name: `${this.cardApp}-${this.cardId}.xhtml-snapshot.json`,
+        data: snapshot,
+      });
+      const stateBlobId = created.blobId || created.blob;
+      if (this.heldBlobs) {
+        this.heldBlobs.delete(String(stateBlobId));
+      }
+
+      const migratePayload = {
+        intent: 'xhtml.LiveMigrate',
+        app: targetApp,
+        cardApp: this.cardApp,
+        cardId: this.cardId,
+        oldCardWin: this.cardWin,
+        dataBlob: stateBlobId,
+        controlWord: 1,
+        ...options,
+      };
+
+      const res = await window.xintent.intent('xhtml.LiveMigrate', migratePayload, targetApp);
+      const parts = typeof res.parseMultipart === 'function' ? await res.parseMultipart() : [];
+      const result = parts[0]?.json || { status: res.ok ? 'ok' : 'error' };
+
+      if (window.XIntentNative && typeof window.XIntentNative.onCardMigrated === 'function') {
+        try { window.XIntentNative.onCardMigrated(); } catch (_) {}
+      }
+      return result;
+    },
+
+    autoHydrateFromUrl: async function() {
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        const cardWinParam = params.get('cardWin');
+        if (cardWinParam) this.cardWin = cardWinParam;
+        const migrateBlob = params.get('hydrateBlob') || params.get('migrateBlob') || params.get('migrate');
+        if (!migrateBlob) return false;
+        const readRes = await window.xblob.XBlobRead(migrateBlob);
+        let snapshot = readRes?.blob?.data ?? readRes?.data ?? readRes;
+        if (typeof snapshot === 'string') {
+          try { snapshot = JSON.parse(snapshot); } catch (_) {}
+        }
+        await this.hydrateState(snapshot);
+        this.hydratedSnapshot = snapshot;
+        try {
+          await window.xblob.XBlobUnlink(migrateBlob);
+        } catch (_) {}
+        setTimeout(async () => {
+          try {
+            if (snapshot?.domState?.inputs) {
+              restoreDomInputs(snapshot.domState.inputs);
+            }
+            await fetch('/api/card-hydrated', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(this.cardWin ? { 'X-Card-Window': String(this.cardWin) } : {}),
+              },
+              body: JSON.stringify({
+                cardWin: this.cardWin,
+                cardApp: this.cardApp,
+                cardId: this.cardId,
+                hydrateBlob: migrateBlob,
+                localStorage: snapshotWebStorage(window.localStorage),
+                domInputs: snapshotDomInputs(),
+                heldBlobs: Array.from(this.heldBlobs),
+                softLinkedBlobs: Array.from(this.softLinkedBlobs),
+                openChannels: Array.from(this.openChannels.keys()),
+              }),
+            });
+          } catch (_) {}
+        }, 400);
+        return true;
+      } catch (err) {
+        console.warn('[xhtml] autoHydrateFromUrl warning:', err);
+        return false;
+      }
+    }
+  };
+
+  if (
+    typeof window.location !== 'undefined' &&
+    window.location.search &&
+    (window.location.search.includes('migrate') ||
+      window.location.search.includes('hydrate') ||
+      window.location.search.includes('cardWin'))
+  ) {
+    window.xhtml.autoHydrateFromUrl();
+  }
 })(window);

@@ -188,6 +188,35 @@ const handleXBlobHostConnectV0 = {
   },
 };
 
+const corkedBlobWindows = new Map(); // win -> Array<{ atom, data }>
+
+function corkWindowBlobEvents(win) {
+  if (!win) return;
+  if (!corkedBlobWindows.has(win)) {
+    corkedBlobWindows.set(win, []);
+    logger.info(`Corked XBlob notifications for window ${xintent.widString(win)}`);
+  }
+}
+
+async function uncorkAndFlushWindowBlobEvents(oldWin, newWin) {
+  const targetWin = newWin || oldWin;
+  const queued = corkedBlobWindows.get(oldWin) || [];
+  corkedBlobWindows.delete(oldWin);
+  if (newWin && newWin !== oldWin) {
+    corkedBlobWindows.delete(newWin);
+  }
+  if (!targetWin || queued.length === 0) return;
+
+  logger.info(`Flushing ${queued.length} corked XBlob notification(s) to ${xintent.widString(targetWin)}`);
+  for (const item of queued) {
+    try {
+      if (daemon.X && typeof daemon.X.SendEvent === 'function') {
+        await xintent.XClientMessage(daemon.X, targetWin, item.atom, item.data);
+      }
+    } catch (_) {}
+  }
+}
+
 const handleXBlobBroadcastV0 = {
   parse: (ev) => {
     const [senderWin, blobId, host, version] = ev.data;
@@ -204,9 +233,16 @@ const handleXBlobBroadcastV0 = {
     if (regEntry && host && !regEntry.hosts.includes(host)) {
       regEntry.hosts.push(host);
     }
-    const targets = [...(regEntry?.links || []), ...(regEntry?.softLinks || [])];
+    const targets = [...new Set([...(regEntry?.links || []), ...(regEntry?.softLinks || [])])];
     for (const broadcastTarget of targets) {
       if (broadcastTarget === senderWin || broadcastTarget === daemon.routerWin) continue;
+      if (corkedBlobWindows.has(broadcastTarget)) {
+        corkedBlobWindows.get(broadcastTarget).push({
+          atom: xintent.atoms.XBLOB_BROADCAST_V0,
+          data: [senderWin, blobId, host, version],
+        });
+        continue;
+      }
       try {
         if (daemon.X && typeof daemon.X.SendEvent === 'function') {
           xintent.XClientMessage(daemon.X, broadcastTarget, xintent.atoms.XBLOB_BROADCAST_V0, [
@@ -256,6 +292,13 @@ const handleXBlobStreamClosedV0 = {
     const targets = [...new Set([...(regEntry?.links || []), ...(regEntry?.softLinks || [])])];
     for (const target of targets) {
       if (target === senderWin || target === daemon.routerWin) continue;
+      if (corkedBlobWindows.has(target)) {
+        corkedBlobWindows.get(target).push({
+          atom: xintent.atoms.XBLOB_STREAM_CLOSED_V0,
+          data: [senderWin, blobId, host, resolvedLow, resolvedHigh],
+        });
+        continue;
+      }
       try {
         if (daemon.X && typeof daemon.X.SendEvent === 'function') {
           xintent.XClientMessage(daemon.X, target, xintent.atoms.XBLOB_STREAM_CLOSED_V0, [
@@ -310,4 +353,7 @@ module.exports = {
   implicitXBlobTransfer: ops.implicitXBlobTransfer,
   xblobUnlink: ops.xblobUnlink,
   xblobUnlinkWindow: ops.xblobUnlinkWindow,
+  migrateWindowBlobs: ops.migrateWindowBlobs,
+  corkWindowBlobEvents,
+  uncorkAndFlushWindowBlobEvents,
 };

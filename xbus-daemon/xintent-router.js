@@ -95,6 +95,17 @@ async function dispatchMatchedIntent(policyResult, xchannelFrame, channelObj, ac
   }
 }
 
+function parseWindowId(val) {
+  if (!val) return 0;
+  if (typeof val === 'number') return val >>> 0;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    const n = (trimmed.startsWith('0x') || trimmed.startsWith('0X')) ? parseInt(trimmed, 16) : Number(trimmed);
+    return isNaN(n) ? 0 : (n >>> 0);
+  }
+  return 0;
+}
+
 const tryToForwardTheFrame = async (xchannelFrame) => {
   const actionStr = formatActionString(xchannelFrame);
   const existingChannel = xchannel.getChannelForMessage(xchannelFrame);
@@ -107,6 +118,14 @@ const tryToForwardTheFrame = async (xchannelFrame) => {
   if (!intent) {
     logger.info(`dropping xchannel frame without active channel ${actionStr}`, xchannelFrame);
     return;
+  }
+
+  if (intent === 'xhtml.LiveMigrate') {
+    const migratingWin = parseWindowId(parsedPayload?.oldCardWin || parsedPayload?.cardWin) || xchannelFrame.senderWin;
+    if (migratingWin) {
+      xchannel.corkWindowChannels(migratingWin);
+      xblob.corkWindowBlobEvents(migratingWin);
+    }
   }
 
   const policyResult = await evaluateRoutePolicy({
@@ -156,6 +175,15 @@ const forwardMessageToChannel = async (channelObj, message) => {
     return true;
   }
 
+  if (channelObj.corkedForWin && forwardTo === channelObj.corkedForWin) {
+    channelObj.corkQueue = channelObj.corkQueue || [];
+    channelObj.corkQueue.push(message);
+    logger.info(
+      `[cork] Queued in-flight message ${actionStr} on channel ${channelObj.channelNum} for migrating window ${xintent.widString(forwardTo)} (queue len: ${channelObj.corkQueue.length})`,
+    );
+    return true;
+  }
+
   const controlWord = message.controlWord ?? 3;
   const dataBlob = message.dataBlob || message.payload?.data_blob || message.payload?.blobId || message.payload?.blob || 0;
   const sendFn = selectChannelSendFn(message.messageTypeAtom);
@@ -174,6 +202,68 @@ const forwardMessageToChannel = async (channelObj, message) => {
     xchannel.closeChannel(channelObj);
   }
   return true;
+};
+
+async function uncorkAndFlushWindowChannels(newWin) {
+  for (const channelObj of Object.values(xchannel.activeChannels)) {
+    const isTarget = channelObj.corkedForWin === newWin || channelObj.senderWin === newWin || channelObj.handlerWin === newWin;
+    if (!isTarget) continue;
+    channelObj.corkedForWin = null;
+    const queued = channelObj.corkQueue || [];
+    channelObj.corkQueue = [];
+    for (const queuedMsg of queued) {
+      logger.info(`[uncork] Flushing queued frame on channel ${channelObj.channelNum} to ${xintent.widString(newWin)}`);
+      await forwardMessageToChannel(channelObj, queuedMsg);
+    }
+  }
+}
+
+const handleXHtmlCorkWindowV0 = {
+  parse: async (ev) => ({
+    targetWin: ev.wid,
+    senderWin: ev.data[0],
+    cardWin: ev.data[1] || ev.data[0],
+  }),
+  securityContext: (parsed) => ({
+    source: { window: parsed.senderWin },
+    action: 'XHtmlCorkWindow',
+    resources: [{ window: parsed.cardWin }],
+  }),
+  accept: async ({ cardWin }) => {
+    xchannel.corkWindowChannels(cardWin);
+    xblob.corkWindowBlobEvents(cardWin);
+  },
+};
+
+const handleXHtmlMigrateWindowV0 = {
+  parse: async (ev) => ({
+    targetWin: ev.wid,
+    senderWin: ev.data[0],
+    oldCardWin: ev.data[1],
+    newCardWin: ev.data[2],
+  }),
+  securityContext: (parsed) => ({
+    source: { window: parsed.senderWin },
+    action: 'XHtmlMigrateWindow',
+    resources: [{ oldWindow: parsed.oldCardWin, newWindow: parsed.newCardWin }],
+  }),
+  accept: async ({ oldCardWin, newCardWin }) => {
+    if (!oldCardWin || !newCardWin) return;
+    logger.info(`Executing atomic window migration: ${xintent.widString(oldCardWin)} -> ${xintent.widString(newCardWin)}`);
+    xblob.migrateWindowBlobs(oldCardWin, newCardWin);
+    xchannel.migrateWindowChannels(oldCardWin, newCardWin);
+
+    for (const queue of Object.values(intentsAwaitingServicesQueue)) {
+      for (const frame of queue) {
+        if (frame.senderWin === oldCardWin) {
+          frame.senderWin = newCardWin;
+        }
+      }
+    }
+
+    await uncorkAndFlushWindowChannels(newCardWin);
+    await xblob.uncorkAndFlushWindowBlobEvents(oldCardWin, newCardWin);
+  },
 };
 
 async function sendXIntentIntentV0(
@@ -230,6 +320,8 @@ module.exports = {
   handleXIntentIntentV0,
   handleXIntentEventV0,
   handleForwardingOfXChannelJsonFrame,
+  handleXHtmlCorkWindowV0,
+  handleXHtmlMigrateWindowV0,
   getAllMatchboxToml: registry.getAllMatchboxToml,
   parseWindowToml: registry.parseWindowToml,
   parseWindowLighterToml: registry.parseWindowLighterToml,

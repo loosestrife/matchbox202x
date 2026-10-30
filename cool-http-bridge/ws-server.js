@@ -76,28 +76,48 @@ function sendWsChannelFrame(ws, txId, msg, blobData) {
 }
 
 function createWebSocketXChannel({ X, root, logger }, txId, ws, xaudioSink, msgPayload, controlWord) {
+  const cardWin = serverGlobals.parseWindowId(msgPayload?.cardWin) || ws?.cardWin || ws?.proxyWin || 0;
   return {
     txId,
+    cardWin,
     type: 'websocket',
     ws,
-    xaudioSink: xaudioSink || ws.xaudioSink || msgPayload?.app,
+    xaudioSink: xaudioSink || ws?.xaudioSink || msgPayload?.app,
     intent: msgPayload?.intent,
     cookie: msgPayload?.cookie || msgPayload?.OutputId,
     controlWord: controlWord || 1,
     createdAt: Date.now(),
     messageFromX: async (msg) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        const fetchBlob = msg.dataBlob && shouldFetchChannelBlob(msgPayload);
-        const blobData = fetchBlob ? await readChannelBlob(X, root, logger, txId, msg.dataBlob) : null;
-        sendWsChannelFrame(ws, txId, msg, blobData);
+      const fetchBlob = msg.dataBlob && shouldFetchChannelBlob(msgPayload);
+      const blobData = fetchBlob ? await readChannelBlob(X, root, logger, txId, msg.dataBlob) : null;
+      const widHex = cardWin ? xintent.widString(cardWin) : null;
+      const cardRecord = widHex ? serverGlobals.cardWindows[widHex] : null;
+
+      if (cardRecord) {
+        cardRecord.bufferedFrames.push({ txId, msg, blobData });
+        if (cardRecord.bufferedFrames.length > 50) cardRecord.bufferedFrames.shift();
+      }
+
+      const targets = new Set();
+      if (ws && ws.readyState === WebSocket.OPEN) targets.add(ws);
+      if (cardRecord?.wsSet) {
+        for (const client of cardRecord.wsSet) {
+          if (client.readyState === WebSocket.OPEN) targets.add(client);
+        }
+      }
+
+      for (const targetWs of targets) {
+        sendWsChannelFrame(targetWs, txId, msg, blobData);
+      }
+      if (targets.size > 0) {
         logger.info(`WebSocket XChannel ${txId} routed messageFromX: ${xintent.frameDesc(msg)}`);
       }
 
       const isFin = msg.controlWord !== undefined && (msg.controlWord & 2) !== 0;
       if (isFin) {
         logger.info(`Closing WebSocket XChannel ${txId} on FIN`);
-        delete serverGlobals.channelNatTable[txId];
-        if (ws.isXAudio) {
+        serverGlobals.deleteChannelSession(cardWin, txId);
+        if (ws && ws.isXAudio) {
           try { ws.close(); } catch (_) {}
         }
       }
@@ -217,12 +237,14 @@ async function handlePlayResponse({ X, root, clientWin }, ws, msg) {
   }
 }
 
-function resolveWsIntentTxId(ctx, ws, msg, isXAudio, audioKey) {
+function resolveWsIntentTxId(ctx, ws, msg, isXAudio, audioKey, senderWin) {
   ws.activeAudioTxIds = ws.activeAudioTxIds || {};
   let txId = msg.txId || (isXAudio ? ws.activeAudioTxIds[audioKey] : null);
-  if (!txId || !serverGlobals.channelNatTable[txId]) {
+  const existing = txId ? serverGlobals.getChannelSession(senderWin, txId) : null;
+  if (!txId || !existing) {
     txId = txId || serverGlobals.getNextTxId();
-    serverGlobals.channelNatTable[txId] = createWebSocketXChannel(
+    serverGlobals.advanceTxIdPast(txId);
+    const session = createWebSocketXChannel(
       ctx,
       txId,
       ws,
@@ -230,6 +252,7 @@ function resolveWsIntentTxId(ctx, ws, msg, isXAudio, audioKey) {
       msg,
       msg.controlWord || 1
     );
+    serverGlobals.setChannelSession(senderWin, txId, session);
     if (isXAudio) {
       ws.activeAudioTxIds[audioKey] = txId;
     }
@@ -242,7 +265,8 @@ async function handleWsIntent(ctx, ws, msg) {
   const routerWin = await xintent.getValidRouterWin(X, root);
   const isXAudio = msg.intent.startsWith('xaudio.') || msg.intent.startsWith('XAudio');
   const audioKey = msg.cookie || msg.OutputId || 'default';
-  const txId = resolveWsIntentTxId(ctx, ws, msg, isXAudio, audioKey);
+  const senderWin = serverGlobals.parseWindowId(msg.cardWin) || ws.cardWin || ws.proxyWin || clientWin;
+  const txId = resolveWsIntentTxId(ctx, ws, msg, isXAudio, audioKey, senderWin);
   msg.txId = txId;
 
   const dispatchFn = isXAudio
@@ -251,7 +275,7 @@ async function handleWsIntent(ctx, ws, msg) {
   const reqDataBlob = msg.dataBlob || msg.sample || msg.blob || msg.blobId || msg.BlobId;
 
   await dispatchFn(X, routerWin, {
-    senderWin: ws.proxyWin || clientWin,
+    senderWin,
     payload: msg,
     txId,
     controlWord: msg.controlWord || 1,
@@ -352,8 +376,16 @@ function pingInactiveSink(logger, targetSink) {
 
 function resolveOrCreateXChannelSession(ctx, ev, parsed) {
   const { txId, controlWord, payload } = { txId: parsed.channel, ...parsed };
-  const existing = serverGlobals.channelNatTable[txId];
+  const existing = serverGlobals.getChannelSession(ev.wid, txId);
   if (existing) return existing;
+
+  const widHex = xintent.widString(ev.wid);
+  const cardRecord = serverGlobals.cardWindows[widHex];
+  if (cardRecord && cardRecord.ws && cardRecord.ws.readyState === WebSocket.OPEN) {
+    const session = createWebSocketXChannel(ctx, txId, cardRecord.ws, cardRecord.appId, { ...payload, cardWin: ev.wid }, controlWord);
+    serverGlobals.setChannelSession(ev.wid, txId, session);
+    return session;
+  }
 
   const isPlayOrIntent = ev.message_type === xintent.atoms.XAUDIO_PLAY_V0 || ev.message_type === xintent.atoms.XINTENT_INTENT_V0;
   if (!isPlayOrIntent) return null;
@@ -362,17 +394,75 @@ function resolveOrCreateXChannelSession(ctx, ev, parsed) {
   const targetWs = findMatchingWsClient(ctx.wsClients, targetSink);
   if (targetWs) {
     const session = createWebSocketXChannel(ctx, txId, targetWs, targetSink, payload, controlWord);
-    serverGlobals.channelNatTable[txId] = session;
+    serverGlobals.setChannelSession(ev.wid, txId, session);
     return session;
   }
   pingInactiveSink(ctx.logger, targetSink);
   return null;
 }
 
+function forwardBlobEventToCardWs(ev, logger) {
+  const widHex = xintent.widString(ev.wid);
+  const cardRecord = serverGlobals.cardWindows[widHex];
+  if (!cardRecord) return;
+
+  let eventFrame = null;
+  if (ev.message_type === xintent.atoms.XBLOB_BROADCAST_V0) {
+    eventFrame = {
+      event: 'XBLOB_BROADCAST_V0',
+      senderWin: xintent.widString(ev.data[0]),
+      blobId: xintent.widString(ev.data[1]),
+      host: xintent.widString(ev.data[2]),
+      version: ev.data[3],
+      targetWin: widHex,
+    };
+  } else if (ev.message_type === xintent.atoms.XBLOB_STREAM_CLOSED_V0) {
+    const low = (ev.data[3] || 0) >>> 0;
+    const high = (ev.data[4] || 0) >>> 0;
+    eventFrame = {
+      event: 'XBLOB_STREAM_CLOSED_V0',
+      senderWin: xintent.widString(ev.data[0]),
+      blobId: xintent.widString(ev.data[1]),
+      host: xintent.widString(ev.data[2]),
+      size: high * 0x100000000 + low,
+      targetWin: widHex,
+    };
+  }
+  if (eventFrame) {
+    cardRecord.bufferedBlobEvents.push(eventFrame);
+    if (cardRecord.bufferedBlobEvents.length > 50) cardRecord.bufferedBlobEvents.shift();
+
+    const targets = new Set();
+    if (cardRecord.ws && cardRecord.ws.readyState === WebSocket.OPEN) targets.add(cardRecord.ws);
+    if (cardRecord.wsSet) {
+      for (const client of cardRecord.wsSet) {
+        if (client.readyState === WebSocket.OPEN) targets.add(client);
+      }
+    }
+    const serialized = JSON.stringify(eventFrame);
+    for (const targetWs of targets) {
+      try {
+        targetWs.send(serialized);
+      } catch (_) {}
+    }
+    if (targets.size > 0) {
+      logger.info(`Forwarded ${eventFrame.event} for blob ${eventFrame.blobId} to card WebSocket (${widHex})`);
+    }
+  }
+}
+
 function setupX11EventDispatcher(ctx) {
   const { X, root, logger } = ctx;
   X.on('event', async (ev) => {
     if (!ev || ev.type !== 33) return;
+    if (
+      ev.message_type === xintent.atoms.XBLOB_BROADCAST_V0 ||
+      ev.message_type === xintent.atoms.XBLOB_STREAM_CLOSED_V0
+    ) {
+      forwardBlobEventToCardWs(ev, logger);
+      return;
+    }
+
     const responseAtoms = [
       xintent.atoms.XINTENT_INTENT_V0,
       xintent.atoms.XINTENT_EVENT_V0,
@@ -399,7 +489,8 @@ function setupX11EventDispatcher(ctx) {
   });
 }
 
-function handleWsUpgrade(wss, logger, request, socket, head) {
+function handleWsUpgrade(wss, ctx, request, socket, head) {
+  const { logger } = ctx;
   const clientIp = (request?.socket?.remoteAddress || '').replace(/^.*:/, '');
   logger.info(`[WebSocket Upgrade] Incoming upgrade request from ${clientIp || 'unknown'} for URL: ${request.url} Headers: ${JSON.stringify(request?.headers || {})}`);
 
@@ -414,6 +505,29 @@ function handleWsUpgrade(wss, logger, request, socket, head) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         ws.xaudioSink = parsedUrl.searchParams.get('XAudioSink') || parsedUrl.searchParams.get('app');
         if (pathname === '/xaudio' || ws.xaudioSink) ws.isXAudio = true;
+
+        const cardWinParam = parsedUrl.searchParams.get('cardWin');
+        if (cardWinParam) {
+          ws.cardWin = serverGlobals.parseWindowId(cardWinParam);
+          serverGlobals.registerCardWindow(
+            ws.cardWin,
+            parsedUrl.searchParams.get('appId') || ws.xaudioSink || 'xhtml-card',
+            parsedUrl.searchParams.get('cardId') || 'main',
+            ws
+          );
+        }
+
+        const reattachParam = parsedUrl.searchParams.get('reattachTxIds');
+        if (reattachParam && ws.cardWin) {
+          const txIds = reattachParam.split(',').map((s) => Number(s.trim())).filter((n) => !isNaN(n) && n > 0);
+          for (const txId of txIds) {
+            serverGlobals.advanceTxIdPast(txId);
+            const session = createWebSocketXChannel(ctx, txId, ws, ws.xaudioSink, { cardWin: ws.cardWin }, 1);
+            serverGlobals.setChannelSession(ws.cardWin, txId, session);
+            logger.info(`Re-attached migrated XChannel txId=${txId} to card WebSocket ${xintent.widString(ws.cardWin)}`);
+          }
+        }
+
         wss.emit('connection', ws, request);
       });
     } else {
@@ -469,11 +583,28 @@ function setupWebSocketServer(server, ctx) {
     logger.info(logPrefix);
     wsClients.add(ws);
 
+    if (ws.cardWin) {
+      const widHex = xintent.widString(ws.cardWin);
+      const cardRecord = serverGlobals.cardWindows[widHex];
+      if (cardRecord) {
+        for (const item of cardRecord.bufferedFrames || []) {
+          try {
+            sendWsChannelFrame(ws, item.txId, item.msg, item.blobData);
+          } catch (_) {}
+        }
+        for (const evFrame of cardRecord.bufferedBlobEvents || []) {
+          try {
+            ws.send(JSON.stringify(evFrame));
+          } catch (_) {}
+        }
+      }
+    }
+
     ws.on('message', (data) => dispatchWsMessage(ctx, ws, data));
     ws.on('close', () => handleWsClose(ctx, ws));
   });
 
-  server.on('upgrade', (request, socket, head) => handleWsUpgrade(wss, logger, request, socket, head));
+  server.on('upgrade', (request, socket, head) => handleWsUpgrade(wss, ctx, request, socket, head));
 
   return wss;
 }

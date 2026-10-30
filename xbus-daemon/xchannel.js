@@ -137,6 +137,80 @@ const redirectChannel = (channelNum, newHandlerWin) => {
   return true;
 };
 
+const isLiveMigrateChannel = (channelObj) => {
+  if (!channelObj) return false;
+  if (typeof channelObj.intent === "string" && channelObj.intent.includes("xhtml.LiveMigrate")) {
+    return true;
+  }
+  const p = channelObj.xintentIntent?.payload;
+  return p?.intent === "xhtml.LiveMigrate";
+};
+
+const corkWindowChannels = (cardWin) => {
+  const corked = [];
+  if (!cardWin) return corked;
+  for (const channelObj of Object.values(activeChannels)) {
+    if (isLiveMigrateChannel(channelObj)) continue;
+    if (channelObj.senderWin === cardWin || channelObj.handlerWin === cardWin) {
+      channelObj.corkedForWin = cardWin;
+      channelObj.corkQueue = channelObj.corkQueue || [];
+      corked.push(channelObj.channelNum);
+      logger.info(`Corked channel ${channelObj.channelNum} (${channelObj.intent}) for migrating window ${widString(cardWin)}`);
+    }
+  }
+  return corked;
+};
+
+const migrateWindowChannels = (oldWin, newWin) => {
+  const migrated = [];
+  if (!oldWin || !newWin || oldWin === newWin) return migrated;
+
+  for (const channelObj of Object.values(activeChannels)) {
+    if (isLiveMigrateChannel(channelObj)) continue;
+
+    if (channelObj.senderWin === oldWin) {
+      if (txidToChannel[oldWin]) {
+        delete txidToChannel[oldWin][channelObj.senderCookie];
+        if (Object.keys(txidToChannel[oldWin]).length === 0) {
+          delete txidToChannel[oldWin];
+        }
+      }
+      channelObj.senderWin = newWin;
+      if (!txidToChannel[newWin]) {
+        txidToChannel[newWin] = {};
+      }
+      txidToChannel[newWin][channelObj.senderCookie] = channelObj;
+      if (channelObj.corkedForWin === oldWin) {
+        channelObj.corkedForWin = newWin;
+      }
+      migrated.push({
+        channelNum: channelObj.channelNum,
+        role: "sender",
+        txId: channelObj.senderCookie,
+        intent: channelObj.intent,
+      });
+      logger.info(
+        `Migrated channel ${channelObj.channelNum} sender from ${widString(oldWin)} to ${widString(newWin)} (preserved txId: ${channelObj.senderCookie})`
+      );
+    } else if (channelObj.handlerWin === oldWin) {
+      channelObj.handlerWin = newWin;
+      if (channelObj.corkedForWin === oldWin) {
+        channelObj.corkedForWin = newWin;
+      }
+      migrated.push({
+        channelNum: channelObj.channelNum,
+        role: "handler",
+        txId: channelObj.channelNum,
+        intent: channelObj.intent,
+      });
+      logger.info(
+        `Migrated channel ${channelObj.channelNum} handler from ${widString(oldWin)} to ${widString(newWin)}`
+      );
+    }
+  }
+  return migrated;
+};
+
 module.exports = {
   activeChannels,
   txidToChannel,
@@ -148,4 +222,6 @@ module.exports = {
   getChannelForMessage,
   listActiveChannels,
   redirectChannel,
+  corkWindowChannels,
+  migrateWindowChannels,
 };
