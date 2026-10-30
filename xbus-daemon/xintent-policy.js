@@ -98,17 +98,18 @@ function selectLighterEntry(lighterEntries, targetAppId) {
   return lighterEntries[0];
 }
 
-async function queueAndLaunchService({
-  xchannelFrame,
-  intent,
-  actionStr,
-  targetAppId,
-  lighterRegistry,
-  intentsAwaitingServicesQueue,
-  sendXIntentIntentV0,
-  X,
-  routerWin,
-}) {
+async function queueAndLaunchService(ctx) {
+  const {
+    xchannelFrame,
+    intent,
+    actionStr,
+    targetAppId,
+    lighterRegistry,
+    intentsAwaitingServicesQueue,
+    sendXIntentIntentV0,
+    X,
+    routerWin,
+  } = ctx;
   logger.info(
     `[intent-router] No service mapped for action: ${actionStr}, falling back to lighter ${JSON.stringify(lighterRegistry, null, 2)}`,
   );
@@ -124,8 +125,11 @@ async function queueAndLaunchService({
     return { status: 'launching' };
   }
 
-  const lighterRegistryEntry = lighterRegistry[intent];
-  const chosenLighter = selectLighterEntry(lighterRegistryEntry, targetAppId);
+  let chosenLighter = selectLighterEntry(lighterRegistry[intent], targetAppId);
+  if (!chosenLighter && typeof ctx?.getAllMatchboxToml === 'function') {
+    await ctx.getAllMatchboxToml();
+    chosenLighter = selectLighterEntry(lighterRegistry[intent], targetAppId);
+  }
   if (chosenLighter) {
     const { computer, packageName, wid } = chosenLighter;
     await sendXIntentIntentV0(X, routerWin, {

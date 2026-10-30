@@ -72,7 +72,7 @@ async function startLighter() {
   X.CreateWindow(blobHostWin, root, 0, 0, 1, 1, 0, 0, 0, 0, { eventMask: x11.eventMask.PropertyChange });
 
   const { trackChild } = supervisor;
-  pickFiles.init({ X, lighterWin, blobHostWin, trackChild });
+  await pickFiles.init({ X, lighterWin, blobHostWin, trackChild });
   xaudioNode.init({ X, lighterWin, sinkName, trackChild });
 
   const serviceManifestTomlAtom = await X.InternAtom(false, 'SERVICE_MANIFEST_TOML');
@@ -96,16 +96,6 @@ async function startLighter() {
   X.ChangeProperty(0, blobHostWin, netWmPidAtom, X.atoms.CARDINAL, 32, pidBuf);
   logger.info(`Registered services (0x${lighterWin.toString(16)}) and dedicated XBlobHost window (0x${blobHostWin.toString(16)})`);
 
-  const [routerWin] = await Promise.all([
-    launcher.ensureXIntentRouter(X, root),
-    launcher.ensureHttpBridge(),
-    launcher.ensureXdgPortalBridge(),
-  ]);
-
-  if (routerWin) {
-    await pickFiles.sendHostConnectFrame(routerWin);
-  }
-
   rawX.on('event', async (ev) => {
     await dispatcher.handleClientMessageEvent({
       ev,
@@ -118,6 +108,17 @@ async function startLighter() {
       trackChild,
     });
   });
+
+  const [routerWin] = await Promise.all([
+    launcher.ensureXIntentRouter(X, root),
+    launcher.ensureHttpBridge(),
+    launcher.ensureXdgPortalBridge(),
+  ]);
+
+  if (routerWin) {
+    await pickFiles.sendHostConnectFrame(routerWin);
+    await launcher.launchInitialXhtmlCard(X, routerWin, lighterWin);
+  }
 
   logger.info('Listening for incoming launch intents and XAudio commands...');
 }

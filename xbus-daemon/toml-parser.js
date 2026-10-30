@@ -15,15 +15,22 @@ function addAppToIntent(aggregate, intentName, appName) {
   }
 }
 
-function mergeAppMetadata(aggregate, appName, meta = {}, intents = {}) {
+function mergeAppMetadata(aggregate, appName, meta = {}, intents = {}, cardMeta = {}) {
   if (!appName) return;
   if (!aggregate.apps) aggregate.apps = {};
   const existing = aggregate.apps[appName] || {};
   const mergedIntents = { ...(existing.intents || {}), ...(intents || {}) };
   const name = (meta.name && meta.name !== appName) ? meta.name : (existing.name || meta.name || appName);
   const description = meta.description || existing.description || '';
+  const mainCard = cardMeta.mainCard || meta.main?.card || existing.mainCard || null;
+  const rawCards = cardMeta.cards || existing.cards || null;
+  const cards = Array.isArray(rawCards)
+    ? rawCards.map((c) => (typeof c === 'string' ? c : c?.id)).filter(Boolean)
+    : null;
   const appEntry = { name };
   if (description) appEntry.description = description;
+  if (mainCard) appEntry.mainCard = mainCard;
+  if (cards && cards.length > 0) appEntry.cards = cards;
   if (Object.keys(mergedIntents).length > 0) appEntry.intents = mergedIntents;
   aggregate.apps[appName] = appEntry;
 }
@@ -65,13 +72,22 @@ function collectWindowEntries(aggregate, windowRegistry) {
     for (const intentName of Object.keys(matchboxToml.intents || {})) {
       addAppToIntent(aggregate, intentName, appName);
     }
-    mergeAppMetadata(aggregate, appName, matchboxToml.app || {}, matchboxToml.intents || {});
+    mergeAppMetadata(
+      aggregate,
+      appName,
+      matchboxToml.app || {},
+      matchboxToml.intents || {},
+      {
+        mainCard: matchboxToml.app?.main?.card || (Array.isArray(matchboxToml.cards) ? matchboxToml.cards[0]?.id : null),
+        cards: matchboxToml.cards,
+      },
+    );
     processAudioSection(aggregate, 'XAudioSink', matchboxToml.XAudioSink, appName, wid);
     processAudioSection(aggregate, 'XAudioSource', matchboxToml.XAudioSource, appName, wid);
   }
 }
 
-function collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry) {
+function collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry, lighterPackageRegistry = {}) {
   for (const [intentName, entries] of Object.entries(lighterRegistry)) {
     for (const entry of entries) {
       const appName = entry.packageName || entry.package;
@@ -81,8 +97,19 @@ function collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry)
         appName,
         { name: entry.name, description: entry.description },
         entry.intents || { [intentName]: true },
+        { mainCard: entry.mainCard, cards: entry.cards },
       );
     }
+  }
+  for (const [pakName, entry] of Object.entries(lighterPackageRegistry)) {
+    const pkg = entry.pkg || {};
+    mergeAppMetadata(
+      aggregate,
+      pakName,
+      { name: pkg.name, description: pkg.description },
+      pkg.intents || {},
+      { mainCard: pkg.mainCard, cards: pkg.cards },
+    );
   }
   for (const [pakName, entry] of Object.entries(lighterAudioRegistry)) {
     processAudioSection(aggregate, 'XAudioSink', entry.pkg.XAudioSink, pakName, entry.wid);
@@ -90,9 +117,9 @@ function collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry)
   }
 }
 
-async function updateAggregateToml({ windowRegistry, lighterRegistry, lighterAudioRegistry }) {
+async function updateAggregateToml({ windowRegistry, lighterRegistry, lighterAudioRegistry, lighterPackageRegistry }) {
   const aggregate = { intents: {}, apps: {} };
-  collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry);
+  collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry, lighterPackageRegistry);
   collectWindowEntries(aggregate, windowRegistry);
 
   const aggregateAtom = atoms.AGGREGATE_TOML || atoms.XINTENT_AGGREGATE_TOML;

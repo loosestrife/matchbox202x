@@ -330,7 +330,7 @@ def _parse_unix_get_http_payload(res_data: bytes, received_fds: list):
 def _http_get_blob_unix_socket(socket_path: str, blob_hex_id: str, user_agent=None, accept_readable_stream: bool = False):
     try:
         ua = user_agent or f"{socket.gethostname()}:{os.environ.get('DISPLAY') or ''}/0x0 (app=xintent)"
-        accept_xblob = "ReadableStream, Blob, File" if accept_readable_stream else "Blob, File"
+        accept_xblob = "BufferedReadableStream, ReadableStream, Blob, File" if accept_readable_stream else "Blob, File"
         req_lines = [
             f"GET /blobs/{blob_hex_id} HTTP/1.1",
             "Host: localhost",
@@ -365,7 +365,7 @@ def _hydrate_blob_file_bytes(blob_data: dict, file_path):
     if target_path:
         try:
             st_mode = os.stat(target_path).st_mode
-            if stat.S_ISFIFO(st_mode) or stat.S_ISSOCK(st_mode) or blob_data.get("xblobType") == "ReadableStream":
+            if stat.S_ISFIFO(st_mode) or stat.S_ISSOCK(st_mode) or blob_data.get("xblobType") in ("BufferedReadableStream", "ReadableStream"):
                 blob_data["data"] = os.open(target_path, os.O_RDONLY | os.O_CLOEXEC)
                 blob_data["_dataType"] = "fd-rights"
                 blob_data["contentEncoding"] = "fd-rights"
@@ -380,7 +380,7 @@ def _hydrate_blob_file_bytes(blob_data: dict, file_path):
 
 def post_process_blob_read_data(blob_data: dict, receive_fd: bool, accept_readable_stream: bool = False) -> dict:
     file_path = blob_data.get("data")
-    if not receive_fd and not accept_readable_stream and blob_data.get("xblobType") != "ReadableStream":
+    if not receive_fd and not accept_readable_stream and blob_data.get("xblobType") not in ("BufferedReadableStream", "ReadableStream"):
         _hydrate_blob_file_bytes(blob_data, file_path)
         return blob_data
 

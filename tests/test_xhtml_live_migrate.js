@@ -520,6 +520,60 @@ async function runTest() {
   );
   console.log(`[Step 13] Verified real Firefox browser (${hydratedReport.userAgent}) loaded card ${newCardWin} in Xvfb and hydrated localStorage, DOM (#payload-input), heldBlobs, and softLinkedBlobs!`);
 
+  // 14. Verify cool-service-lighter auto-popped cool-xhtml-runtime's Web Card Launcher and test xhtml.LoadCard
+  console.log('[Step 14] Verifying cool-service-lighter auto-launched cool-xhtml-runtime main card listing available web cards...');
+  let launcherCardInfo = null;
+  const launcherPollStart = Date.now();
+  while (Date.now() - launcherPollStart < 15000) {
+    const dbgRes = await httpRequest('GET', '/api/debug/xaudio');
+    if (dbgRes.statusCode === 200) {
+      const dbg = JSON.parse(dbgRes.body);
+      const found = (dbg.cardWindows || []).find(
+        (c) => c.appId === 'cool-xhtml-runtime' && c.cardId === 'index' && c.hydratedReport
+      );
+      if (found) {
+        launcherCardInfo = found;
+        break;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+
+  assert(launcherCardInfo, 'cool-service-lighter should auto-launch cool-xhtml-runtime main card in Firefox');
+  const discoveredCardsStr =
+    launcherCardInfo.hydratedReport?.localStorage?.['xhtml.discoveredCards'] ||
+    launcherCardInfo.hydratedReport?.domInputs?.['#discovered-cards-input'] ||
+    '';
+  assert(
+    discoveredCardsStr.includes('cool-amp') &&
+      discoveredCardsStr.includes('cool-terminal') &&
+      discoveredCardsStr.includes('intent-test-card'),
+    `Launcher card should discover available web cards on the bus, got: ${discoveredCardsStr}`
+  );
+  console.log(`[Step 14a] Verified launcher card (${launcherCardInfo.widHex}) discovered bus web cards: [${discoveredCardsStr}]`);
+
+  const loadCardRes = await httpRequest(
+    'POST',
+    '/intent/xhtml/LoadCard',
+    {
+      Accept: 'multipart/mixed',
+      'X-Card-Window': launcherCardInfo.widHex,
+      'X-Channel-Control': 'SYN',
+    },
+    {
+      intent: 'xhtml.LoadCard',
+      app: 'cool-xhtml-runtime',
+      cardApp: 'cool-amp',
+      cardId: 'index',
+    }
+  );
+  assert.strictEqual(loadCardRes.statusCode, 200);
+  const loadCardFrames = parseMultipartFrames(loadCardRes.body);
+  const loadCardReply = loadCardFrames.find((f) => f.event === 'xhtml.LoadCardResponse') || loadCardFrames[0];
+  assert(loadCardReply && loadCardReply.status === 'ok', 'xhtml.LoadCard should return ok xhtml.LoadCardResponse');
+  assert(loadCardReply.cardWin && loadCardReply.cardWin.startsWith('0x'), 'xhtml.LoadCardResponse should return allocated cardWin');
+  console.log(`[Step 14b] Verified xhtml.LoadCard loaded cool-amp/index -> cardWin=${loadCardReply.cardWin}`);
+
   console.log('\n=======================================================');
   console.log('=== xhtml.LiveMigrate E2E TEST PASSED COMPLETELY!   ===');
   console.log('=======================================================\n');

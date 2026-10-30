@@ -10,11 +10,12 @@ const intentRegistry = {};      // intent -> [{ wid, matchboxToml }]
 const lighterRegistry = {};     // intent -> [{ wid, computer, packageName, publicKeyHash }]
 const windowRegistry = {};      // wid -> matchboxToml
 const lighterAudioRegistry = {};// packageName -> { wid, computer, pkg }
+const lighterPackageRegistry = {}; // packageName -> { wid, computer, pkg }
 
 let checkToDrainIntentsQueue;
 
 async function doUpdateAggregateToml() {
-  await updateAggregateToml({ windowRegistry, lighterRegistry, lighterAudioRegistry });
+  await updateAggregateToml({ windowRegistry, lighterRegistry, lighterAudioRegistry, lighterPackageRegistry });
 }
 
 async function getAllMatchboxToml() {
@@ -106,6 +107,8 @@ async function parseWindowLighterToml(wid) {
     for (const packageName of Object.keys(toml.packages || {})) {
       const pkg = toml.packages[packageName];
       const publicKeyHash = pkg.publicKeyHash;
+      lighterPackageRegistry[packageName] = { wid, computer, pkg };
+      updated = true;
 
       if (pkg.intents) {
         for (const intentName of Object.keys(pkg.intents)) {
@@ -117,6 +120,8 @@ async function parseWindowLighterToml(wid) {
               packageName,
               name: pkg.name,
               description: pkg.description,
+              mainCard: pkg.mainCard,
+              cards: pkg.cards,
               intents: pkg.intents,
               publicKeyHash,
             });

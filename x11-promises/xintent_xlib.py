@@ -167,8 +167,16 @@ class XIntentXlibClient:
                 return 0
         return int(blob_id)
 
-    def blob_read(self, blob_id, win_id=None, receive_fd: bool = False, accept_readable_stream: bool = False):
+    def blob_read(
+        self,
+        blob_id,
+        win_id=None,
+        receive_fd: bool = False,
+        accept_readable_stream: bool = False,
+        accept_buffered_readable_stream: bool = False,
+    ):
         """Reads XBlob payload from XBLOB_HOST via local UNIX socket or HTTP."""
+        accept_stream = bool(accept_readable_stream or accept_buffered_readable_stream)
         blob_id_int = self._coerce_blob_id(blob_id)
         blob_hex = hex(blob_id_int)
         sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
@@ -178,10 +186,10 @@ class XIntentXlibClient:
                 sock_path,
                 blob_hex,
                 user_agent=user_agent,
-                accept_readable_stream=accept_readable_stream,
+                accept_readable_stream=accept_stream,
             )
             if blob_data:
-                return _blob_http.post_process_blob_read_data(blob_data, receive_fd, accept_readable_stream=accept_readable_stream)
+                return _blob_http.post_process_blob_read_data(blob_data, receive_fd, accept_readable_stream=accept_stream)
 
         raise RuntimeError(
             f"XBlobRead: No data found for blob_id {blob_id_int} ({blob_hex}) over socket '{sock_path}'"

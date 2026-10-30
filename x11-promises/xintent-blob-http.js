@@ -251,7 +251,7 @@ function buildGetRequestHeaders(userAgent, acceptReadableStream = false) {
     'User-Agent': userAgent || buildXBlobUserAgent(0, 'xintent'),
     'Accept': 'application/json, */*',
     'Accept-Encoding': 'identity, base64, fd-rights',
-    'X-Accept-XBlob-Type': acceptReadableStream ? 'ReadableStream, Blob, File' : 'Blob, File',
+    'X-Accept-XBlob-Type': acceptReadableStream ? 'BufferedReadableStream, ReadableStream, Blob, File' : 'Blob, File',
   };
 }
 

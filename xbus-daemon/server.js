@@ -69,7 +69,7 @@ async function internAndBuildDispatchTable() {
   return dispatchTable;
 }
 
-async function registerRouterWindowAndSelections() {
+async function createRouterWindowOrExit() {
   const { X, root, routerWin, x11 } = daemon;
   const { atoms } = xintent;
   const existingRouterWin = await xintent.connectToRouter(X, root, 0);
@@ -79,12 +79,15 @@ async function registerRouterWindowAndSelections() {
     return;
   }
   X.CreateWindow(routerWin, root, 0, 0, 1, 1, 0, 0, 0, 0, { eventMask: x11.eventMask.PropertyChange });
-  const winBuffer = Buffer.alloc(4);
-  winBuffer.writeUInt32LE(routerWin, 0);
+  X.ChangeProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 8, 'XCHANNEL_BUSMASTER');
+  const pidBuf = Buffer.alloc(4);
+  pidBuf.writeUInt32LE(process.pid, 0);
+  X.ChangeProperty(0, routerWin, atoms._NET_WM_PID, atoms.CARDINAL, 32, pidBuf);
+}
 
-  for (const propAtom of [atoms.XCHANNEL, atoms.XINTENT].filter(Boolean)) {
-    X.ChangeProperty(0, root, propAtom, atoms.WINDOW, 32, winBuffer);
-  }
+async function advertiseRouterWindowAndSelections() {
+  const { X, root, routerWin } = daemon;
+  const { atoms } = xintent;
   const selectionAtoms = [
     atoms.XCHANNEL,
     atoms.XINTENT,
@@ -94,11 +97,11 @@ async function registerRouterWindowAndSelections() {
   for (const selAtom of selectionAtoms) {
     X.SetSelectionOwner(routerWin, selAtom, 0);
   }
-
-  X.ChangeProperty(0, routerWin, atoms.WM_NAME, atoms.STRING, 8, 'XCHANNEL_BUSMASTER');
-  const pidBuf = Buffer.alloc(4);
-  pidBuf.writeUInt32LE(process.pid, 0);
-  X.ChangeProperty(0, routerWin, atoms._NET_WM_PID, atoms.CARDINAL, 32, pidBuf);
+  const winBuffer = Buffer.alloc(4);
+  winBuffer.writeUInt32LE(routerWin, 0);
+  for (const propAtom of [atoms.XCHANNEL, atoms.XINTENT].filter(Boolean)) {
+    X.ChangeProperty(0, root, propAtom, atoms.WINDOW, 32, winBuffer);
+  }
 }
 
 function extractIntentNameFromParsed(parsed) {
@@ -202,12 +205,10 @@ async function handleLifecycleEvent(ev) {
 
 async function startRouter() {
   const dispatchTable = await internAndBuildDispatchTable();
-  await registerRouterWindowAndSelections();
+  await createRouterWindowOrExit();
 
   logger.info('atoms are', xintent.atoms);
   daemon.X.ChangeWindowAttributes(daemon.root, { eventMask: daemon.x11.eventMask.SubstructureNotify });
-  await router.getAllMatchboxToml();
-  logger.info(`Window created: ${xintent.widString(daemon.routerWin)}`);
 
   const clientQueues = new Map();
 
@@ -250,6 +251,9 @@ async function startRouter() {
     await handleLifecycleEvent(ev);
   });
 
+  await router.getAllMatchboxToml();
+  await advertiseRouterWindowAndSelections();
+  logger.info(`Window created: ${xintent.widString(daemon.routerWin)}`);
   logger.info('xbus-daemon listening for direct window IPC...');
 }
 

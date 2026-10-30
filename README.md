@@ -39,7 +39,7 @@ This specification defines a unified, lightweight desktop platform constructed e
 * compiz202x: laptop window manager
 * XINTENT: intent routing through the x session, because the x session has since the 70's been the highest performance desktop bus 
 * X11: a high performance session bus and shared database with clear semantics for the past 50 years.  So if the session needs a shared database and clear semantics
-* XBLOB: adds web File/Blob/ReadableStream/MediaStream so you can ctrl-C the video lecture on user-laptop and ctrl-V it into the terminal window on user-desktop once nemo catches up and advertises XBLOB File as the copy format
+* XBLOB: adds web File/Blob/BufferedReadableStream/ReadableStream/MediaStream so you can ctrl-C the video lecture on user-laptop and ctrl-V it into the terminal window on user-desktop once nemo catches up and advertises XBLOB File as the copy format
 * XCHANNEL: your packet can follow the advertisements to Krispy Kreme but to come home with a donut it needs a trail of channels across bridges.  This was known in the 1970's
 * XSECURE: coping with your ex-secure system that you connected to the network. We can have iptables or aws waf or whatever deep packet inspecting firewall system we want, and use jwt's from policykit or oauth.  So the keylogger that connected from `ssh -X other-guys-computer` gets its XGrabKeyboard dropped and KeyPress dropped when it doesn't have a focused window.  Paranoid users can put a separate deep packet inspecting firewall in front of their X servers, this isnt rocket surgery, everyone knows how to firewall network protocols.
 * Android bridge app "Flammenwerfer" to send intents back and forth thus hanging your android off your X session, and load html cards with intents so you get an instant phone ui without compiling kotlin in android studio
@@ -391,7 +391,7 @@ libplatform --app user-desktop:org.unix.editor --intent file.Open --path "/home/
 # 8. Disintermediating the Intent Server for Blobs and Streams
 Scott McNealy was right: the network IS the computer, and I am thoroughly sick of explaining to the former Copland team why physical memory location shouldn't matter to a system call.
 
-We already solved location transparency with NFS back in '84, yet here we are in 1995 arguing about where a byte lives. Across a multi-gigabit link, fetching a packet from the UltraSPARC workstation in the lab across the hall gives you the exact same bandwidth as pulling from a SIMM board on an old 80s VMEbus—you're just dealing with a slightly wider latency wall. Treating a File, Blob, ReadableStream, or MediaStream as anything other than standard non-uniform memory access (NUMA) with remote DMA semantics is an insult to mmap().
+We already solved location transparency with NFS back in '84, yet here we are in 1995 arguing about where a byte lives. Across a multi-gigabit link, fetching a packet from the UltraSPARC workstation in the lab across the hall gives you the exact same bandwidth as pulling from a SIMM board on an old 80s VMEbus—you're just dealing with a slightly wider latency wall. Treating a File, Blob, BufferedReadableStream, ReadableStream, or MediaStream as anything other than standard non-uniform memory access (NUMA) with remote DMA semantics is an insult to mmap().
 
 When you kick off `xoss --stream-policy MediaStream --block-size 50ms --transcode audio/mp3;64k ./xquake`, you're simply plumbing raw `/dev/audio` buffer chunks straight through a kernel-level STREAMS module. The kernel doesn't waste clock cycles parsing frames; it just passes page-aligned memory descriptors down the pipe.
 
@@ -431,7 +431,8 @@ The XBlob extension establishes location-transparent Direct Virtual Memory Acces
 ### Supported Primitives
 * `XBLOB_TYPE_FILE`: Page-aligned, mmap()-backed memory region mapped directly from a UNIX vnode.
 * `XBLOB_TYPE_BLOB`: Static, contiguous DVMA buffer allocated in kernel/SBus physical memory  space.
-* `XBLOB_TYPE_READABLE_STREAM`: Asynchronous ring buffer backed by a kernel STREAMS queue, supporting variable-rate block reads.
+* `XBLOB_TYPE_BUFFERED_READABLE_STREAM`: Storage-backed stream buffered from offset 0 that promotes to a `Blob` upon stream completion.
+* `XBLOB_TYPE_READABLE_STREAM`: Asynchronous pipe backed by a kernel STREAMS queue (WHATWG `ReadableStream` semantics, unbuffered from 0), supporting variable-rate block reads.
 * `XBLOB_TYPE_MEDIA_STREAM`: Isochronous, time-bounded stream transport tied to an XAudioNode or XVideoNode clock source, tuned for continuous low-latency transfer ($T_{\text{latency}} \le 50\text{ms}$).
 
 ## 8.2. Core Protocol Operations & C API
@@ -442,10 +443,11 @@ All structural control signals (creation, permissions, and chunk advisories) pas
 typedef uint32_t XBlobID;
 
 typedef enum {
-    XBlobTypeFile           = 0x01,
-    XBlobTypeBlob           = 0x02,
-    XBlobTypeReadableStream = 0x03,
-    XBlobTypeMediaStream    = 0x04
+    XBlobTypeFile                   = 0x01,
+    XBlobTypeBlob                   = 0x02,
+    XBlobTypeBufferedReadableStream = 0x03,
+    XBlobTypeReadableStream         = 0x04,
+    XBlobTypeMediaStream            = 0x05
 } XBlobType;
 
 typedef struct {

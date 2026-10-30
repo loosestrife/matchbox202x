@@ -45,12 +45,17 @@ function sendJsonBlobMetadata(res, blobData, hexBlobId) {
 }
 
 function resolveBlobFdPath(blobData) {
+  const isUnbufferedPipe = blobData.xblobType === 'ReadableStream' || blobData.xblobType === 'MediaStream' || Boolean(blobData.isPipe);
   if (blobData.openedFd !== undefined && blobData.openedFd !== null) {
-    try { fs.lseekSync(blobData.openedFd, 0, 0); } catch (_) {}
+    if (!isUnbufferedPipe) {
+      try { fs.lseekSync(blobData.openedFd, 0, 0); } catch (_) {}
+    }
     return `/proc/self/fd/${blobData.openedFd}`;
   }
   if (typeof blobData.data === 'number' && blobData.data >= 0) {
-    try { fs.lseekSync(blobData.data, 0, 0); } catch (_) {}
+    if (!isUnbufferedPipe) {
+      try { fs.lseekSync(blobData.data, 0, 0); } catch (_) {}
+    }
     return `/proc/self/fd/${blobData.data}`;
   }
   if (typeof blobData.data === 'string') {
@@ -73,7 +78,7 @@ function pipeFdPathResponse({ res, fdPath, blobData, blobId, hexBlobId, mimeType
   const responseHeaders = {
     'Content-Type': mimeType,
     'Accept-Encoding': 'identity, base64, fd-rights, file-path',
-    'X-XBlob-Type': blobData.xblobType || 'ReadableStream',
+    'X-XBlob-Type': blobData.xblobType || 'BufferedReadableStream',
     'X-Blob-Id': hexBlobId,
   };
   const contentLen = blobData.size || statSize;
@@ -83,7 +88,8 @@ function pipeFdPathResponse({ res, fdPath, blobData, blobId, hexBlobId, mimeType
   res.writeHead(200, responseHeaders);
 
   let bytesPiped = 0;
-  const readStream = fs.createReadStream(fdPath, { start: 0 });
+  const isUnbufferedPipe = blobData.xblobType === 'ReadableStream' || blobData.xblobType === 'MediaStream' || Boolean(blobData.isPipe);
+  const readStream = isUnbufferedPipe ? fs.createReadStream(fdPath) : fs.createReadStream(fdPath, { start: 0 });
   readStream.on('data', (chunk) => { bytesPiped += chunk.length; });
   readStream.on('end', () => {
     logger.info(`[xblob-host GET /blobs] Finished piping fdPath '${fdPath}' for blob 0x${blobId.toString(16)}: ${bytesPiped} total bytes written to HTTP response`);
@@ -118,31 +124,40 @@ function resolveBlobContentEncoding(blobData) {
   return allowed.includes(blobData._dataType) ? blobData._dataType : null;
 }
 
-function receiverAcceptsReadableStream(req, url) {
+function receiverAcceptsBufferedReadableStream(req, url) {
   const acceptXBlobHeader = String(req.headers['x-accept-xblob-type'] || req.headers['x-xblob-type'] || '');
   const acceptHeader = String(req.headers['accept'] || '');
   return (
+    acceptXBlobHeader.includes('BufferedReadableStream') ||
     acceptXBlobHeader.includes('ReadableStream') ||
+    acceptHeader.includes('BufferedReadableStream') ||
     acceptHeader.includes('ReadableStream') ||
+    url.searchParams.get('acceptBufferedReadableStream') === '1' ||
     url.searchParams.get('acceptReadableStream') === '1' ||
+    url.searchParams.get('xblobType') === 'BufferedReadableStream' ||
     url.searchParams.get('xblobType') === 'ReadableStream'
   );
 }
 
 async function serveFoundBlob(req, res, { blobData, blobId, hexBlobId, url, logger }) {
-  const acceptsReadableStream = receiverAcceptsReadableStream(req, url);
-  if (blobData.xblobType === 'ReadableStream' && !blobData.streamCompleted && blobData.streamCompletedPromise) {
-    if (!acceptsReadableStream) {
-      logger.info(`[xblob-host GET /blobs] Receiver requested Blob for active ReadableStream ${hexBlobId}; waiting for StreamCompleted event to promote ReadableStream -> Blob...`);
+  const acceptsStream = receiverAcceptsBufferedReadableStream(req, url);
+  if (blobData.xblobType === 'BufferedReadableStream' && !blobData.streamCompleted && blobData.streamCompletedPromise) {
+    if (!acceptsStream) {
+      logger.info(`[xblob-host GET /blobs] Receiver requested Blob for active BufferedReadableStream ${hexBlobId}; waiting for StreamCompleted event to promote BufferedReadableStream -> Blob...`);
       await blobData.streamCompletedPromise;
-      logger.info(`[xblob-host GET /blobs] StreamCompleted for ${hexBlobId}: promoted ReadableStream -> Blob (${blobData.size} bytes), handing over Blob to receiver`);
+      logger.info(`[xblob-host GET /blobs] StreamCompleted for ${hexBlobId}: promoted BufferedReadableStream -> Blob (${blobData.size} bytes), handing over Blob to receiver`);
     } else {
-      logger.info(`[xblob-host GET /blobs] Receiver opted in to ReadableStream for ${hexBlobId}; handing over live ReadableStream immediately`);
+      logger.info(`[xblob-host GET /blobs] Receiver opted in to BufferedReadableStream for ${hexBlobId}; handing over live BufferedReadableStream immediately`);
     }
   }
 
   const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'application/octet-stream');
-  const isStream = blobData.xblobType === 'ReadableStream' || blobData.xblobType === 'MediaStream' || req.headers['x-xblob-type'] === 'ReadableStream';
+  const isStream =
+    blobData.xblobType === 'BufferedReadableStream' ||
+    blobData.xblobType === 'ReadableStream' ||
+    blobData.xblobType === 'MediaStream' ||
+    req.headers['x-xblob-type'] === 'BufferedReadableStream' ||
+    req.headers['x-xblob-type'] === 'ReadableStream';
 
   logger.info(`[xblob-host GET /blobs] blobId=${blobId} (${hexBlobId}) stored state: xblobType=${blobData.xblobType}, size=${blobData.size}, openedFd=${blobData.openedFd}, _dataType=${blobData._dataType}, contentEncoding=${blobData.contentEncoding}, type=${mimeType}`);
 

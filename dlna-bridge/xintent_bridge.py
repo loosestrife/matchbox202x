@@ -95,7 +95,16 @@ def is_readable_stream_blob(raw_blob: object) -> bool:
     if not isinstance(raw_blob, dict):
         return False
     unwrapped = _unwrap_blob_dict(raw_blob)
-    return (unwrapped.get("xblobType") or raw_blob.get("xblobType")) == "ReadableStream"
+    xblob_type = unwrapped.get("xblobType") or raw_blob.get("xblobType")
+    return xblob_type in ("BufferedReadableStream", "ReadableStream")
+
+
+def is_buffered_readable_stream_blob(raw_blob: object) -> bool:
+    if not isinstance(raw_blob, dict):
+        return False
+    unwrapped = _unwrap_blob_dict(raw_blob)
+    xblob_type = unwrapped.get("xblobType") or raw_blob.get("xblobType")
+    return xblob_type == "BufferedReadableStream"
 
 
 def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:

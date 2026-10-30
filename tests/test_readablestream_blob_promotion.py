@@ -62,11 +62,11 @@ async def run_async_checks(display: str, http_port: int):
     print(f"Resolved XBLOB_SOCKET_PATH: {sock_path}")
     assert sock_path and os.path.exists(sock_path), f"Expected XBLOB_SOCKET_PATH to exist, got {sock_path}"
 
-    # 1. Test ReadableStream opt-in vs Blob wait-for-StreamCompleted promotion
-    print("\n=== TEST 1: ReadableStream Opt-In vs Blob Promotion on StreamCompleted ===")
+    # 1. Test BufferedReadableStream opt-in vs Blob wait-for-StreamCompleted promotion
+    print("\n=== TEST 1: BufferedReadableStream Opt-In vs Blob Promotion on StreamCompleted ===")
     r_fd, w_fd = os.pipe()
     stream_blob_id = client.blob_create({
-        "xblobType": "ReadableStream",
+        "xblobType": "BufferedReadableStream",
         "type": 'video/mpeg; codecs="h264, aac"',
         "name": "live_test.ts",
         "data": f"/proc/{os.getpid()}/fd/{r_fd}",
@@ -74,8 +74,8 @@ async def run_async_checks(display: str, http_port: int):
         "contentEncoding": "fd-rights",
     })
     os.close(r_fd)
-    assert stream_blob_id > 0, "Expected non-zero blob ID for ReadableStream"
-    print(f"Created ReadableStream XBlob: {hex(stream_blob_id)}")
+    assert stream_blob_id > 0, "Expected non-zero blob ID for BufferedReadableStream"
+    print(f"Created BufferedReadableStream XBlob: {hex(stream_blob_id)}")
 
     # Write initial chunk to the pipe, keep write-end open so StreamCompleted has NOT fired yet
     chunk_1 = b"MPEGTS_CHUNK_1_" * 100
@@ -83,17 +83,17 @@ async def run_async_checks(display: str, http_port: int):
     os.write(w_fd, chunk_1)
     await asyncio.sleep(0.05)
 
-    # Receiver A (like dlna-bridge) opts in to ReadableStream -> must return immediately!
+    # Receiver A (like dlna-bridge) opts in to BufferedReadableStream -> must return immediately!
     t0 = time.monotonic()
-    stream_res = client.blob_read(stream_blob_id, receive_fd=True, accept_readable_stream=True)
+    stream_res = client.blob_read(stream_blob_id, receive_fd=True, accept_buffered_readable_stream=True)
     dt_opt_in = time.monotonic() - t0
     print(
-        f"Receiver A (accept_readable_stream=True) returned in {dt_opt_in * 1000:.1f}ms: "
+        f"Receiver A (accept_buffered_readable_stream=True) returned in {dt_opt_in * 1000:.1f}ms: "
         f"xblobType={stream_res.get('xblobType')}, _dataType={stream_res.get('_dataType')}, fd={stream_res.get('data')}"
     )
-    assert stream_res.get("xblobType") == "ReadableStream", f"Expected ReadableStream, got {stream_res.get('xblobType')}"
-    assert dt_opt_in < 0.3, f"Expected immediate return (<0.3s) for ReadableStream opt-in, took {dt_opt_in:.2f}s"
-    assert isinstance(stream_res.get("data"), int), "Expected open file descriptor for ReadableStream"
+    assert stream_res.get("xblobType") == "BufferedReadableStream", f"Expected BufferedReadableStream, got {stream_res.get('xblobType')}"
+    assert dt_opt_in < 0.3, f"Expected immediate return (<0.3s) for BufferedReadableStream opt-in, took {dt_opt_in:.2f}s"
+    assert isinstance(stream_res.get("data"), int), "Expected open file descriptor for BufferedReadableStream"
 
     # Schedule writing chunk_2 and closing pipe after 400ms (triggering StreamCompleted)
     async def finish_producer():
@@ -103,20 +103,20 @@ async def run_async_checks(display: str, http_port: int):
 
     producer_task = asyncio.create_task(finish_producer())
 
-    # Receiver B wants a Blob (accept_readable_stream=False) -> blob host must wait for StreamCompleted,
-    # promote ReadableStream -> Blob, and return the completed Blob!
+    # Receiver B wants a Blob (accept_buffered_readable_stream=False) -> blob host must wait for StreamCompleted,
+    # promote BufferedReadableStream -> Blob, and return the completed Blob!
     loop = asyncio.get_event_loop()
     t1 = time.monotonic()
     blob_res = await loop.run_in_executor(
         None,
-        lambda: client.blob_read(stream_blob_id, receive_fd=False, accept_readable_stream=False),
+        lambda: client.blob_read(stream_blob_id, receive_fd=False, accept_buffered_readable_stream=False),
     )
     dt_blob = time.monotonic() - t1
     await producer_task
 
     expected_total = len(chunk_1) + len(chunk_2)
     print(
-        f"Receiver B (accept_readable_stream=False) returned after StreamCompleted in {dt_blob * 1000:.1f}ms: "
+        f"Receiver B (accept_buffered_readable_stream=False) returned after StreamCompleted in {dt_blob * 1000:.1f}ms: "
         f"xblobType={blob_res.get('xblobType')}, size={blob_res.get('size')}, data_len={len(blob_res.get('data', b''))}"
     )
     assert dt_blob >= 0.3, f"Expected Receiver B to wait for StreamCompleted (>=0.3s), took {dt_blob:.2f}s"
@@ -128,6 +128,46 @@ async def run_async_checks(display: str, http_port: int):
     final_fd_size = os.fstat(stream_res["data"]).st_size
     assert final_fd_size == expected_total, f"Expected Receiver A's FD to have grown to {expected_total}, got {final_fd_size}"
     os.close(stream_res["data"])
+
+    # 1b. Test actual WHATWG ReadableStream defined as a pipe (unbuffered from 0, does not promote to Blob)
+    print("\n=== TEST 1b: WHATWG ReadableStream Defined as a Pipe ===")
+    pipe_r, pipe_w = os.pipe()
+    pipe_blob_id = client.blob_create({
+        "xblobType": "ReadableStream",
+        "type": "application/octet-stream",
+        "name": "whatwg_pipe.bin",
+        "data": f"/proc/{os.getpid()}/fd/{pipe_r}",
+        "_dataType": "fd-rights",
+        "contentEncoding": "fd-rights",
+    })
+    os.close(pipe_r)
+    assert pipe_blob_id > 0, "Expected non-zero blob ID for ReadableStream pipe"
+    print(f"Created ReadableStream (pipe) XBlob: {hex(pipe_blob_id)}")
+
+    pipe_chunk_1 = b"WHATWG_PIPE_CHUNK_1"
+    pipe_chunk_2 = b"WHATWG_PIPE_CHUNK_2"
+    os.write(pipe_w, pipe_chunk_1)
+
+    pipe_res_1 = client.blob_read(pipe_blob_id, receive_fd=True, accept_readable_stream=True)
+    assert pipe_res_1.get("xblobType") == "ReadableStream", f"Expected ReadableStream, got {pipe_res_1.get('xblobType')}"
+    pipe_fd_1 = pipe_res_1["data"]
+    import stat as _stat
+    assert _stat.S_ISFIFO(os.fstat(pipe_fd_1).st_mode), "Expected ReadableStream FD to be a FIFO/pipe"
+    read_1 = os.read(pipe_fd_1, len(pipe_chunk_1))
+    assert read_1 == pipe_chunk_1, f"Expected {pipe_chunk_1!r}, got {read_1!r}"
+
+    os.write(pipe_w, pipe_chunk_2)
+    os.close(pipe_w)
+
+    # Because ReadableStream is a pipe (not buffered from 0), reading again only receives chunk 2
+    pipe_res_2 = client.blob_read(pipe_blob_id, receive_fd=True, accept_readable_stream=True)
+    assert pipe_res_2.get("xblobType") == "ReadableStream", f"Expected ReadableStream to stay ReadableStream, got {pipe_res_2.get('xblobType')}"
+    pipe_fd_2 = pipe_res_2["data"]
+    read_2 = os.read(pipe_fd_2, 1024)
+    assert read_2 == pipe_chunk_2, f"Expected pipe to yield only unconsumed {pipe_chunk_2!r}, got {read_2!r}"
+    os.close(pipe_fd_1)
+    os.close(pipe_fd_2)
+    print("Verified WHATWG ReadableStream is a true pipe (unbuffered from 0, does not promote to Blob).")
 
     # 2. Test End-to-End CoolTranscoder -> ReadableStream XBlob -> DLNA Bridge HTTP Range Streaming
     print("\n=== TEST 2: CoolTranscoder ReadableStream MPEG-TS -> DLNA Bridge Seekable HTTP Streaming ===")

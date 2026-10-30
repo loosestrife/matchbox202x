@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cool-Terminal - 80x24 XBlob ReadableStream VT100</title>
+  <script src="/matchbox202x.js"></script>
+  <style>
+    :root {
+      --crt-bg: #040b04;
+      --crt-bezel: #121712;
+      --crt-border: #263826;
+      --phosphor-green: #33ff33;
+      --phosphor-dim: #198c19;
+      --phosphor-glow: rgba(51, 255, 51, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      min-height: 100vh;
+      background: radial-gradient(circle at center, #0c160c 0%, #030603 100%);
+      color: var(--phosphor-green);
+      font-family: "Courier New", "Lucida Console", "DejaVu Sans Mono", monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .terminal-cabinet {
+      background: var(--crt-bezel);
+      border: 2px solid var(--crt-border);
+      border-radius: 12px;
+      padding: 18px;
+      box-shadow:
+        0 18px 45px rgba(0, 0, 0, 0.85),
+        inset 0 1px 0 rgba(102, 255, 102, 0.12);
+    }
+
+    .terminal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--crt-border);
+      font-size: 0.85rem;
+      letter-spacing: 0.06em;
+    }
+
+    .terminal-title {
+      font-weight: bold;
+      color: var(--phosphor-green);
+      text-shadow: 0 0 8px var(--phosphor-glow);
+    }
+
+    .terminal-badges {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--phosphor-dim);
+    }
+
+    .badge {
+      padding: 2px 8px;
+      border: 1px solid var(--crt-border);
+      border-radius: 4px;
+      background: #071007;
+      color: var(--phosphor-green);
+    }
+
+    .crt-viewport {
+      position: relative;
+      background: var(--crt-bg);
+      border: 2px solid #1b2e1b;
+      border-radius: 6px;
+      padding: 10px 12px;
+      box-shadow:
+        inset 0 0 24px rgba(0, 0, 0, 0.9),
+        0 0 14px rgba(51, 255, 51, 0.08);
+      overflow: hidden;
+      outline: none;
+    }
+
+    .crt-viewport::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.22) 3px
+      );
+      pointer-events: none;
+    }
+
+    #terminal-screen {
+      margin: 0;
+      width: 80ch;
+      height: calc(24 * 1.25em);
+      line-height: 1.25em;
+      font-family: "Courier New", "Lucida Console", "DejaVu Sans Mono", monospace;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--phosphor-green);
+      text-shadow: 0 0 6px var(--phosphor-glow);
+      white-space: pre;
+      overflow: hidden;
+      user-select: text;
+    }
+
+    .cursor-cell {
+      background: var(--phosphor-green);
+      color: var(--crt-bg);
+      text-shadow: none;
+      animation: blink 1s steps(2, start) infinite;
+    }
+
+    @keyframes blink {
+      to {
+        background: transparent;
+        color: var(--phosphor-green);
+      }
+    }
+
+    .controls-bar {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .cmd-input {
+      flex: 1;
+      background: #050c05;
+      border: 1px solid var(--crt-border);
+      border-radius: 4px;
+      padding: 7px 10px;
+      color: var(--phosphor-green);
+      font-family: inherit;
+      font-size: 0.9rem;
+      outline: none;
+    }
+
+    .cmd-input:focus {
+      border-color: var(--phosphor-green);
+      box-shadow: 0 0 6px rgba(51, 255, 51, 0.25);
+    }
+
+    .btn {
+      background: #0b1b0b;
+      color: var(--phosphor-green);
+      border: 1px solid var(--crt-border);
+      border-radius: 4px;
+      padding: 7px 12px;
+      font-family: inherit;
+      font-size: 0.82rem;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .btn:hover {
+      border-color: var(--phosphor-green);
+      box-shadow: 0 0 8px rgba(51, 255, 51, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <div class="terminal-cabinet">
+    <div class="terminal-header">
+      <div class="terminal-title">COOL-TERMINAL // 80x24 GREEN PHOSPHOR TTY</div>
+      <div class="terminal-badges">
+        <span class="badge" id="geom-badge">80x24</span>
+        <span class="badge" id="tty-badge">TTY: connecting...</span>
+        <span class="badge" id="blob-badge">IN: - / OUT: -</span>
+      </div>
+    </div>
+
+    <div class="crt-viewport" id="crt-viewport" tabindex="0">
+      <pre id="terminal-screen" data-cols="80" data-rows="24"></pre>
+    </div>
+
+    <div class="controls-bar">
+      <input
+        type="text"
+        id="cmd-input"
+        class="cmd-input"
+        placeholder="Type command or click 80x24 screen to type directly..."
+        autocomplete="off"
+      />
+      <button class="btn" id="send-btn">SEND</button>
+      <button class="btn" id="clear-btn">CLEAR</button>
+      <button class="btn" id="reconnect-btn">NEW TTY</button>
+    </div>
+  </div>
+
+  <script>
+    const COLS = 80;
+    const ROWS = 24;
+    const screenEl = document.getElementById('terminal-screen');
+    const viewportEl = document.getElementById('crt-viewport');
+    const ttyBadgeEl = document.getElementById('tty-badge');
+    const blobBadgeEl = document.getElementById('blob-badge');
+    const cmdInputEl = document.getElementById('cmd-input');
+
+    let grid = [];
+    let cursorRow = 0;
+    let cursorCol = 0;
+    let inBlobId = null;
+    let outBlobId = null;
+    let streamAbortCtrl = null;
+
+    function resetScreenGrid() {
+      grid = Array.from({ length: ROWS }, () => Array(COLS).fill(' '));
+      cursorRow = 0;
+      cursorCol = 0;
+      renderGrid();
+    }
+
+    function scrollUpOneLine() {
+      grid.shift();
+      grid.push(Array(COLS).fill(' '));
+      cursorRow = ROWS - 1;
+    }
+
+    function advanceLine() {
+      cursorRow++;
+      if (cursorRow >= ROWS) {
+        scrollUpOneLine();
+      }
+    }
+
+    function putChar(ch) {
+      if (ch === '\r') {
+        cursorCol = 0;
+        return;
+      }
+      if (ch === '\n') {
+        cursorCol = 0;
+        advanceLine();
+        return;
+      }
+      if (ch === '\b' || ch === '\x7f') {
+        if (cursorCol > 0) {
+          cursorCol--;
+          grid[cursorRow][cursorCol] = ' ';
+        }
+        return;
+      }
+      if (ch === '\t') {
+        const nextStop = Math.min(COLS - 1, (Math.floor(cursorCol / 8) + 1) * 8);
+        while (cursorCol < nextStop) {
+          grid[cursorRow][cursorCol++] = ' ';
+        }
+        return;
+      }
+      if (ch.charCodeAt(0) < 32) {
+        return;
+      }
+      if (cursorCol >= COLS) {
+        cursorCol = 0;
+        advanceLine();
+      }
+      grid[cursorRow][cursorCol] = ch;
+      cursorCol++;
+    }
+
+    function stripAndApplyAnsi(text) {
+      let i = 0;
+      while (i < text.length) {
+        if (text[i] === '\x1b') {
+          if (text[i + 1] === '[') {
+            let j = i + 2;
+            while (j < text.length && !/[A-Za-z~]/.test(text[j])) j++;
+            const seq = text.slice(i + 2, j);
+            const cmd = text[j] || '';
+            if (cmd === 'J' && (seq === '2' || seq === '3')) {
+              resetScreenGrid();
+            } else if (cmd === 'H' && (!seq || seq === '1;1')) {
+              cursorRow = 0;
+              cursorCol = 0;
+            } else if (cmd === 'K') {
+              for (let c = cursorCol; c < COLS; c++) grid[cursorRow][c] = ' ';
+            }
+            i = j + 1;
+            continue;
+          }
+          if (text[i + 1] === ']') {
+            let j = i + 2;
+            while (j < text.length && text[j] !== '\x07' && !(text[j] === '\x1b' && text[j + 1] === '\\')) j++;
+            i = text[j] === '\x07' ? j + 1 : j + 2;
+            continue;
+          }
+          i += 2;
+          continue;
+        }
+        putChar(text[i]);
+        i++;
+      }
+      renderGrid();
+    }
+
+    function escapeHtml(ch) {
+      if (ch === '&') return '&amp;';
+      if (ch === '<') return '&lt;';
+      if (ch === '>') return '&gt;';
+      return ch;
+    }
+
+    function renderGrid() {
+      const lines = [];
+      const activeCol = Math.min(cursorCol, COLS - 1);
+      for (let r = 0; r < ROWS; r++) {
+        if (r === cursorRow) {
+          const before = grid[r].slice(0, activeCol).map(escapeHtml).join('');
+          const curChar = escapeHtml(grid[r][activeCol] || ' ');
+          const after = grid[r].slice(activeCol + 1).map(escapeHtml).join('');
+          lines.push(`${before}<span class="cursor-cell">${curChar}</span>${after}`);
+        } else {
+          lines.push(grid[r].map(escapeHtml).join(''));
+        }
+      }
+      screenEl.innerHTML = lines.join('\n');
+    }
+
+    async function sendKeystrokes(str) {
+      if (!inBlobId || !str) return;
+      try {
+        await fetch(`/xblob/${encodeURIComponent(inBlobId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: str }),
+        });
+      } catch (err) {
+        stripAndApplyAnsi(`\r\n[stdin write error: ${err.message}]\r\n`);
+      }
+    }
+
+    async function pipeOutStreamToScreen(targetOutBlobId, signal) {
+      const res = await fetch(`/xblob/${encodeURIComponent(targetOutBlobId)}`, {
+        headers: { Accept: 'application/octet-stream' },
+        signal,
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`GET /xblob/${targetOutBlobId} returned HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          stripAndApplyAnsi(decoder.decode(value, { stream: true }));
+        }
+      }
+    }
+
+    function extractOutStreamFromMultipart(rawText) {
+      let parsedJson = null;
+      let attachedBlob = null;
+      const headerMatch = rawText.match(/X-Attached-Blob-Id:\s*([^\r\n]+)/i);
+      if (headerMatch) {
+        attachedBlob = headerMatch[1].trim();
+      }
+      const jsonMatch = rawText.match(/\{[\s\S]*?"event"\s*:\s*"term\.getOutStreamResponse"[\s\S]*?\}/i);
+      if (jsonMatch) {
+        try {
+          parsedJson = JSON.parse(jsonMatch[0]);
+        } catch (_) {}
+      }
+      return { parsedJson, attachedBlob };
+    }
+
+    async function startTerminalSession() {
+      if (streamAbortCtrl) {
+        streamAbortCtrl.abort();
+      }
+      streamAbortCtrl = new AbortController();
+      resetScreenGrid();
+      stripAndApplyAnsi('COOL-TERMINAL 80x24 // Allocating ReadableStream pipes...\r\n');
+
+      try {
+        const createRes = await fetch('/xblob', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            xblobType: 'ReadableStream',
+            type: 'application/octet-stream',
+            name: 'tty-stdin',
+          }),
+        });
+        const createData = await createRes.json();
+        inBlobId = createData.blobId || createData.blob;
+
+        const intentRes = await fetch('/intent/term/GetOutStream', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Channel-Control': 'SYN',
+            'X-Attached-Blob-Id': String(inBlobId),
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({
+            intent: 'term.GetOutStream',
+            Prefer: 'return=minimal',
+          }),
+        });
+
+        const rawResponse = await intentRes.text();
+        const { parsedJson, attachedBlob } = extractOutStreamFromMultipart(rawResponse);
+        outBlobId = attachedBlob || parsedJson?.dataBlob || parsedJson?.blobId;
+        const ttyName = parsedJson?.tty || '/dev/pts/0';
+
+        ttyBadgeEl.textContent = `TTY: ${ttyName}`;
+        blobBadgeEl.textContent = `IN: ${inBlobId} / OUT: ${outBlobId}`;
+        stripAndApplyAnsi(`Connected to ${ttyName} (IN=${inBlobId}, OUT=${outBlobId})\r\n\r\n`);
+
+        if (outBlobId) {
+          pipeOutStreamToScreen(outBlobId, streamAbortCtrl.signal).catch((err) => {
+            if (err.name !== 'AbortError') {
+              stripAndApplyAnsi(`\r\n[stream closed: ${err.message}]\r\n`);
+            }
+          });
+        }
+      } catch (err) {
+        ttyBadgeEl.textContent = 'TTY: error';
+        stripAndApplyAnsi(`\r\n[connection failed: ${err.message}]\r\n`);
+      }
+    }
+
+    viewportEl.addEventListener('keydown', (ev) => {
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        sendKeystrokes('\n');
+      } else if (ev.key === 'Backspace') {
+        ev.preventDefault();
+        sendKeystrokes('\x7f');
+      } else if (ev.key === 'Tab') {
+        ev.preventDefault();
+        sendKeystrokes('\t');
+      } else if (ev.key.length === 1) {
+        ev.preventDefault();
+        sendKeystrokes(ev.key);
+      }
+    });
+
+    function submitCommandInput() {
+      const val = cmdInputEl.value;
+      cmdInputEl.value = '';
+      sendKeystrokes(val + '\n');
+      viewportEl.focus();
+    }
+
+    cmdInputEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        submitCommandInput();
+      }
+    });
+
+    document.getElementById('send-btn').addEventListener('click', submitCommandInput);
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      resetScreenGrid();
+      viewportEl.focus();
+    });
+    document.getElementById('reconnect-btn').addEventListener('click', () => {
+      startTerminalSession();
+      viewportEl.focus();
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+      resetScreenGrid();
+      startTerminalSession();
+    });
+  </script>
+</body>
+</html>

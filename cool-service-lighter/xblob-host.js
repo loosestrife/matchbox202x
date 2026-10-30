@@ -120,6 +120,7 @@ const pickFile = async (xiIntent) => {
 };
 
 const xblobBroadcast = async message => {
+  if (!softLinks[message.blob]) return;
   const data = await xintent.XBlobRead(X, xintent.routerWin, message.blob, message.host, message.version);
   let buf;
   if(data._dataType == 'text'){
@@ -128,7 +129,9 @@ const xblobBroadcast = async message => {
   if(data._dataType == 'base64'){
     buf = Buffer.from(data.data, 'base64')
   }
-  fs.writeFileSync(softLinks[message.blob], buf);
+  if (buf) {
+    fs.writeFileSync(softLinks[message.blob], buf);
+  }
 };
 
 const handleXBlobDestructor = async message => {

@@ -89,10 +89,10 @@ def _unlink_incoming_blob(dev: DLNADevice, data_blob_id: Optional[int], was_tran
 
 
 def _should_accept_readable_stream(payload: dict) -> bool:
-    if payload.get("acceptReadableStream") is False or payload.get("xblobType") == "Blob":
+    if payload.get("acceptBufferedReadableStream") is False or payload.get("acceptReadableStream") is False or payload.get("xblobType") == "Blob":
         return False
     inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
-    if inner.get("acceptReadableStream") is False or inner.get("xblobType") == "Blob":
+    if inner.get("acceptBufferedReadableStream") is False or inner.get("acceptReadableStream") is False or inner.get("xblobType") == "Blob":
         return False
     return True
 

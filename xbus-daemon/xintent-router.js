@@ -135,6 +135,7 @@ const tryToForwardTheFrame = async (xchannelFrame) => {
     intentRegistry: registry.intentRegistry,
     windowRegistry: registry.windowRegistry,
     lighterRegistry: registry.lighterRegistry,
+    getAllMatchboxToml: registry.getAllMatchboxToml,
     intentsAwaitingServicesQueue,
     sendXIntentIntentV0,
     X: daemon.X,

@@ -83,7 +83,9 @@ function genServicesManifesto() {
   xintentServicesManifesto.packages = {};
   for(const pakName in packageRegistry){
     const pak = packageRegistry[pakName];
-    if(!pak.intents){
+    const hasCards = Array.isArray(pak.cards) && pak.cards.length > 0;
+    const mainCard = pak.app?.main?.card || (hasCards ? pak.cards[0]?.id : null);
+    if(!pak.intents && !hasCards && !mainCard){
       continue;
     }
     xintentServicesManifesto.packages[pakName] = {
@@ -91,9 +93,19 @@ function genServicesManifesto() {
       description: pak.app?.description || '',
       publicKeyHash: '0xdeadbeef',
       intents: {},
+    };
+    if (mainCard) {
+      xintentServicesManifesto.packages[pakName].mainCard = mainCard;
     }
-    for(const intent in pak.intents){
-      xintentServicesManifesto.packages[pakName].intents[intent] = pak.intents[intent];
+    if (hasCards) {
+      xintentServicesManifesto.packages[pakName].cards = pak.cards
+        .map((c) => (typeof c === 'string' ? c : c?.id))
+        .filter(Boolean);
+    }
+    if (pak.intents) {
+      for(const intent in pak.intents){
+        xintentServicesManifesto.packages[pakName].intents[intent] = pak.intents[intent];
+      }
     }
   }
 }

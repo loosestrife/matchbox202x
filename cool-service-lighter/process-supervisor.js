@@ -50,6 +50,7 @@ function spawnRuntime(cmdFile, workingDir) {
       stdio: 'inherit',
       detached: true,
     });
+    proc.detached = true;
     trackChild(proc);
     proc.on('error', () => {
       const fallbackProc = spawn('node', [cmdFile], {
@@ -57,6 +58,7 @@ function spawnRuntime(cmdFile, workingDir) {
         stdio: 'inherit',
         detached: true,
       });
+      fallbackProc.detached = true;
       trackChild(fallbackProc);
     });
     return proc;
@@ -66,6 +68,7 @@ function spawnRuntime(cmdFile, workingDir) {
       stdio: 'inherit',
       detached: true,
     });
+    fallbackProc.detached = true;
     trackChild(fallbackProc);
     return fallbackProc;
   }

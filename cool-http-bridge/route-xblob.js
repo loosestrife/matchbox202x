@@ -89,8 +89,9 @@ function wantsRawHttpBlobResponse(req) {
 
 function tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId) {
   const bodyPayload = blobData.data !== undefined ? blobData.data : blobData;
+  const isNumericFd = typeof bodyPayload === 'number' && bodyPayload >= 0;
   const fdPath = typeof bodyPayload === 'string' ? bodyPayload.trim() : null;
-  if (!fdPath || (!fdPath.startsWith('/proc/') && !fdPath.startsWith('/dev/'))) {
+  if (!isNumericFd && (!fdPath || (!fdPath.startsWith('/proc/') && !fdPath.startsWith('/dev/')))) {
     return false;
   }
   const headers = {
@@ -98,12 +99,19 @@ function tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId) {
     'X-XBlob-Type': blobData.xblobType || 'ReadableStream',
     'X-Blob-Id': hexBlobId,
     'Accept-Encoding': 'identity, base64, fd-rights',
+    'Cache-Control': 'no-cache, no-store, must-revalidate, no-transform',
     'Matchbox-Bridge': '1.0',
   };
   if (blobData.name) headers['Content-Disposition'] = `inline; filename="${blobData.name}"`;
   if (!isStream && blobData.size !== undefined) headers['Content-Length'] = blobData.size;
   res.writeHead(200, headers);
-  fs.createReadStream(fdPath).pipe(res);
+  const readStream = isNumericFd
+    ? fs.createReadStream(null, { fd: bodyPayload, autoClose: true })
+    : fs.createReadStream(fdPath);
+  res.on('close', () => {
+    try { readStream.destroy(); } catch (_) {}
+  });
+  readStream.pipe(res);
   return true;
 }
 
@@ -127,7 +135,12 @@ function convertBlobPayloadToBuffer(blobData) {
 function sendRawHttpBlob(req, res, blobData, hexBlobId) {
   const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'application/octet-stream');
   const dataType = blobData._dataType || (mimeType.includes('application/json') ? 'json' : 'binary');
-  const isStream = blobData.xblobType === 'ReadableStream' || blobData.xblobType === 'MediaStream' || req.headers['x-xblob-type'] === 'ReadableStream';
+  const isStream =
+    blobData.xblobType === 'BufferedReadableStream' ||
+    blobData.xblobType === 'ReadableStream' ||
+    blobData.xblobType === 'MediaStream' ||
+    req.headers['x-xblob-type'] === 'BufferedReadableStream' ||
+    req.headers['x-xblob-type'] === 'ReadableStream';
 
   if (tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId)) {
     return;
@@ -188,12 +201,22 @@ module.exports = ({ X, clientWin }) => {
   };
 
   const routeXBlobRead = async (req, res) => {
-    const targetBlob = Number(req.body?.blobId || req.body?.blob || req.params?.blobId);
+    const rawId = req.body?.blobId || req.body?.blob || req.params?.blobId;
+    const targetBlob = parseBlobId(rawId);
     const hexBlobId = toHexBlobId(targetBlob);
     const userAgent = req.headers['user-agent'] || 'unknown';
     logger.info(`GET/POST /xblob/XBlobRead blob=${targetBlob} from User-Agent "${userAgent}"`);
     try {
-      const blobData = await xintent.XBlobRead(X, routerWin(), targetBlob);
+      const blobData = await xintent.XBlobRead(
+        X,
+        routerWin(),
+        targetBlob,
+        null,
+        null,
+        resolveSenderWin(req),
+        'cool-http-bridge',
+        { acceptReadableStream: true }
+      );
       res.setHeader('Matchbox-Bridge', '1.0');
       res.setHeader('X-Blob-Id', hexBlobId);
       res.setHeader('Accept-Encoding', 'identity, base64, fd-rights');

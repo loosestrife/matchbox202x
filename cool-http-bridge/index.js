@@ -78,20 +78,22 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes, { X, root }) {
   app.post(['/xblob', '/xblob/XBlobCreate', '/blobs'], xblobRoutes.routeXBlobCreate);
   app.put(['/xblob', '/xblob/XBlobCreate', '/blobs'], xblobRoutes.routeXBlobCreate);
   app.post('/xblob/XBlobRead', xblobRoutes.routeXBlobRead);
-  app.get('/xblob/:blobId', xblobRoutes.routeXBlobRead);
-  app.get('/blobs/:blobId', xblobRoutes.routeXBlobRead);
   app.post('/xblob/XBlobTransfer', xblobRoutes.routeXBlobTransfer);
   app.post('/xblob/XBlobGrant', xblobRoutes.routeXBlobGrant);
   app.post('/xblob/XBlobUnlink', xblobRoutes.routeXBlobUnlink);
   app.delete('/xblob/XBlobUnlink', xblobRoutes.routeXBlobUnlink);
-  app.delete('/blobs/:blobId', xblobRoutes.routeXBlobUnlink);
-  app.delete('/xblob/:blobId', xblobRoutes.routeXBlobUnlink);
   app.delete('/xblob', xblobRoutes.routeXBlobUnlink);
   app.post('/xblob/XBlobSoftLink', xblobRoutes.routeXBlobSoftLink);
   app.post('/xblob/XBlobSoftUnlink', xblobRoutes.routeXBlobSoftUnlink);
   app.post('/xblob/XBlobBroadcast', xblobRoutes.routeXBlobBroadcast);
   app.post('/blobs/:blobId/broadcast', xblobRoutes.routeXBlobBroadcast);
   app.post('/xblob/:blobId/broadcast', xblobRoutes.routeXBlobBroadcast);
+  app.put(['/xblob/:blobId', '/blobs/:blobId'], xblobRoutes.routeXBlobCreate);
+  app.post(['/xblob/XBlobWrite', '/xblob/:blobId', '/blobs/:blobId'], xblobRoutes.routeXBlobCreate);
+  app.get('/xblob/:blobId', xblobRoutes.routeXBlobRead);
+  app.get('/blobs/:blobId', xblobRoutes.routeXBlobRead);
+  app.delete('/blobs/:blobId', xblobRoutes.routeXBlobUnlink);
+  app.delete('/xblob/:blobId', xblobRoutes.routeXBlobUnlink);
 
   app.post('/api/card-session', async (req, res) => {
     const appId = req.body?.appId || req.body?.app || 'xhtml-card';

@@ -1,4 +1,18 @@
 const fs = require('fs');
+const { dlopen, FFIType, ptr } = require('bun:ffi');
+
+const libc = dlopen('libc.so.6', {
+  pipe: { args: [FFIType.ptr], returns: FFIType.i32 },
+});
+
+function createOsPipe() {
+  const fds = new Int32Array(2);
+  const rc = libc.symbols.pipe(ptr(fds));
+  if (rc !== 0) {
+    throw new Error(`pipe(2) failed with return code ${rc}`);
+  }
+  return { readFd: fds[0], writeFd: fds[1] };
+}
 
 function parseIncomingPutBody(body, xintent) {
   if (!body) return {};
@@ -63,6 +77,7 @@ function isFileBackedBlob(blobData, isFilePath, isFdRights) {
     isFdRights ||
     blobData._dataType === 'file-path' ||
     blobData._dataType === 'fd-rights' ||
+    blobData.xblobType === 'BufferedReadableStream' ||
     blobData.xblobType === 'ReadableStream'
   );
 }
@@ -85,7 +100,7 @@ function notifyStreamClosedOnBus(X, lighterWin, xintent, blobId, finalSize, toHe
     });
 }
 
-function attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlobId, logger, X, lighterWin, xintent) {
+function attachBufferedReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlobId, logger, X, lighterWin, xintent) {
   fs.mkdirSync('/tmp/xintent_blobs', { recursive: true });
   const hexId = toHexBlobId(blobId);
   const storagePath = `/tmp/xintent_blobs/stream_${hexId}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
@@ -101,7 +116,7 @@ function attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlob
   blobData._dataType = 'fd-rights';
   blobData.contentEncoding = 'fd-rights';
   blobData.size = 0;
-  blobData.xblobType = 'ReadableStream';
+  blobData.xblobType = 'BufferedReadableStream';
   blobData.streamCompleted = false;
 
   const streamCompletedPromise = new Promise((resolve) => {
@@ -116,7 +131,7 @@ function attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlob
       blobData.xblobType = 'Blob';
       blobData.size = finalSize;
       blobData.streamCompleted = true;
-      logger.info(`[xblob-host] StreamCompleted for XBlob ${hexId}: promoted ReadableStream -> Blob (size: ${finalSize} bytes, storage: '${storagePath}')`);
+      logger.info(`[xblob-host] StreamCompleted for XBlob ${hexId}: promoted BufferedReadableStream -> Blob (size: ${finalSize} bytes, storage: '${storagePath}')`);
       notifyStreamClosedOnBus(X, lighterWin, xintent, blobId, finalSize, toHexBlobId, logger);
       resolve(blobData);
     };
@@ -124,11 +139,11 @@ function attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlob
     writeStream.on('finish', onStreamCompleted);
     writeStream.on('close', onStreamCompleted);
     writeStream.on('error', (err) => {
-      logger.warn(`[xblob-host] Write stream error for ReadableStream ${hexId}: ${err.message}`);
+      logger.warn(`[xblob-host] Write stream error for BufferedReadableStream ${hexId}: ${err.message}`);
       onStreamCompleted();
     });
     readStream.on('error', (err) => {
-      logger.warn(`[xblob-host] Source pipe read error for ReadableStream ${hexId}: ${err.message}`);
+      logger.warn(`[xblob-host] Source pipe read error for BufferedReadableStream ${hexId}: ${err.message}`);
       try { writeStream.end(); } catch (_) {}
     });
   });
@@ -141,7 +156,19 @@ function attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlob
   });
 
   readStream.pipe(writeStream);
-  logger.info(`[xblob-host] Pooling ReadableStream source '${srcPath}' (pipe FD ${openedFd}) -> storage FD ${storageReadFd} ('${storagePath}') for XBlob ${hexId}`);
+  logger.info(`[xblob-host] Pooling BufferedReadableStream source '${srcPath}' (pipe FD ${openedFd}) -> storage FD ${storageReadFd} ('${storagePath}') for XBlob ${hexId}`);
+}
+
+function attachReadableStreamPipe(blobData, blobId, srcPath, openedFd, toHexBlobId, logger) {
+  const hexId = toHexBlobId(blobId);
+  blobData.openedFd = openedFd;
+  blobData.data = null;
+  blobData._dataType = 'fd-rights';
+  blobData.contentEncoding = 'fd-rights';
+  blobData.size = 0;
+  blobData.xblobType = blobData.xblobType === 'MediaStream' ? 'MediaStream' : 'ReadableStream';
+  blobData.isPipe = true;
+  logger.info(`[xblob-host] Attached ${blobData.xblobType} pipe source '${srcPath}' (pipe FD ${openedFd}) for XBlob ${hexId}`);
 }
 
 function attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, toHexBlobId, logger, X = null, lighterWin = 0, xintent = null) {
@@ -154,10 +181,18 @@ function attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, to
   try {
     const openedFd = typeof blobData.data === 'number' ? blobData.data : fs.openSync(srcPath, 'r');
     const stats = fs.fstatSync(openedFd);
-    const isStreamSource = blobData.xblobType === 'ReadableStream' || stats.isFIFO() || stats.isSocket();
+    const isPipeType = blobData.xblobType === 'ReadableStream' || blobData.xblobType === 'MediaStream';
+    const isBufferedStreamSource =
+      blobData.xblobType === 'BufferedReadableStream' ||
+      (!isPipeType && (stats.isFIFO() || stats.isSocket()));
 
-    if (isStreamSource) {
-      attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlobId, logger, X, lighterWin, xintent);
+    if (isBufferedStreamSource) {
+      attachBufferedReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlobId, logger, X, lighterWin, xintent);
+      return;
+    }
+
+    if (isPipeType) {
+      attachReadableStreamPipe(blobData, blobId, srcPath, openedFd, toHexBlobId, logger);
       return;
     }
 
@@ -193,6 +228,47 @@ function buildPutResponseHeaders(hexBlobId, blobData, isFdRights, isFilePath) {
   return resHeaders;
 }
 
+function attachHostManagedPipeIfReadableStream(blobData, blobId, toHexBlobId, logger) {
+  if (blobData.xblobType !== 'ReadableStream' || blobData.openedFd !== undefined) return;
+  const { readFd, writeFd } = createOsPipe();
+  if (blobData.data !== undefined && blobData.data !== null && blobData.data !== '') {
+    const initialBuf = Buffer.isBuffer(blobData.data)
+      ? blobData.data
+      : Buffer.from(String(blobData.data), blobData._dataType === 'base64' ? 'base64' : 'utf8');
+    if (initialBuf.length > 0) {
+      try { fs.writeSync(writeFd, initialBuf); } catch (_) {}
+    }
+  }
+  blobData.openedFd = readFd;
+  blobData.pipeWriteFd = writeFd;
+  blobData.data = null;
+  blobData._dataType = 'fd-rights';
+  blobData.contentEncoding = 'fd-rights';
+  blobData.size = 0;
+  blobData.isPipe = true;
+  logger.info(`[xblob-host] Allocated host-managed ReadableStream pipe (read FD ${readFd}, write FD ${writeFd}) for XBlob ${toHexBlobId(blobId)}`);
+}
+
+function appendToHostManagedPipe(existingBlob, incomingData, blobId, toHexBlobId, logger) {
+  if (!existingBlob || existingBlob.pipeWriteFd === undefined || existingBlob.pipeWriteFd === null) {
+    return false;
+  }
+  if (incomingData.data !== undefined && incomingData.data !== null && incomingData.data !== '') {
+    const chunkBuf = Buffer.isBuffer(incomingData.data)
+      ? incomingData.data
+      : Buffer.from(String(incomingData.data), incomingData._dataType === 'base64' ? 'base64' : 'utf8');
+    if (chunkBuf.length > 0) {
+      fs.writeSync(existingBlob.pipeWriteFd, chunkBuf);
+    }
+  }
+  if (incomingData.eof || incomingData.close) {
+    try { fs.closeSync(existingBlob.pipeWriteFd); } catch (_) {}
+    existingBlob.pipeWriteFd = null;
+    logger.info(`[xblob-host] Closed write-end of host-managed ReadableStream pipe for XBlob ${toHexBlobId(blobId)}`);
+  }
+  return true;
+}
+
 async function processPutPayload(req, res, body, ctx) {
   const { pathParts, hostBlobs, parseBlobId, toHexBlobId, allocateHostBlobId, xintent, X, lighterWin, logger } = ctx;
   const blobData = parseIncomingPutBody(body, xintent);
@@ -213,6 +289,16 @@ async function processPutPayload(req, res, body, ctx) {
     logger.info(`[SECURITY CHECK] Verified socket UNIX peer credential against _NET_WM_PID of X-Sender-Win ${toHexBlobId(requestSenderWin)}: MATCH`);
   }
 
+  if (targetBlob) {
+    const existingBlob = hostBlobs.get(targetBlob) || hostBlobs.get(toHexBlobId(targetBlob)) || hostBlobs.get(String(targetBlob));
+    if (appendToHostManagedPipe(existingBlob, blobData, targetBlob, toHexBlobId, logger)) {
+      const hexTarget = toHexBlobId(targetBlob);
+      const resHeaders = buildPutResponseHeaders(hexTarget, existingBlob, true, false);
+      res.writeHead(200, resHeaders);
+      return res.end(JSON.stringify({ status: 'ok', blobId: hexTarget, blob: hexTarget, contentEncoding: 'fd-rights' }));
+    }
+  }
+
   const blobId = targetBlob || (await allocateHostBlobId(blobData, requestSenderWin));
   if (req.socket?.receivedFd !== undefined && req.socket?.receivedFd !== null) {
     blobData.data = req.socket.receivedFd;
@@ -220,6 +306,7 @@ async function processPutPayload(req, res, body, ctx) {
   }
 
   attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, toHexBlobId, logger, X, lighterWin, xintent);
+  attachHostManagedPipeIfReadableStream(blobData, blobId, toHexBlobId, logger);
 
   hostBlobs.set(blobId, blobData);
   if (typeof blobId === 'number') {

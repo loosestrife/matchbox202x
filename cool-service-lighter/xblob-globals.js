@@ -24,7 +24,7 @@ const softLinks = {};
  *   openedFd?: number,               // Open OS file descriptor integer held by xblob-host
  *   data: string | Buffer | object | null, // Payload data (null when openedFd is present)
  *   type?: string,                   // MIME type, e.g. 'audio/wav', 'text/plain', 'application/json'
- *   xblobType?: string,              // XBlob category e.g. 'Blob', 'File', 'ReadableStream', 'MediaStream'
+ *   xblobType?: string,              // XBlob category e.g. 'Blob', 'File', 'BufferedReadableStream', 'ReadableStream', 'MediaStream'
  *   _dataType?: string,              // Internal data representation: 'file-path', 'fd-rights', 'text', 'binary', 'base64', 'json'
  *   contentEncoding?: string,        // HTTP Content-Encoding: 'file-path', 'fd-rights', 'identity', 'base64'
  *   name?: string,                   // File name for file attachments e.g. 'speech.wav'
@@ -108,6 +108,9 @@ const xblobDestructor = async (message, X = null, lighterWin = 0) => {
       try {
         await blobData.streamCompletedPromise;
       } catch (_) {}
+    }
+    if (blobData.pipeWriteFd !== undefined && blobData.pipeWriteFd !== null) {
+      try { fs.closeSync(blobData.pipeWriteFd); } catch (_) {}
     }
     if (blobData.openedFd !== undefined && blobData.openedFd !== null) {
       try { fs.closeSync(blobData.openedFd); } catch (_) {}

@@ -1,0 +1,21 @@
+[app]
+id = "cool-terminal"
+version = "0.1.0"
+name = "Cool Terminal"
+description = "XIntent TTY / Terminal Stream Service & 80x24 Green Phosphor Card"
+
+[app.main]
+type = "html"
+card = "index"
+
+[[cards]]
+id = "index"
+path = "index.html"
+title = "Cool Terminal (80x24)"
+
+[intents."fs.Open"]
+invocation = "html"
+card = "index"
+
+[intents."term.GetOutStream"]
+exec = "bun run index.js"

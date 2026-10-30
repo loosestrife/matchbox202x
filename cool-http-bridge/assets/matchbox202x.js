@@ -820,6 +820,20 @@
       return true;
     },
 
+    loadCard: async function(cardApp, cardId = 'index', targetApp = 'cool-xhtml-runtime', options = {}) {
+      const loadPayload = {
+        intent: 'xhtml.LoadCard',
+        app: targetApp,
+        cardApp: cardApp,
+        cardId: cardId,
+        controlWord: 1,
+        ...options,
+      };
+      const res = await window.xintent.intent('xhtml.LoadCard', loadPayload, targetApp);
+      const parts = typeof res.parseMultipart === 'function' ? await res.parseMultipart() : [];
+      return parts[0]?.json || { status: res.ok ? 'ok' : 'error', cardApp, cardId };
+    },
+
     liveMigrate: async function(targetApp = 'user-laptop:cool-xhtml-runtime', options = {}) {
       const snapshot = await this.serializeState();
       const created = await window.xblob.XBlobCreate({
@@ -860,7 +874,33 @@
         const cardWinParam = params.get('cardWin');
         if (cardWinParam) this.cardWin = cardWinParam;
         const migrateBlob = params.get('hydrateBlob') || params.get('migrateBlob') || params.get('migrate');
-        if (!migrateBlob) return false;
+        if (!migrateBlob) {
+          if (this.cardWin) {
+            setTimeout(async () => {
+              try {
+                await fetch('/api/card-hydrated', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'X-Card-Window': String(this.cardWin),
+                  },
+                  body: JSON.stringify({
+                    cardWin: this.cardWin,
+                    cardApp: this.cardApp,
+                    cardId: this.cardId,
+                    loaded: true,
+                    localStorage: snapshotWebStorage(window.localStorage),
+                    domInputs: snapshotDomInputs(),
+                    heldBlobs: Array.from(this.heldBlobs),
+                    softLinkedBlobs: Array.from(this.softLinkedBlobs),
+                    openChannels: Array.from(this.openChannels.keys()),
+                  }),
+                });
+              } catch (_) {}
+            }, 600);
+          }
+          return false;
+        }
         const readRes = await window.xblob.XBlobRead(migrateBlob);
         let snapshot = readRes?.blob?.data ?? readRes?.data ?? readRes;
         if (typeof snapshot === 'string') {

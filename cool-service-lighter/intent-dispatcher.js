@@ -23,7 +23,13 @@ function handleSysLaunch(xintentIntent, { packageRegistry, trackChild }) {
   logger.setContext({ package: pakName, intendedIntent });
   logger.info(`Got request to load ${pakName} for ${intendedIntent}`, intent);
 
-  const proc = spawn(intent.exec, { shell: true, cwd: pkg._path || process.cwd(), stdio: 'inherit' });
+  const proc = spawn(intent.exec, {
+    shell: true,
+    cwd: pkg._path || process.cwd(),
+    stdio: 'inherit',
+    detached: true,
+  });
+  proc.detached = true;
   trackChild(proc);
   proc.on('error', (err) => {
     logger.error('Failed to launch service:', err);
@@ -41,6 +47,12 @@ const INTENT_DISPATCH_TABLE = (() => {
     'sys.Launch': (frame, ctx) => handleSysLaunch(frame, ctx),
     'fs.PickFilePath': (frame, ctx) => ctx.pickFiles.pickFilePath(frame),
     'fs.PickFile': (frame, ctx) => ctx.pickFiles.pickFile(frame),
+    'xhtml.LoadCardResponse': (frame, ctx) => {
+      logger.info('Received xhtml.LoadCardResponse:', frame.payload);
+      if (frame.payloadBlob && ctx.X && xintent.routerWin) {
+        xintent.XBlobUnlink(ctx.X, xintent.routerWin, ctx.lighterWin, frame.payloadBlob);
+      }
+    },
   };
   registerAliases(
     table,

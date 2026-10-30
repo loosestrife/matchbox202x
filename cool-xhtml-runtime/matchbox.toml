@@ -3,6 +3,18 @@ id = "cool-xhtml-runtime"
 name = "Cool XHTML Runtime"
 description = "Desktop XHTML Card Runtime & Live Migration Receiver"
 
+[app.main]
+type = "html"
+card = "index"
+
+[[cards]]
+id = "index"
+path = "index.html"
+title = "Cool XHTML Runtime — Web Card Launcher"
+
+[intents."xhtml.LoadCard"]
+exec = "bun run index.js"
+
 [intents."xhtml.LiveMigrate"]
 exec = "bun run index.js"
 

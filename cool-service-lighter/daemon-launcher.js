@@ -118,10 +118,31 @@ async function ensureXdgPortalBridge() {
   }
 }
 
+async function launchInitialXhtmlCard(X, routerWin, lighterWin) {
+  if (!routerWin || !lighterWin) return;
+  try {
+    logger.info('[cool-service-lighter] Sending xhtml.LoadCard for cool-xhtml-runtime main card...');
+    await xintent.sendXIntentIntentV0(X, routerWin, {
+      senderWin: lighterWin,
+      txId: 0,
+      controlWord: 3, // SYN | FIN
+      payload: {
+        intent: 'xhtml.LoadCard',
+        app: 'cool-xhtml-runtime',
+        cardApp: 'cool-xhtml-runtime',
+        cardId: 'index',
+      },
+    });
+  } catch (err) {
+    logger.error('[cool-service-lighter] Failed to send initial xhtml.LoadCard:', err.message);
+  }
+}
+
 module.exports = {
   checkHttpBridge,
   ensureXBusDaemon,
   ensureXIntentRouter,
   ensureHttpBridge,
   ensureXdgPortalBridge,
+  launchInitialXhtmlCard,
 };

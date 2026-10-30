@@ -39,15 +39,20 @@ function findPackageByAppName(appName) {
 
 function resolveAppSubPath(pkg, appName, targetPath) {
   const cards = pkg.cards || [];
+  const mainCardId = pkg.app.main?.card || cards[0]?.id;
   if (!targetPath) {
-    const cardId = pkg.app.main?.card || cards[0]?.id;
-    if (!cardId) throw new HttpError(400, `no main card configured for ${appName}`);
-    const card = cards.find((c) => c.id == cardId);
-    if (!card) throw new HttpError(404, `card ${cardId} not found in package ${appName}`);
+    if (!mainCardId) throw new HttpError(400, `no main card configured for ${appName}`);
+    const card = cards.find((c) => c.id == mainCardId);
+    if (!card) throw new HttpError(404, `card ${mainCardId} not found in package ${appName}`);
     return card.path;
   }
   const matchedCard = cards.find((c) => c.id == targetPath);
-  return matchedCard ? matchedCard.path : targetPath;
+  if (matchedCard) return matchedCard.path;
+  if ((targetPath === 'index' || targetPath === 'main') && mainCardId) {
+    const fallbackCard = cards.find((c) => c.id == mainCardId);
+    if (fallbackCard) return fallbackCard.path;
+  }
+  return targetPath;
 }
 
 module.exports.routeApp = (req, res) => {
@@ -81,14 +86,22 @@ module.exports.routeApp = (req, res) => {
   throw new HttpError(404, `File or card '${targetPath}' not found in package ${appName}`);
 };
 
-module.exports.getApps = () => Object.fromEntries(
-  Object.entries(packageRegistry).map(([appId, pkg]) => [
-    appId,
-    {
-      name: pkg.app.name || appId,
-      description: pkg.app.description || '',
-      mainCard: pkg.app.main?.card || (pkg.cards && pkg.cards[0]?.id) || null,
-      cards: (pkg.cards || []).map((card) => card.id),
-    },
-  ])
-);
+module.exports.getApps = () => {
+  const seen = new Set();
+  const entries = [];
+  for (const [, pkg] of Object.entries(packageRegistry)) {
+    const appId = pkg?.app?.id;
+    if (!appId || seen.has(appId)) continue;
+    seen.add(appId);
+    entries.push([
+      appId,
+      {
+        name: pkg.app.name || appId,
+        description: pkg.app.description || '',
+        mainCard: pkg.app.main?.card || (pkg.cards && pkg.cards[0]?.id) || null,
+        cards: (pkg.cards || []).map((card) => card.id),
+      },
+    ]);
+  }
+  return Object.fromEntries(entries);
+};

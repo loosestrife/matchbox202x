@@ -95,18 +95,19 @@ An XBlob is a server record like a window, it has a list of properties.  The imp
 
 |  Atom      |  Type   |  Description
 ---
-| XBlobType | XA_ATOM |  Blob, File, ReadableStream, MediaStream, Directory
+| XBlobType | XA_ATOM |  Blob, File, BufferedReadableStream, ReadableStream, MediaStream, Directory
 | type      | XA_ATOM |  video/x-msvideo (codecs=mpeg4,xvid,mp3)
 | name      | STRING  |  a Blob with a name is a File
-| size      | CARD64  |  a ReadableStream gets a size when it becomes a Blob
+| size      | CARD64  |  a BufferedReadableStream gets a size when it becomes a Blob
 ---
 | links     | list    |  X clients with a link
 | soft links| list    |  A soft link recieves XBlobDestructor once all the hard links are unlinked
 | hosts     | list    |  A list of hosts the blob is available on
 
-* A ReadableStream starts with a pool and continues with a stream until its closed and becomes a Blob.  Concretely, its a a fd that one holder has open for appending appending.
+* A BufferedReadableStream starts with a pool (buffered from 0) and continues with a stream until its closed and becomes a Blob.  Concretely, its a fd that one holder has open for appending.
+* A ReadableStream is an actual WHATWG ReadableStream defined as a pipe (not buffered from 0, and does not promote to a Blob).
 * A MediaStream is a pipe, no pool at the beginning.
-* The blob host is responsible for giving the reader who does a GET on a ReadableStream and asks for a fd an fd.  This makes the blob host responsible for turning a pipe it's given as a ReadableStream into a storage-backed fd.  The blob host does an inotify to find out when the producer finishes and closes the stream for writing, at which point the blob host promotes the ReadableStream to a Blob, giving it a size property, and sends XBlobStreamClosed to every process with a link.  For a MediaStram, if the blob host gets a fd instead of a pipe, it will nevertheless only transmit new data through a pipe to other processes.  Even though processes can tell when a pipe closes, the XBlobHost will send a courtesy XBlobStreamClosed.
+* The blob host is responsible for giving the reader who does a GET on a BufferedReadableStream and asks for a fd an fd.  This makes the blob host responsible for turning a pipe it's given as a BufferedReadableStream into a storage-backed fd buffered from 0.  The blob host does an inotify to find out when the producer finishes and closes the stream for writing, at which point the blob host promotes the BufferedReadableStream to a Blob, giving it a size property, and sends XBlobStreamClosed to every process with a link.  For a ReadableStream, it is defined directly as a pipe without buffering from 0; readers consume bytes from the pipe and the XBlobHost sends a courtesy XBlobStreamClosed when the pipe closes.  For a MediaStream, if the blob host gets a fd instead of a pipe, it will nevertheless only transmit new data through a pipe to other processes.  Even though processes can tell when a pipe closes, the XBlobHost will send a courtesy XBlobStreamClosed.
 * All blobs and streams are of course transmissible via http
 * If there are two blob hosts on different computers in the same X session connected by an `ssh -X`, they have to route their data though the X bus master blob host.  The X bus master blob host must modify the ssh connection to include a port forward, then do an http connection to the remote blob host, after which they can transmit blobs, after which the blob host on user-server can request a blob from the blob host on user-laptop which can request it from the blob host on user-desktop, because theres no direct tunnel from user-server to user-desktop.
 

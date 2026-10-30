@@ -22,6 +22,18 @@ id = "cool-xhtml-runtime"
 name = "Cool XHTML Runtime"
 description = "Desktop XHTML Card Runtime & Live Migration Receiver"
 
+[app.main]
+type = "html"
+card = "index"
+
+[[cards]]
+id = "index"
+path = "index.html"
+title = "Cool XHTML Runtime — Web Card Launcher"
+
+[intents."xhtml.LoadCard"]
+invocation = "X11"
+
 [intents."xhtml.LiveMigrate"]
 invocation = "X11"
 
@@ -30,6 +42,35 @@ invocation = "X11"
 `;
 
 const activeCards = new Map(); // widHex -> cardSession
+const tempProfileDirs = new Set();
+
+function cleanupSpawnedBrowsers() {
+  for (const session of activeCards.values()) {
+    const proc = session.browserProc;
+    if (proc && proc.pid) {
+      try {
+        process.kill(-proc.pid, 'SIGTERM');
+      } catch (_) {
+        try { proc.kill('SIGTERM'); } catch (_) {}
+      }
+    }
+  }
+  for (const dir of tempProfileDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+  tempProfileDirs.clear();
+}
+
+process.on('SIGINT', () => {
+  cleanupSpawnedBrowsers();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  cleanupSpawnedBrowsers();
+  process.exit(0);
+});
 
 function parseWindowId(raw) {
   if (!raw) return 0;
@@ -44,7 +85,7 @@ function parseWindowId(raw) {
   return 0;
 }
 
-function allocateBridgeCardSession(appId, cardId) {
+function allocateBridgeCardSessionOnce(appId, cardId) {
   return new Promise((resolve) => {
     const bodyStr = JSON.stringify({ appId, cardId });
     const req = http.request(
@@ -55,7 +96,7 @@ function allocateBridgeCardSession(appId, cardId) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(bodyStr),
         },
-        timeout: 3000,
+        timeout: 2000,
       },
       (res) => {
         const chunks = [];
@@ -79,6 +120,16 @@ function allocateBridgeCardSession(appId, cardId) {
     req.write(bodyStr);
     req.end();
   });
+}
+
+async function allocateBridgeCardSession(appId, cardId, maxWaitMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const session = await allocateBridgeCardSessionOnce(appId, cardId);
+    if (session && session.wid) return session;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return null;
 }
 
 function connectCardRuntimeWebSocket(cardWinHex, appId, cardId, reattachTxIds) {
@@ -114,6 +165,22 @@ function connectCardRuntimeWebSocket(cardWinHex, appId, cardId, reattachTxIds) {
   });
 }
 
+function attachCardSessionWsListener(ws, cardSession, newCardWinHex) {
+  if (!ws) return;
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString('utf8'));
+      if (msg.event === 'XBLOB_BROADCAST_V0' || msg.event === 'XBLOB_STREAM_CLOSED_V0') {
+        cardSession.receivedBlobEvents.push(msg);
+        logger.info(`Card ${newCardWinHex} received ${msg.event} for blob ${msg.blobId}`);
+      } else {
+        cardSession.receivedFrames.push(msg);
+        logger.info(`Card ${newCardWinHex} received XChannel frame on txId=${msg.txId || msg.channel}: ${msg.event || msg.intent || 'frame'}`);
+      }
+    } catch (_) {}
+  });
+}
+
 function launchCardBrowserWindow(cardUrl, newCardWinHex) {
   const customCmd = process.env.XHTML_BROWSER_CMD;
   if (customCmd === 'none' || customCmd === 'false' || customCmd === '0') {
@@ -140,6 +207,7 @@ function launchCardBrowserWindow(cardUrl, newCardWinHex) {
     }
 
     const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), `xhtml-ff-${newCardWinHex}-`));
+    tempProfileDirs.add(profileDir);
     fs.writeFileSync(
       path.join(profileDir, 'user.js'),
       [
@@ -167,7 +235,7 @@ function launchCardBrowserWindow(cardUrl, newCardWinHex) {
       stdio: 'ignore',
     });
     proc.unref();
-    logger.info(`Launched Firefox (${args.join(' ')}) for migrated card ${newCardWinHex}`);
+    logger.info(`Launched Firefox (${args.join(' ')}) for card ${newCardWinHex}`);
     return proc;
   } catch (err) {
     logger.warn(`Failed to launch browser for ${cardUrl}:`, err.message);
@@ -196,6 +264,75 @@ function extractSnapshotJson(blobResult) {
     return data;
   }
   return {};
+}
+
+function resolveTargetCardFromPayload(payload = {}) {
+  const explicitApp = payload.cardApp || payload.appId || payload.package;
+  const rawAppField = payload.app;
+  const fallbackApp =
+    rawAppField &&
+    rawAppField !== 'cool-xhtml-runtime' &&
+    !String(rawAppField).endsWith(':cool-xhtml-runtime')
+      ? rawAppField
+      : 'cool-xhtml-runtime';
+  const cardApp = explicitApp || fallbackApp;
+  const cardId = payload.cardId || payload.card || 'index';
+  return { cardApp, cardId };
+}
+
+async function handleLoadCardIntent(X, root, runtimeWin, frame) {
+  const { senderWin, payload, channel } = frame;
+  const { cardApp, cardId } = resolveTargetCardFromPayload(payload);
+
+  logger.info(
+    `Received ${payload?.intent || 'xhtml.LoadCard'} for ${cardApp}/${cardId} from ${xintent.widString(senderWin)} (channel=${channel})`
+  );
+
+  const bridgeSession = await allocateBridgeCardSession(cardApp, cardId);
+  let newCardWin = bridgeSession?.wid || 0;
+  if (!newCardWin) {
+    newCardWin = await xintent.createClientWindow(X, root, `${cardApp}:${cardId}`);
+  }
+  const newCardWinHex = xintent.widString(newCardWin);
+
+  const ws = await connectCardRuntimeWebSocket(newCardWinHex, cardApp, cardId, []);
+  const cardSession = {
+    cardWin: newCardWin,
+    cardWinHex: newCardWinHex,
+    cardApp,
+    cardId,
+    ws,
+    receivedFrames: [],
+    receivedBlobEvents: [],
+    loadedAt: Date.now(),
+  };
+  activeCards.set(newCardWinHex, cardSession);
+  attachCardSessionWsListener(ws, cardSession, newCardWinHex);
+
+  const extraQuery = payload?.query && typeof payload.query === 'object'
+    ? '&' + new URLSearchParams(payload.query).toString()
+    : '';
+  const cardUrl = `${HTTP_BASE_URL}/apps/${encodeURIComponent(cardApp)}/${encodeURIComponent(cardId)}?cardWin=${encodeURIComponent(newCardWinHex)}&cardId=${encodeURIComponent(cardId)}${extraQuery}`;
+  cardSession.browserProc = launchCardBrowserWindow(cardUrl, newCardWinHex);
+
+  if (channel) {
+    await xintent.sendXIntentEventV0(X, xintent.routerWin, {
+      senderWin: runtimeWin,
+      channel,
+      controlWord: 2, // FIN
+      payload: {
+        event: 'xhtml.LoadCardResponse',
+        disposition: 'final',
+        status: 'ok',
+        cardApp,
+        cardId,
+        cardWin: newCardWinHex,
+        cardUrl,
+      },
+    });
+  }
+
+  logger.info(`Completed xhtml.LoadCard for ${cardApp}/${cardId} -> cardWin=${newCardWinHex}`);
 }
 
 async function handleLiveMigrateIntent(X, root, runtimeWin, frame) {
@@ -249,21 +386,7 @@ async function handleLiveMigrateIntent(X, root, runtimeWin, frame) {
     migratedAt: Date.now(),
   };
   activeCards.set(newCardWinHex, cardSession);
-
-  if (ws) {
-    ws.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString('utf8'));
-        if (msg.event === 'XBLOB_BROADCAST_V0' || msg.event === 'XBLOB_STREAM_CLOSED_V0') {
-          cardSession.receivedBlobEvents.push(msg);
-          logger.info(`Card ${newCardWinHex} received ${msg.event} for blob ${msg.blobId}`);
-        } else {
-          cardSession.receivedFrames.push(msg);
-          logger.info(`Card ${newCardWinHex} received XChannel frame on txId=${msg.txId || msg.channel}: ${msg.event || msg.intent || 'frame'}`);
-        }
-      } catch (_) {}
-    });
-  }
+  attachCardSessionWsListener(ws, cardSession, newCardWinHex);
 
   // 4. Atomically migrate XBlob grants/soft-links & open XChannels from oldCardWin to newCardWin and uncork
   if (oldCardWin && newCardWin && oldCardWin !== newCardWin) {
@@ -323,6 +446,22 @@ async function startRuntime() {
 
   const runtimeWin = await xintent.createClientWindow(X, root, 'cool-xhtml-runtime');
 
+  X.on('event', async (ev) => {
+    if (ev.type === 33 && ev.message_type === xintent.atoms.XINTENT_INTENT_V0) {
+      try {
+        const frame = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
+        const intentName = frame.payload?.intent || frame.payload?.action;
+        if (intentName === 'xhtml.LiveMigrate') {
+          await handleLiveMigrateIntent(X, root, runtimeWin, frame);
+        } else if (intentName === 'xhtml.LoadCard' || intentName === 'fs.Open') {
+          await handleLoadCardIntent(X, root, runtimeWin, frame);
+        }
+      } catch (err) {
+        logger.error('Error handling intent in cool-xhtml-runtime:', err);
+      }
+    }
+  });
+
   X.ChangeProperty(
     0,
     runtimeWin,
@@ -333,20 +472,6 @@ async function startRuntime() {
   );
 
   logger.info(`cool-xhtml-runtime online on window ${xintent.widString(runtimeWin)} (router: ${xintent.widString(xintent.routerWin)})`);
-
-  X.on('event', async (ev) => {
-    if (ev.type === 33 && ev.message_type === xintent.atoms.XINTENT_INTENT_V0) {
-      try {
-        const frame = await xintent.parseXIntentIntentV0(X, xintent.routerWin, ev);
-        const intentName = frame.payload?.intent || frame.payload?.action;
-        if (intentName === 'xhtml.LiveMigrate') {
-          await handleLiveMigrateIntent(X, root, runtimeWin, frame);
-        }
-      } catch (err) {
-        logger.error('Error handling intent in cool-xhtml-runtime:', err);
-      }
-    }
-  });
 }
 
 startRuntime().catch((err) => {

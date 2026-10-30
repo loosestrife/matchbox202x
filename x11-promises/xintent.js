@@ -426,7 +426,8 @@ function hydrateBlobFileData(blobData) {
 }
 
 function applyReceiveFdOption(blobData, receiveFd, acceptReadableStream = false) {
-  if (!receiveFd && !acceptReadableStream && blobData.xblobType !== "ReadableStream") {
+  const isStreamType = blobData.xblobType === "BufferedReadableStream" || blobData.xblobType === "ReadableStream";
+  if (!receiveFd && !acceptReadableStream && !isStreamType) {
     hydrateBlobFileData(blobData);
     return blobData;
   }
@@ -442,7 +443,10 @@ function applyReceiveFdOption(blobData, receiveFd, acceptReadableStream = false)
 
 async function XBlobRead(X, routerWin, blobId, host, version, clientWin = 0, appId = "xintent", options = {}) {
   const receiveFd = (typeof options === "object" && options !== null) ? !!options.receiveFd : !!options;
-  const acceptReadableStream = (typeof options === "object" && options !== null) ? !!options.acceptReadableStream : false;
+  const acceptReadableStream =
+    (typeof options === "object" && options !== null)
+      ? !!(options.acceptBufferedReadableStream || options.acceptReadableStream)
+      : false;
   const hexBlobId = typeof blobId === "number" ? `0x${blobId.toString(16)}` : String(blobId);
   const userAgent = buildXBlobUserAgent(clientWin, appId);
   const hostWin = await resolveXBlobHostWin(X, routerWin, host);

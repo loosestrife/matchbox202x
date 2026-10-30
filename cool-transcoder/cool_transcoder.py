@@ -223,7 +223,7 @@ class CoolTranscoderServer:
             return 0
         try:
             blob_spec = {
-                "xblobType": "ReadableStream",
+                "xblobType": "BufferedReadableStream",
                 "type": mime_type,
                 "name": title,
                 "data": f"/proc/{os.getpid()}/fd/{pipe_read}",
@@ -231,7 +231,7 @@ class CoolTranscoderServer:
                 "contentEncoding": "fd-rights"
             }
             resp_data_blob = self.xintent_client.blob_create(blob_spec)
-            logger.info(f"Created ReadableStream response dataBlob {hex(resp_data_blob)} for live stream pipe fd {pipe_read} ('/proc/{os.getpid()}/fd/{pipe_read}')")
+            logger.info(f"Created BufferedReadableStream response dataBlob {hex(resp_data_blob)} for live stream pipe fd {pipe_read} ('/proc/{os.getpid()}/fd/{pipe_read}')")
             try:
                 os.close(pipe_read)
             except Exception:
