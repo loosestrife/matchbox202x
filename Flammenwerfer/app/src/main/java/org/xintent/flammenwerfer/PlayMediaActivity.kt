@@ -62,6 +62,7 @@ fun PlayMediaScreen(
     var isLoadingTargets by remember { mutableStateOf(true) }
     var isDispatching by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var progress by remember { mutableStateOf<Float?>(null) }
 
     fun refreshTargets() {
         coroutineScope.launch {
@@ -90,6 +91,7 @@ fun PlayMediaScreen(
                 target = target,
                 transcode = transcode,
                 onStatusUpdate = { statusMessage = it },
+                onProgressUpdate = { progress = it },
                 onClose = onClose,
             )
             isDispatching = false
@@ -132,12 +134,35 @@ fun PlayMediaScreen(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
                 ) {
-                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (isDispatching) {
-                            CircularProgressIndicator(modifier = Modifier.height(24.dp).width(24.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isDispatching) {
+                                val curProg = progress
+                                if (curProg != null && curProg > 0f) {
+                                    CircularProgressIndicator(
+                                        progress = { curProg },
+                                        modifier = Modifier.height(24.dp).width(24.dp),
+                                    )
+                                } else {
+                                    CircularProgressIndicator(modifier = Modifier.height(24.dp).width(24.dp))
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
+                            Text(msg, style = MaterialTheme.typography.bodyMedium)
                         }
-                        Text(msg, style = MaterialTheme.typography.bodyMedium)
+                        progress?.let { curProg ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LinearProgressIndicator(
+                                progress = { curProg.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "${(curProg.coerceIn(0f, 1f) * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.align(Alignment.End),
+                            )
+                        }
                     }
                 }
             }

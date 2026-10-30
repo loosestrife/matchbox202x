@@ -67,21 +67,21 @@
         <activity
             android:name=".SendIntentActivity"
             android:exported="true"
-            android:label="XIntent Desktop (Pick / Save)"
+            android:label="Flammenwerfer Send To"
             android:icon="@mipmap/ic_launcher"
-            android:theme="@style/Theme.ProcessTextTranslucent">
-            <intent-filter>
+            android:theme="@style/Theme.Flammenwerfer">
+            <intent-filter android:label="XIntent Desktop (Pick)">
                 <action android:name="android.intent.action.GET_CONTENT" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.OPENABLE" />
                 <data android:mimeType="*/*" />
             </intent-filter>
-            <intent-filter>
+            <intent-filter android:label="Flammenwerfer Send To">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
-            <intent-filter>
+            <intent-filter android:label="Flammenwerfer Send To">
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />

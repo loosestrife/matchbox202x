@@ -87,6 +87,8 @@ function genServicesManifesto() {
       continue;
     }
     xintentServicesManifesto.packages[pakName] = {
+      name: pak.app?.name || pakName,
+      description: pak.app?.description || '',
       publicKeyHash: '0xdeadbeef',
       intents: {},
     }

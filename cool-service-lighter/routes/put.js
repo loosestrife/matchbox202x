@@ -67,7 +67,84 @@ function isFileBackedBlob(blobData, isFilePath, isFdRights) {
   );
 }
 
-function attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, toHexBlobId, logger) {
+function notifyStreamClosedOnBus(X, lighterWin, xintent, blobId, finalSize, toHexBlobId, logger) {
+  if (!X || !lighterWin || !xintent || !xintent.routerWin) return;
+  const numBlobId = typeof blobId === 'number' ? blobId : 0;
+  const sizeLow = finalSize >>> 0;
+  const sizeHigh = Math.floor(finalSize / 0x100000000) >>> 0;
+  Promise.resolve()
+    .then(async () => {
+      const atom = xintent.atoms.XBLOB_STREAM_CLOSED_V0 || (await X.InternAtom(false, 'XBLOB_STREAM_CLOSED_V0'));
+      if (atom) {
+        xintent.atoms.XBLOB_STREAM_CLOSED_V0 = atom;
+        await xintent.XClientMessage(X, xintent.routerWin, atom, [lighterWin, numBlobId, lighterWin, sizeLow, sizeHigh]);
+      }
+    })
+    .catch((err) => {
+      logger.debug(`Failed sending XBLOB_STREAM_CLOSED_V0 for ${toHexBlobId(blobId)}: ${err.message}`);
+    });
+}
+
+function attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlobId, logger, X, lighterWin, xintent) {
+  fs.mkdirSync('/tmp/xintent_blobs', { recursive: true });
+  const hexId = toHexBlobId(blobId);
+  const storagePath = `/tmp/xintent_blobs/stream_${hexId}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  fs.closeSync(fs.openSync(storagePath, 'a'));
+
+  const storageReadFd = fs.openSync(storagePath, 'r');
+  const writeStream = fs.createWriteStream(storagePath);
+  const readStream = fs.createReadStream(null, { fd: openedFd, autoClose: true });
+
+  blobData.openedFd = storageReadFd;
+  blobData.storagePath = storagePath;
+  blobData.data = null;
+  blobData._dataType = 'fd-rights';
+  blobData.contentEncoding = 'fd-rights';
+  blobData.size = 0;
+  blobData.xblobType = 'ReadableStream';
+  blobData.streamCompleted = false;
+
+  const streamCompletedPromise = new Promise((resolve) => {
+    let completed = false;
+    const onStreamCompleted = () => {
+      if (completed) return;
+      completed = true;
+      let finalSize = 0;
+      try {
+        finalSize = fs.fstatSync(storageReadFd).size;
+      } catch (_) {}
+      blobData.xblobType = 'Blob';
+      blobData.size = finalSize;
+      blobData.streamCompleted = true;
+      logger.info(`[xblob-host] StreamCompleted for XBlob ${hexId}: promoted ReadableStream -> Blob (size: ${finalSize} bytes, storage: '${storagePath}')`);
+      notifyStreamClosedOnBus(X, lighterWin, xintent, blobId, finalSize, toHexBlobId, logger);
+      resolve(blobData);
+    };
+
+    writeStream.on('finish', onStreamCompleted);
+    writeStream.on('close', onStreamCompleted);
+    writeStream.on('error', (err) => {
+      logger.warn(`[xblob-host] Write stream error for ReadableStream ${hexId}: ${err.message}`);
+      onStreamCompleted();
+    });
+    readStream.on('error', (err) => {
+      logger.warn(`[xblob-host] Source pipe read error for ReadableStream ${hexId}: ${err.message}`);
+      try { writeStream.end(); } catch (_) {}
+    });
+  });
+
+  Object.defineProperty(blobData, 'streamCompletedPromise', {
+    value: streamCompletedPromise,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+
+  readStream.pipe(writeStream);
+  logger.info(`[xblob-host] Pooling ReadableStream source '${srcPath}' (pipe FD ${openedFd}) -> storage FD ${storageReadFd} ('${storagePath}') for XBlob ${hexId}`);
+}
+
+function attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, toHexBlobId, logger, X = null, lighterWin = 0, xintent = null) {
   if (!isFileBackedBlob(blobData, isFilePath, isFdRights) || !blobData.data) return;
 
   const srcPath = typeof blobData.data === 'number' ? `/proc/self/fd/${blobData.data}` : String(blobData.data).trim();
@@ -76,15 +153,22 @@ function attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, to
 
   try {
     const openedFd = typeof blobData.data === 'number' ? blobData.data : fs.openSync(srcPath, 'r');
-    try { fs.lseekSync(openedFd, 0, 0); } catch (_) {}
     const stats = fs.fstatSync(openedFd);
+    const isStreamSource = blobData.xblobType === 'ReadableStream' || stats.isFIFO() || stats.isSocket();
+
+    if (isStreamSource) {
+      attachReadableStreamPool(blobData, blobId, srcPath, openedFd, toHexBlobId, logger, X, lighterWin, xintent);
+      return;
+    }
+
+    try { fs.lseekSync(openedFd, 0, 0); } catch (_) {}
 
     blobData.openedFd = openedFd;
     blobData.data = null;
     blobData._dataType = 'fd-rights';
     blobData.contentEncoding = 'fd-rights';
     blobData.size = stats.size;
-    blobData.xblobType = 'Blob';
+    blobData.xblobType = blobData.xblobType || 'Blob';
 
     logger.info(`[xblob-host] Stored fd-rights source '${srcPath}' (FD ${openedFd}, ${stats.size} bytes) rewinded to offset 0`);
   } catch (err) {
@@ -97,6 +181,7 @@ function buildPutResponseHeaders(hexBlobId, blobData, isFdRights, isFilePath) {
     'Content-Type': 'application/json',
     'Accept-Encoding': 'identity, base64, fd-rights, file-path',
     'X-Blob-Id': hexBlobId,
+    'X-XBlob-Type': blobData.xblobType || 'Blob',
     'Location': `/blobs/${hexBlobId}`,
     'Connection': 'close',
   };
@@ -109,7 +194,7 @@ function buildPutResponseHeaders(hexBlobId, blobData, isFdRights, isFilePath) {
 }
 
 async function processPutPayload(req, res, body, ctx) {
-  const { pathParts, hostBlobs, parseBlobId, toHexBlobId, allocateHostBlobId, xintent, logger } = ctx;
+  const { pathParts, hostBlobs, parseBlobId, toHexBlobId, allocateHostBlobId, xintent, X, lighterWin, logger } = ctx;
   const blobData = parseIncomingPutBody(body, xintent);
   const { isFdRights, isFilePath } = applyPutEncodingAndHeaders(req, blobData, body);
 
@@ -134,7 +219,7 @@ async function processPutPayload(req, res, body, ctx) {
     blobData._dataType = 'fd-rights';
   }
 
-  attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, toHexBlobId, logger);
+  attachOpenedFdIfFileSource(blobData, blobId, isFilePath, isFdRights, toHexBlobId, logger, X, lighterWin, xintent);
 
   hostBlobs.set(blobId, blobData);
   if (typeof blobId === 'number') {

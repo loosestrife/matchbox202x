@@ -12,7 +12,9 @@ import org.xintent.flammenwerfer.core.XIntentLogManager
 import org.xintent.flammenwerfer.net.XIntentTransport
 import org.xintent.flammenwerfer.protocol.XIntentProtocolParser
 import org.xintent.flammenwerfer.storage.XIntentBlobClient
+import java.io.BufferedReader
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
@@ -34,6 +36,7 @@ object XIntentDispatcher {
         connectTimeoutMs: Int = 10000,
         readTimeoutMs: Int = 15000,
         attachedBlobId: String? = null,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): HttpRawResponse {
         val connection = (URL(fullUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -45,6 +48,9 @@ object XIntentDispatcher {
             if (attachedBlobId != null) {
                 setRequestProperty("X-Attached-Blob-Id", attachedBlobId)
             }
+            for ((k, v) in extraHeaders) {
+                setRequestProperty(k, v)
+            }
         }
         OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
             writer.write(payload.toString())
@@ -54,6 +60,91 @@ object XIntentDispatcher {
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
         val bytes = (stream ?: "".byteInputStream()).readBytes()
         return HttpRawResponse(code, bytes)
+    }
+
+    private fun executeStreamingJsonPost(
+        fullUrl: String,
+        payload: JSONObject,
+        connectTimeoutMs: Int = 15000,
+        readTimeoutMs: Int = 300000,
+        attachedBlobId: String? = null,
+        extraHeaders: Map<String, String> = emptyMap(),
+        onEventJson: ((JSONObject, Map<String, String>) -> Unit)? = null,
+    ): HttpRawResponse {
+        val connection = (URL(fullUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("X-Forwarded-By", "flammenwerfer")
+            if (attachedBlobId != null) {
+                setRequestProperty("X-Attached-Blob-Id", attachedBlobId)
+            }
+            for ((k, v) in extraHeaders) {
+                setRequestProperty(k, v)
+            }
+        }
+        OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
+            writer.write(payload.toString())
+            writer.flush()
+        }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        if (stream == null) {
+            return HttpRawResponse(code, ByteArray(0))
+        }
+        val fullTranscript = StringBuilder()
+        var inHeaders = false
+        val partHeaders = mutableMapOf<String, String>()
+        val partBody = StringBuilder()
+
+        fun flushPart() {
+            val rawPart = partBody.toString().trim()
+            if (rawPart.startsWith("{") && rawPart.endsWith("}")) {
+                try {
+                    val obj = JSONObject(rawPart)
+                    onEventJson?.invoke(obj, partHeaders.toMap())
+                } catch (_: Exception) {}
+            }
+            partHeaders.clear()
+            partBody.clear()
+        }
+
+        BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                fullTranscript.append(line).append("\n")
+                val trimmed = line.trim()
+                if (trimmed.startsWith("--MatchboxFrameBoundary")) {
+                    flushPart()
+                    inHeaders = !trimmed.endsWith("--")
+                    continue
+                }
+                if (inHeaders) {
+                    if (trimmed.isEmpty()) {
+                        inHeaders = false
+                    } else if (trimmed.contains(":")) {
+                        val idx = trimmed.indexOf(':')
+                        val k = trimmed.substring(0, idx).trim()
+                        val v = trimmed.substring(idx + 1).trim()
+                        partHeaders[k] = v
+                    }
+                } else {
+                    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                        try {
+                            val obj = JSONObject(trimmed)
+                            onEventJson?.invoke(obj, partHeaders.toMap())
+                            partBody.clear()
+                            continue
+                        } catch (_: Exception) {}
+                    }
+                    partBody.append(line).append("\n")
+                }
+            }
+            flushPart()
+        }
+        return HttpRawResponse(code, fullTranscript.toString().toByteArray(Charsets.UTF_8))
     }
 
     fun handleWebSocketRawBytes(webSocket: WebSocket, rawBytes: ByteArray, context: Context) {
@@ -204,16 +295,25 @@ object XIntentDispatcher {
         data: String,
         targetAccept: String = "*/*",
         targetApp: String = "cool-transcoder",
+        inputStream: InputStream? = null,
+        preferMinimal: Boolean = true,
+        onUploadProgress: ((Long, Long) -> Unit)? = null,
+        onTranscodeProgress: ((Float) -> Unit)? = null,
     ): XIntentClient.Result = withContext(Dispatchers.IO) {
         val fullUrl = "${XIntentPreferences.getServerUrl(context)}/intent/media/Transcode?app=$targetApp"
         val logPrefix = "[media.Transcode -> $targetApp]"
-        XIntentLogManager.addLog("$logPrefix Transcoding $name ($type) for target accept: $targetAccept")
+        XIntentLogManager.addLog("$logPrefix Transcoding $name ($type) for target accept: $targetAccept (preferMinimal=$preferMinimal)")
 
         try {
-            val bytesToUpload = decodeBase64Safely(dataType, data)
-            val uploadedBlobId = if (bytesToUpload != null && bytesToUpload.isNotEmpty()) {
-                XIntentBlobClient.uploadXBlob(context, name, type, bytesToUpload)
-            } else null
+            val uploadedBlobId = when {
+                inputStream != null -> XIntentBlobClient.uploadXBlob(context, name, type, inputStream, size, onUploadProgress)
+                else -> {
+                    val bytesToUpload = decodeBase64Safely(dataType, data)
+                    if (bytesToUpload != null && bytesToUpload.isNotEmpty()) {
+                        XIntentBlobClient.uploadXBlob(context, name, type, bytesToUpload.inputStream(), bytesToUpload.size.toLong(), onUploadProgress)
+                    } else null
+                }
+            }
 
             val payload = JSONObject().apply {
                 put("intent", "media.Transcode")
@@ -222,22 +322,80 @@ object XIntentDispatcher {
                 put("type", type)
                 put("targetCodecs", targetAccept)
                 put("accept", targetAccept)
-                if (uploadedBlobId != null) {
-                    put("dataBlob", uploadedBlobId)
-                } else if (dataType.isNotBlank()) {
-                    put("dataType", dataType)
-                    put("data", data)
+                put("controlWord", 1)
+                if (preferMinimal) {
+                    put("Prefer", "return=minimal")
+                }
+                if (uploadedBlobId == null) {
+                    if (dataType == "url" && data.isNotBlank()) {
+                        put("url", data)
+                    } else if (dataType.isNotBlank()) {
+                        put("dataType", dataType)
+                        put("data", data)
+                    }
                 }
             }
-            val res = executeJsonPost(fullUrl, payload, 15000, 30000, uploadedBlobId)
+            val extraHeaders = if (preferMinimal) mapOf("Prefer" to "return=minimal") else emptyMap()
+            var finalResponseJson: JSONObject? = null
+            var attachedRespBlobId: String? = null
+
+            val res = executeStreamingJsonPost(
+                fullUrl = fullUrl,
+                payload = payload,
+                connectTimeoutMs = 15000,
+                readTimeoutMs = 300000,
+                attachedBlobId = uploadedBlobId,
+                extraHeaders = extraHeaders,
+            ) { evtJson, partHeaders ->
+                val evtName = evtJson.optString("event", "")
+                if (evtName == "ui.Progress") {
+                    val pct = evtJson.optDouble("percent", 0.0).toFloat().coerceIn(0f, 1f)
+                    XIntentLogManager.addLog("$logPrefix ui.Progress: ${(pct * 100).toInt()}%")
+                    onTranscodeProgress?.invoke(pct)
+                } else if (evtName == "media.TranscodeResponseV0" || evtJson.has("url") || !partHeaders["X-Attached-Blob-Id"].isNullOrBlank() || !partHeaders["x-attached-blob-id"].isNullOrBlank()) {
+                    val headerBlob = partHeaders["X-Attached-Blob-Id"] ?: partHeaders["x-attached-blob-id"]
+                    if (!headerBlob.isNullOrBlank()) {
+                        val parsed = XIntentProtocolParser.parseBlobId(headerBlob)
+                        attachedRespBlobId = if (parsed != null && parsed > 0) XIntentProtocolParser.formatBlobIdHex(parsed) else headerBlob
+                    }
+                    finalResponseJson = evtJson
+                }
+            }
             if (res.isSuccess) {
-                XIntentLogManager.addLog("$logPrefix SUCCESS -> Transcode requested")
-                return@withContext XIntentClient.Result(success = true, responseBody = res.text)
+                val bodyStr = finalResponseJson?.toString() ?: res.text
+                XIntentLogManager.addLog("$logPrefix SUCCESS -> Transcode completed (attachedBlobId=$attachedRespBlobId)")
+                return@withContext XIntentClient.Result(
+                    success = true,
+                    responseBody = bodyStr,
+                    attachedBlobId = attachedRespBlobId ?: "",
+                )
             }
             XIntentLogManager.addLog("$logPrefix FAILED (${res.code}): ${res.text}")
             XIntentClient.Result(success = false, errorMessage = "HTTP ${res.code}: ${res.text}")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending media.Transcode to $fullUrl", e)
+            XIntentLogManager.addLog("$logPrefix ERROR: ${e.message}")
+            XIntentClient.Result(success = false, errorMessage = e.message ?: "Network error")
+        }
+    }
+
+    suspend fun sendFindDevicesIntent(context: Context): XIntentClient.Result = withContext(Dispatchers.IO) {
+        val fullUrl = "${XIntentPreferences.getServerUrl(context)}/intent/media/FindDevices"
+        val logPrefix = "[media.FindDevices]"
+        XIntentLogManager.addLog("$logPrefix Scanning for media.Play devices...")
+        try {
+            val payload = JSONObject().apply {
+                put("intent", "media.FindDevices")
+            }
+            val res = executeJsonPost(fullUrl, payload, 5000, 8000)
+            if (res.isSuccess) {
+                XIntentLogManager.addLog("$logPrefix SUCCESS -> Discovery scan complete")
+                return@withContext XIntentClient.Result(success = true, responseBody = res.text)
+            }
+            XIntentLogManager.addLog("$logPrefix FAILED (${res.code})")
+            XIntentClient.Result(success = false, errorMessage = "HTTP ${res.code}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending media.FindDevices to $fullUrl", e)
             XIntentLogManager.addLog("$logPrefix ERROR: ${e.message}")
             XIntentClient.Result(success = false, errorMessage = e.message ?: "Network error")
         }
@@ -252,26 +410,36 @@ object XIntentDispatcher {
         data: String,
         targetApp: String,
         title: String = name,
+        dataBlob: String? = null,
+        xblobType: String? = null,
+        inputStream: InputStream? = null,
+        onUploadProgress: ((Long, Long) -> Unit)? = null,
     ): XIntentClient.Result = withContext(Dispatchers.IO) {
         val fullUrl = "${XIntentPreferences.getServerUrl(context)}/intent/media/Play?app=$targetApp"
         val logPrefix = "[media.Play -> $targetApp]"
-        XIntentLogManager.addLog("$logPrefix Playing media: $title ($type)")
+        XIntentLogManager.addLog("$logPrefix Playing media: $title ($type, dataBlob=${dataBlob ?: "none"})")
 
         try {
+            val resolvedBlobId = dataBlob ?: if (inputStream != null) {
+                XIntentBlobClient.uploadXBlob(context, name, type, inputStream, size, onUploadProgress)
+            } else null
+
             val payload = JSONObject().apply {
                 put("intent", "media.Play")
                 put("app", targetApp)
                 put("title", title)
                 put("mimeType", type)
                 put("size", size)
-                if (dataType == "url") {
-                    put("url", data)
-                } else if (dataType.isNotBlank()) {
-                    put("dataType", dataType)
-                    put("data", data)
+                if (resolvedBlobId.isNullOrBlank()) {
+                    if (dataType == "url") {
+                        put("url", data)
+                    } else if (dataType.isNotBlank()) {
+                        put("dataType", dataType)
+                        put("data", data)
+                    }
                 }
             }
-            val res = executeJsonPost(fullUrl, payload, 15000, 30000)
+            val res = executeJsonPost(fullUrl, payload, 15000, 30000, attachedBlobId = resolvedBlobId)
             if (res.isSuccess) {
                 XIntentLogManager.addLog("$logPrefix SUCCESS -> Sent to $targetApp")
                 return@withContext XIntentClient.Result(success = true)
@@ -366,9 +534,7 @@ object XIntentDispatcher {
                 put("name", name)
                 put("mimeType", type)
                 put("size", size)
-                if (uploadedBlobId != null) {
-                    put("dataBlob", uploadedBlobId)
-                } else if (dataType.isNotBlank()) {
+                if (uploadedBlobId == null && dataType.isNotBlank()) {
                     put("dataType", dataType)
                     put("data", data)
                 }

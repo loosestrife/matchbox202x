@@ -250,7 +250,11 @@ function resolveIntentDispatchFn(intent) {
 
 function extractRawBlobRef(req, payload) {
   const reqDataBlobHeader = req.headers['x-attached-blob-id'] || req.headers['x-blob-id'];
-  return payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId || reqDataBlobHeader;
+  const rawRef = reqDataBlobHeader || payload.dataBlob || payload.sample || payload.blob || payload.blobId || payload.BlobId;
+  delete payload.dataBlob;
+  delete payload.blobId;
+  delete payload.BlobId;
+  return rawRef;
 }
 
 module.exports = {

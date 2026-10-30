@@ -51,6 +51,10 @@ def _try_open_fd_rights(blob_val) -> Optional[int]:
     if isinstance(blob_val, int) and blob_val >= 0:
         dup_fd = os.dup(blob_val)
         try:
+            os.close(blob_val)
+        except Exception:
+            pass
+        try:
             os.lseek(dup_fd, 0, os.SEEK_SET)
         except Exception:
             pass
@@ -60,13 +64,14 @@ def _try_open_fd_rights(blob_val) -> Optional[int]:
     if clean_path.startswith("file://"):
         clean_path = urllib.parse.unquote(clean_path.removeprefix("file://"))
 
-    if not clean_path or not os.path.exists(clean_path):
+    if not clean_path or (not clean_path.startswith("/proc/") and not os.path.exists(clean_path)):
         logger.warning(f"ensure_readable_fd: file path '{clean_path}' does not exist on disk, falling back to anonymous fd")
         return None
 
     try:
         fd = os.open(clean_path, os.O_RDONLY | os.O_CLOEXEC)
-        logger.info(f"ensure_readable_fd resolved file path '{clean_path}' -> open fd {fd} (size: {os.path.getsize(clean_path)} bytes)")
+        size_bytes = os.fstat(fd).st_size
+        logger.info(f"ensure_readable_fd resolved file path '{clean_path}' -> open fd {fd} (size: {size_bytes} bytes)")
         return fd
     except Exception as e:
         logger.error(f"ensure_readable_fd os.open failed for '{clean_path}', falling back to anonymous fd: {e}", exc_info=True)
@@ -86,6 +91,13 @@ def _decode_blob_bytes(blob_val, data_type: Optional[str]) -> bytes:
     return str(blob_val or "").encode("utf-8")
 
 
+def is_readable_stream_blob(raw_blob: object) -> bool:
+    if not isinstance(raw_blob, dict):
+        return False
+    unwrapped = _unwrap_blob_dict(raw_blob)
+    return (unwrapped.get("xblobType") or raw_blob.get("xblobType")) == "ReadableStream"
+
+
 def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
     """
     Converts any incoming XBlob payload into an open, readable file descriptor (int fd),
@@ -97,7 +109,7 @@ def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
     data_type = unwrapped.get("_dataType") or unwrapped.get("contentEncoding")
     blob_val = unwrapped.get("data")
 
-    if data_type == "fd-rights":
+    if data_type in ("fd-rights", "file-path"):
         fd = _try_open_fd_rights(blob_val)
         if fd is not None:
             return (fd, mime_type, file_name)
@@ -228,19 +240,24 @@ def _resolve_transcode_x11_response(x11_client, payload: dict, sender_win_id: Op
         logger.error(f"Cool Transcoder returned error over X11 IPC: {data_val.get('errorMessage')}")
         return None
 
-    resp_blob_id = payload.get("dataBlob") or payload.get("data_blob") or data_val.get("dataBlob") or data_val.get("data_blob")
+    resp_blob_id = payload.get("data_blob") or 0
     mime_type = data_val.get("mimeType") or "video/mp4"
 
     if resp_blob_id and hasattr(x11_client, "blob_read"):
         try:
-            raw_blob = x11_client.blob_read(resp_blob_id)
+            raw_blob = x11_client.blob_read(resp_blob_id, receive_fd=True, accept_readable_stream=True)
             try:
                 x11_client.blob_unlink(resp_blob_id, win_id=sender_win_id)
             except Exception:
                 pass
             if raw_blob:
+                is_live = is_readable_stream_blob(raw_blob)
+                logger.info(
+                    f"Opted in to ReadableStream for transcode response blob {hex(resp_blob_id)} -> "
+                    f"received xblobType='{raw_blob.get('xblobType')}' (is_live_stream={is_live})"
+                )
                 fd, _, _ = ensure_readable_fd(raw_blob)
-                return (fd, mime_type)
+                return (fd, mime_type, is_live)
         except Exception as e:
             logger.error(f"Error reading response dataBlob {hex(resp_blob_id)}: {e}")
 

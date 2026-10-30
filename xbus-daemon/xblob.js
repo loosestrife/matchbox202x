@@ -221,6 +221,56 @@ const handleXBlobBroadcastV0 = {
   },
 };
 
+const handleXBlobStreamClosedV0 = {
+  parse: (ev) => {
+    const [senderWin, blobId, host, sizeLow, sizeHigh] = ev.data;
+    const low = (sizeLow || 0) >>> 0;
+    const high = (sizeHigh || 0) >>> 0;
+    return {
+      targetWin: ev.wid,
+      senderWin,
+      blobId,
+      host,
+      sizeLow: low,
+      sizeHigh: high,
+      size: high * 0x100000000 + low,
+    };
+  },
+  securityContext: (parsed) => ({
+    source: { window: parsed.senderWin },
+    action: 'XBlobStreamClosed',
+    resources: [{ XBlob: parsed.blobId }],
+  }),
+  accept: async ({ senderWin, blobId, host, sizeLow, sizeHigh, size }) => {
+    const resolvedLow = (sizeLow !== undefined ? sizeLow : (Number(size) || 0)) >>> 0;
+    const resolvedHigh = (sizeHigh !== undefined ? sizeHigh : Math.floor((Number(size) || 0) / 0x100000000)) >>> 0;
+    const resolvedSize = size !== undefined ? size : resolvedHigh * 0x100000000 + resolvedLow;
+    logger.info(`XBlobStreamClosed stream closed (size: ${resolvedSize}) on host ${xintent.widString(host)} of ${xintent.widString(blobId)} from ${xintent.widString(senderWin)}`);
+    const regEntry = xblobRegistry[blobId];
+    if (regEntry) {
+      regEntry.size = resolvedSize;
+      if (host && !regEntry.hosts.includes(host)) {
+        regEntry.hosts.push(host);
+      }
+    }
+    const targets = [...new Set([...(regEntry?.links || []), ...(regEntry?.softLinks || [])])];
+    for (const target of targets) {
+      if (target === senderWin || target === daemon.routerWin) continue;
+      try {
+        if (daemon.X && typeof daemon.X.SendEvent === 'function') {
+          xintent.XClientMessage(daemon.X, target, xintent.atoms.XBLOB_STREAM_CLOSED_V0, [
+            senderWin,
+            blobId,
+            host,
+            resolvedLow,
+            resolvedHigh,
+          ]);
+        }
+      } catch (_) {}
+    }
+  },
+};
+
 const handleXBlobTransferV0 = {
   parse: (ev) => {
     const [senderWin, blobId, grantee] = ev.data;
@@ -249,6 +299,7 @@ module.exports = {
   handleXBlobUnlinkV0,
   handleXBlobTransferV0,
   handleXBlobBroadcastV0,
+  handleXBlobStreamClosedV0,
   handleXBlobSoftLinkV0,
   handleXBlobSoftUnlinkV0,
   handleXBlobAnnounceHostV0,

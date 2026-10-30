@@ -96,9 +96,18 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes) {
   });
   app.get(['/apps/:app', '/apps/:app/*path'], routeAppModule.routeApp);
   app.get('/api/tags', async (req, res) => {
+    const aggregate = await intentRoutes.aggregateTomlAsObject();
+    const cardApps = routeAppModule.getApps();
+    const mergedApps = { ...(aggregate.apps || {}) };
+    for (const [appId, cardApp] of Object.entries(cardApps)) {
+      mergedApps[appId] = {
+        ...(mergedApps[appId] || {}),
+        ...cardApp,
+      };
+    }
     res.json({
-      ...(await intentRoutes.aggregateTomlAsObject()),
-      apps: routeAppModule.getApps(),
+      ...aggregate,
+      apps: mergedApps,
     });
   });
   app.get('/api/debug/xaudio', (req, res) => {

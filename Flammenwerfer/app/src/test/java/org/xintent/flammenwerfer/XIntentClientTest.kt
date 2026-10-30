@@ -117,4 +117,48 @@ class XIntentClientTest {
         assertEquals("DLNA (Living Room TV)", dlnaTarget.name)
         assertTrue(dlnaTarget.accept.contains("video/webm"))
     }
+
+    @Test
+    fun testParseSendToTargetsFromIntentsAndApps() {
+        val sampleTagsJson = """
+        {
+          "intents": {
+            "fs.SendTo": ["cool-clips", "dlna-bridge", "dlna-304218b7-3388-45da-a2fd-c4ea6de7121a"],
+            "media.Play": ["dlna-304218b7-3388-45da-a2fd-c4ea6de7121a"]
+          },
+          "apps": {
+            "cool-clips": {
+              "name": "Cool Clips (Desktop Clipboard & Files)"
+            },
+            "dlna-bridge": {
+              "name": "DLNA/UPnP Device Bridge"
+            },
+            "dlna-304218b7-3388-45da-a2fd-c4ea6de7121a": {
+              "name": "DLNA (Samsung TU690T 43 TV (Mock))",
+              "intents": {
+                "fs.SendTo": true,
+                "media.Play": {
+                  "Accept": "video/mp4, video/webm"
+                }
+              }
+            }
+          }
+        }
+        """.trimIndent()
+
+        val targets = XIntentClient.parseSendToTargets(sampleTagsJson)
+        assertEquals(3, targets.size)
+        assertEquals("cool-clips", targets[0].appId)
+        assertEquals("Cool Clips (Desktop Clipboard & Files)", targets[0].name)
+        assertEquals("dlna-bridge", targets[1].appId)
+        assertEquals("DLNA/UPnP Device Bridge", targets[1].name)
+        assertEquals("dlna-304218b7-3388-45da-a2fd-c4ea6de7121a", targets[2].appId)
+        assertEquals("DLNA (Samsung TU690T 43 TV (Mock))", targets[2].name)
+
+        val playTargets = XIntentClient.parseMediaPlayTargets(sampleTagsJson)
+        assertEquals(1, playTargets.size)
+        assertEquals("dlna-304218b7-3388-45da-a2fd-c4ea6de7121a", playTargets[0].appId)
+        assertEquals("DLNA (Samsung TU690T 43 TV (Mock))", playTargets[0].name)
+        assertEquals("video/mp4, video/webm", playTargets[0].accept)
+    }
 }

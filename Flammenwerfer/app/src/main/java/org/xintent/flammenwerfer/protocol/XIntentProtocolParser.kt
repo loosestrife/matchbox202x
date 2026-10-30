@@ -29,12 +29,22 @@ object XIntentProtocolParser {
         if (blobId > 0) "0x" + blobId.toString(16) else ""
 
     fun extractJsonObjects(text: String): List<JSONObject> {
-        if (text.isBlank()) return emptyList()
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            try { return listOf(JSONObject(trimmed)) } catch (_: Exception) {}
+        }
         val results = mutableListOf<JSONObject>()
         var depth = 0
         var startIndex = -1
+        var inString = false
+        var escaped = false
         for (i in text.indices) {
             val c = text[i]
+            if (escaped) { escaped = false; continue }
+            if (c == '\\' && inString) { escaped = true; continue }
+            if (c == '"') { inString = !inString; continue }
+            if (inString) continue
             if (c == '{') {
                 if (depth == 0) startIndex = i
                 depth++

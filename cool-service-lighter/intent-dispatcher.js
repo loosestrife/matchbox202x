@@ -117,6 +117,7 @@ function buildAtomDispatchMap(atoms) {
       await ctx.pickFiles.xblobDestructor(frame);
     }],
     [atoms.xblobCreateResponseAtom, noop],
+    [atoms.xblobStreamClosedAtom, noop],
     [atoms.xintentDataAtom, noop],
   ]);
 }

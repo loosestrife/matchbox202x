@@ -28,6 +28,7 @@ const {
   parseXIntentIntentV0,
   parseXBlobBroadcastFrame,
   parseXBlobDestructorFrame,
+  parseXBlobStreamClosedFrame,
   frameType,
   frameDesc,
 } = require("./xintent-frames");
@@ -82,6 +83,7 @@ const PROTOCOL_ATOMS = [
   "XBLOB_ANNOUNCE_HOST_V0",
   "XBLOB_DROP_HOST_V0",
   "XBLOB_DESTRUCTOR_V0",
+  "XBLOB_STREAM_CLOSED_V0",
   "XBLOB_SOCKET_PATH",
   "XAUDIO_PLAY_V0",
   "XAUDIO_PLAY_RESPONSE_V0",
@@ -309,6 +311,21 @@ async function XBlobBroadcast(X, routerWin, senderWin, blobId, host, version) {
   ]);
 }
 
+async function XBlobStreamClosed(X, routerWin, senderWin, blobId, host, size = 0) {
+  const targetWin = routerWin || senderWin || 0;
+  const numSize = Number(size) || 0;
+  const sizeLow = numSize >>> 0;
+  const sizeHigh = Math.floor(numSize / 0x100000000) >>> 0;
+  logger.debug(`XBlobStreamClosed(X, ${widString(targetWin)}, ${widString(senderWin || 0)}, ${widString(blobId || 0)}, size=${numSize})`);
+  return XClientMessage(X, targetWin, atoms.XBLOB_STREAM_CLOSED_V0, [
+    senderWin || 0,
+    blobId || 0,
+    host || senderWin || 0,
+    sizeLow,
+    sizeHigh,
+  ]);
+}
+
 async function XBlobWrite(X, routerWin, senderWin, blobId, blobData, host, version) {
   if (version && typeof blobData === "object" && blobData !== null) {
     blobData = Object.assign({}, blobData, { version });
@@ -348,11 +365,11 @@ async function resolveXBlobHostWin(X, routerWin, host) {
   return routerWin;
 }
 
-async function fetchBlobFromHost(X, hostWin, hexBlobId, userAgent) {
+async function fetchBlobFromHost(X, hostWin, hexBlobId, userAgent, acceptReadableStream = false) {
   try {
     const sockPath = (await getXBlobSocketPath(X, hostWin)) || process.env.XBLOB_SOCKET_PATH;
     if (sockPath && fs.existsSync(sockPath)) {
-      return await httpGetBlobOverSocket(sockPath, hexBlobId, userAgent);
+      return await httpGetBlobOverSocket(sockPath, hexBlobId, userAgent, acceptReadableStream);
     }
   } catch (sockErr) {
     logger.warn(`XBlobRead socket GET /blobs/${hexBlobId} failed: ${sockErr.message}`);
@@ -360,7 +377,7 @@ async function fetchBlobFromHost(X, hostWin, hexBlobId, userAgent) {
 
   const httpPort = parseInt(process.env.XINTENT_PORT || process.env.PORT || "12345", 10);
   try {
-    return await httpGetBlobOverHttp(httpPort, hexBlobId, userAgent);
+    return await httpGetBlobOverHttp(httpPort, hexBlobId, userAgent, acceptReadableStream);
   } catch (httpErr) {
     logger.warn(`XBlobRead HTTP GET /blobs/${hexBlobId} failed: ${httpErr.message}`);
   }
@@ -387,12 +404,12 @@ function hydrateBlobFileData(blobData) {
   }
 }
 
-function applyReceiveFdOption(blobData, receiveFd) {
-  if (!receiveFd) {
+function applyReceiveFdOption(blobData, receiveFd, acceptReadableStream = false) {
+  if (!receiveFd && !acceptReadableStream && blobData.xblobType !== "ReadableStream") {
     hydrateBlobFileData(blobData);
     return blobData;
   }
-  if (typeof blobData.data === "string" && fs.existsSync(blobData.data)) {
+  if (typeof blobData.data === "string" && (blobData.data.startsWith("/proc/") || fs.existsSync(blobData.data))) {
     try {
       blobData.data = fs.openSync(blobData.data, "r");
       blobData._dataType = "fd-rights";
@@ -404,13 +421,14 @@ function applyReceiveFdOption(blobData, receiveFd) {
 
 async function XBlobRead(X, routerWin, blobId, host, version, clientWin = 0, appId = "xintent", options = {}) {
   const receiveFd = (typeof options === "object" && options !== null) ? !!options.receiveFd : !!options;
+  const acceptReadableStream = (typeof options === "object" && options !== null) ? !!options.acceptReadableStream : false;
   const hexBlobId = typeof blobId === "number" ? `0x${blobId.toString(16)}` : String(blobId);
   const userAgent = buildXBlobUserAgent(clientWin, appId);
   const hostWin = await resolveXBlobHostWin(X, routerWin, host);
-  const blobData = await fetchBlobFromHost(X, hostWin, hexBlobId, userAgent);
+  const blobData = await fetchBlobFromHost(X, hostWin, hexBlobId, userAgent, acceptReadableStream);
 
   if (blobData) {
-    return applyReceiveFdOption(blobData, receiveFd);
+    return applyReceiveFdOption(blobData, receiveFd, acceptReadableStream);
   }
   throw new Error(`XBlobRead: blob ${hexBlobId} not found on XBlob host`);
 }
@@ -444,6 +462,7 @@ module.exports = {
   parseXIntentEventV0: parseXIntentIntentV0,
   parseXBlobBroadcastFrame,
   parseXBlobDestructorFrame,
+  parseXBlobStreamClosedFrame,
   buildClientMessageBuffer,
   XClientMessage,
   sendXChannelJsonFrame,
@@ -463,6 +482,7 @@ module.exports = {
   XBlobRead,
   XBlobWrite,
   XBlobBroadcast,
+  XBlobStreamClosed,
   formatXBlobAtRest,
   parseXBlobAtRest,
   getXBlobSocketPath,

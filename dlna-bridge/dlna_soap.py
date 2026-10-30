@@ -19,8 +19,8 @@ from dlna_probe import DLNADevice, apply_device_quirks, build_accept_header_from
 
 logger = logging.getLogger("dlna_media_manager")
 
-DEFAULT_MIMES = {"video/mp4", "video/webm", "audio/mpeg", "text/plain"}
-DEFAULT_ACCEPT = 'video/mp4; codecs="h264, aac", video/webm; codecs="vp8, vorbis", text/plain'
+DEFAULT_MIMES = {"video/mpeg", "video/vnd.dlna.mpeg-tts", "video/mp4", "video/webm", "audio/mpeg", "text/plain"}
+DEFAULT_ACCEPT = 'video/mpeg; codecs="h264, aac", video/mp4; codecs="h264, aac", video/webm; codecs="vp8, vorbis", text/plain'
 
 UPNP_CLASS_PREFIXES = (
     ("audio/", "object.item.audioItem.musicItem"),
@@ -147,14 +147,16 @@ def fetch_and_parse_device_description(location: str, protocol_info_fetcher) -> 
         return None
 
 
-def build_didl_lite_metadata(name: str, clean_mime: str, media_url: str) -> str:
+def build_didl_lite_metadata(name: str, clean_mime: str, media_url: str, is_live_stream: bool = False) -> str:
     upnp_class = "object.item.videoItem"
     for prefix, cls_name in UPNP_CLASS_PREFIXES:
         if clean_mime.startswith(prefix):
             upnp_class = cls_name
             break
 
-    dlna_flags = "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    op = "00" if is_live_stream else "01"
+    ci = "1" if is_live_stream else "0"
+    dlna_flags = f"DLNA.ORG_OP={op};DLNA.ORG_CI={ci};DLNA.ORG_FLAGS=01700000000000000000000000000000"
     protocol_info = f"http-get:*:{clean_mime}:{dlna_flags}"
 
     raw_didl = (

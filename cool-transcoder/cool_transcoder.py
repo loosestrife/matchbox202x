@@ -27,7 +27,9 @@ from transcoder_helpers import (
     TranscodeSession,
     ensure_readable_fd,
     get_local_ip,
+    probe_media_duration,
     spawn_ffmpeg_pipe_pipeline,
+    spawn_ffmpeg_pipe_pipeline_with_progress,
 )
 
 try:
@@ -123,8 +125,21 @@ def _extract_transcode_params(payload: dict) -> Tuple[int, int, int, Optional[st
     input_url = data_payload.get("url") or data_payload.get("uri") or payload.get("url") or payload.get("uri")
     accept_spec = data_payload.get("accept") or data_payload.get("targetCodecs") or payload.get("accept") or payload.get("targetCodecs") or 'video/mp4; codecs="h264, aac"'
     title = data_payload.get("title") or payload.get("title") or "Transcoded Stream"
-    data_blob_id = data_payload.get("dataBlob") or data_payload.get("data_blob") or payload.get("dataBlob") or payload.get("data_blob")
+    data_blob_id = payload.get("data_blob") or 0
     return tx_id, sender_win, channel_id, input_url, accept_spec, title, data_blob_id
+
+
+def _prefers_minimal_or_progress(payload: dict) -> bool:
+    data_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+    for src in (data_payload, payload):
+        if not isinstance(src, dict):
+            continue
+        prefer_val = str(src.get("Prefer") or src.get("prefer") or "").lower()
+        if "return=minimal" in prefer_val:
+            return True
+        if src.get("streamProgress") is True:
+            return True
+    return False
 
 
 class CoolTranscoderServer:
@@ -188,7 +203,7 @@ class CoolTranscoderServer:
         if data_blob_id and self.xintent_client and hasattr(self.xintent_client, "blob_read"):
             blob_id_str = hex(data_blob_id) if isinstance(data_blob_id, int) else str(data_blob_id)
             try:
-                raw_blob = self.xintent_client.blob_read(data_blob_id)
+                raw_blob = self.xintent_client.blob_read(data_blob_id, receive_fd=True, accept_readable_stream=True)
                 if raw_blob and isinstance(raw_blob, dict):
                     input_fd, _, _ = ensure_readable_fd(raw_blob)
                     input_url = f"/proc/self/fd/{input_fd}"
@@ -217,10 +232,86 @@ class CoolTranscoderServer:
             }
             resp_data_blob = self.xintent_client.blob_create(blob_spec)
             logger.info(f"Created ReadableStream response dataBlob {hex(resp_data_blob)} for live stream pipe fd {pipe_read} ('/proc/{os.getpid()}/fd/{pipe_read}')")
+            try:
+                os.close(pipe_read)
+            except Exception:
+                pass
             return resp_data_blob
         except Exception as e:
             logger.error(f"Error creating response blob for live stream pipe fd {pipe_read}: {e}")
             return 0
+
+    def _dispatch_progress_event(self, percent: float, tx_id: int, sender_win: int, channel_id: int) -> None:
+        if not self.xintent_client or not (sender_win or channel_id):
+            return
+        try:
+            evt = {
+                "event": "ui.Progress",
+                "percent": round(float(percent), 2),
+            }
+            if tx_id:
+                evt["txId"] = tx_id
+            self.xintent_client.send_event(
+                target_win_id=sender_win or self.xintent_client.get_router_win_id(),
+                payload=evt,
+                tx_id=tx_id,
+                channel=channel_id,
+                control_word=0,
+                data_blob=0,
+            )
+            logger.info(f"Sent ui.Progress ({evt['percent']}) over X11 IPC (channel {channel_id})")
+        except Exception as e:
+            logger.error(f"Error sending ui.Progress event: {e}")
+
+    async def _stream_ffmpeg_progress_events(
+        self, prog_read: int, duration_sec: float, tx_id: int, sender_win: int, channel_id: int
+    ) -> None:
+        os.set_blocking(prog_read, False)
+        last_percent = -1.0
+        fallback_pct = 0.0
+        buf = b""
+        try:
+            while True:
+                try:
+                    chunk = os.read(prog_read, 4096)
+                except BlockingIOError:
+                    await asyncio.sleep(0.05)
+                    continue
+                except OSError:
+                    break
+
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line_bytes, buf = buf.split(b"\n", 1)
+                    line = line_bytes.decode("utf-8", errors="ignore").strip()
+                    if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                        val_str = line.split("=", 1)[1].strip()
+                        try:
+                            out_us = int(val_str)
+                            if out_us >= 0:
+                                if duration_sec > 0:
+                                    pct = round(min(0.99, (out_us / 1_000_000.0) / duration_sec), 2)
+                                else:
+                                    fallback_pct = min(0.95, round(fallback_pct + 0.05, 2))
+                                    pct = fallback_pct
+                                if pct > last_percent:
+                                    last_percent = pct
+                                    self._dispatch_progress_event(pct, tx_id, sender_win, channel_id)
+                        except ValueError:
+                            pass
+                    elif line == "progress=end":
+                        if last_percent < 1.0:
+                            last_percent = 1.0
+                            self._dispatch_progress_event(1.0, tx_id, sender_win, channel_id)
+        finally:
+            try:
+                os.close(prog_read)
+            except Exception:
+                pass
+            if last_percent < 1.0:
+                self._dispatch_progress_event(1.0, tx_id, sender_win, channel_id)
 
     def _dispatch_x11_response(self, response: dict, tx_id: int, sender_win: int, channel_id: int, resp_data_blob: int) -> None:
         if not self.xintent_client or not (sender_win or channel_id):
@@ -240,6 +331,7 @@ class CoolTranscoderServer:
 
     async def handle_transcode_intent(self, payload: dict) -> dict:
         tx_id, sender_win, channel_id, input_url, accept_spec, title, data_blob_id = _extract_transcode_params(payload)
+        prefer_minimal = _prefers_minimal_or_progress(payload)
         input_url, input_fd = self._resolve_input_source(payload, input_url, data_blob_id)
 
         if not input_url and input_fd is None:
@@ -253,10 +345,28 @@ class CoolTranscoderServer:
             return response
 
         session = self.create_session(input_url, accept_spec, title)
-        pipe_read = spawn_ffmpeg_pipe_pipeline(input_url, session.ffmpeg_flags, input_fd)
-        await asyncio.sleep(0.3)
+        if prefer_minimal:
+            duration_sec = probe_media_duration(input_url, input_fd)
+            logger.info(f"Prefer: return=minimal active for '{title}' (probed duration: {duration_sec:.2f}s)")
+            pipe_read, prog_read = spawn_ffmpeg_pipe_pipeline_with_progress(input_url, session.ffmpeg_flags, input_fd)
+            if input_fd is not None:
+                try:
+                    os.close(input_fd)
+                except Exception:
+                    pass
+            resp_data_blob = self._create_response_blob(pipe_read, session.mime_type, title)
+            await self._stream_ffmpeg_progress_events(prog_read, duration_sec, tx_id, sender_win, channel_id)
+            await asyncio.sleep(0.05)
+        else:
+            pipe_read = spawn_ffmpeg_pipe_pipeline(input_url, session.ffmpeg_flags, input_fd)
+            if input_fd is not None:
+                try:
+                    os.close(input_fd)
+                except Exception:
+                    pass
+            await asyncio.sleep(0.1)
+            resp_data_blob = self._create_response_blob(pipe_read, session.mime_type, title)
 
-        resp_data_blob = self._create_response_blob(pipe_read, session.mime_type, title)
         stream_url = f"http://{self.local_ip}:{self.http_port}/stream/{session.session_id}"
         response = {
             "event": "media.TranscodeResponseV0",
@@ -264,10 +374,11 @@ class CoolTranscoderServer:
             "status": "ok",
             "url": stream_url,
             "mimeType": session.mime_type,
-            "title": title
+            "title": title,
         }
-        logger.info(f"Transcode prepared -> Stream URL: {stream_url}, Response dataBlob: {hex(resp_data_blob)}")
+        logger.info(f"Transcode prepared -> Stream URL: {stream_url}, Response data_blob slot: {hex(resp_data_blob)}")
         self._dispatch_x11_response(response, tx_id, sender_win, channel_id, resp_data_blob)
+        response["data_blob"] = resp_data_blob
         return response
 
     def setup_x11(self):

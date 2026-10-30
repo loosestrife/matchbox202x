@@ -38,7 +38,11 @@ async function XClientMessage(X, targetWin, message_type, data) {
 }
 
 function wrapPayloadIfNeeded(payload) {
-  if (typeof payload === 'object' && payload !== null && payload.data === undefined && payload.xblobType === undefined) {
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload.intent || payload.event || payload.action || (payload.data === undefined && payload.xblobType === undefined))
+  ) {
     return { xblobType: 'Blob', type: 'application/json', data: payload };
   }
   return payload;
@@ -190,6 +194,18 @@ function parseXBlobDestructorFrame(X, routerWin, ev) {
   };
 }
 
+function parseXBlobStreamClosedFrame(X, routerWin, ev) {
+  const sizeLow = (ev.data[3] || 0) >>> 0;
+  const sizeHigh = (ev.data[4] || 0) >>> 0;
+  return {
+    blob: ev.data[1],
+    host: ev.data[2],
+    sizeLow,
+    sizeHigh,
+    size: sizeHigh * 0x100000000 + sizeLow,
+  };
+}
+
 function getAtomName(atomId) {
   if (typeof atomId === 'string' && atomId.length > 0) return atomId;
   if (typeof atomId === 'number') {
@@ -268,6 +284,7 @@ module.exports = {
   parseXIntentIntentV0,
   parseXBlobBroadcastFrame,
   parseXBlobDestructorFrame,
+  parseXBlobStreamClosedFrame,
   getAtomName,
   frameType,
   formatControlWord,

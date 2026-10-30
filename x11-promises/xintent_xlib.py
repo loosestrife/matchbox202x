@@ -151,34 +151,56 @@ class XIntentXlibClient:
         win_hex = hex(target_win) if isinstance(target_win, int) else str(target_win)
         return f"{host}:{display}/{win_hex} (app={self.app_id})"
 
-    def blob_read(self, blob_id: int, win_id=None, receive_fd: bool = False):
+    @staticmethod
+    def _coerce_blob_id(blob_id) -> int:
+        if blob_id is None:
+            return 0
+        if isinstance(blob_id, int):
+            return blob_id
+        if isinstance(blob_id, str):
+            s = blob_id.strip().lower()
+            if not s or s == "null":
+                return 0
+            try:
+                return int(s, 16) if s.startswith("0x") else int(s, 0)
+            except ValueError:
+                return 0
+        return int(blob_id)
+
+    def blob_read(self, blob_id, win_id=None, receive_fd: bool = False, accept_readable_stream: bool = False):
         """Reads XBlob payload from XBLOB_HOST via local UNIX socket or HTTP."""
-        blob_hex = hex(blob_id)
+        blob_id_int = self._coerce_blob_id(blob_id)
+        blob_hex = hex(blob_id_int)
         sock_path = self.get_xblob_socket_path() or os.environ.get("XBLOB_SOCKET_PATH")
         user_agent = self.build_user_agent(win_id=win_id)
         if sock_path and os.path.exists(sock_path):
-            blob_data = _http_get_blob_unix_socket(sock_path, blob_hex, user_agent=user_agent)
+            blob_data = _http_get_blob_unix_socket(
+                sock_path,
+                blob_hex,
+                user_agent=user_agent,
+                accept_readable_stream=accept_readable_stream,
+            )
             if blob_data:
-                return _blob_http.post_process_blob_read_data(blob_data, receive_fd)
+                return _blob_http.post_process_blob_read_data(blob_data, receive_fd, accept_readable_stream=accept_readable_stream)
 
         raise RuntimeError(
-            f"XBlobRead: No data found for blob_id {blob_id} ({blob_hex}) over socket '{sock_path}'"
+            f"XBlobRead: No data found for blob_id {blob_id_int} ({blob_hex}) over socket '{sock_path}'"
         )
 
-    def blob_transfer(self, blob_id: int, grantee_win_id: int, win_id=None):
+    def blob_transfer(self, blob_id, grantee_win_id: int, win_id=None):
         router_id = self.get_router_win_id()
         src_win = self._default_win_id(win_id)
-        self.x11.send_client_message(router_id, self.atoms["XBLOB_TRANSFER_V0"], [src_win, blob_id, grantee_win_id])
+        self.x11.send_client_message(router_id, self.atoms["XBLOB_TRANSFER_V0"], [src_win, self._coerce_blob_id(blob_id), grantee_win_id])
 
-    def blob_grant(self, blob_id: int, grantee_win_id: int, win_id=None):
+    def blob_grant(self, blob_id, grantee_win_id: int, win_id=None):
         router_id = self.get_router_win_id()
         src_win = self._default_win_id(win_id)
-        self.x11.send_client_message(router_id, self.atoms["XBLOB_GRANT_V0"], [src_win, blob_id, grantee_win_id])
+        self.x11.send_client_message(router_id, self.atoms["XBLOB_GRANT_V0"], [src_win, self._coerce_blob_id(blob_id), grantee_win_id])
 
-    def blob_unlink(self, blob_id: int, win_id=None):
+    def blob_unlink(self, blob_id, win_id=None):
         router_id = self.get_router_win_id()
         src_win = self._default_win_id(win_id)
-        self.x11.send_client_message(router_id, self.atoms["XBLOB_UNLINK_V0"], [src_win, blob_id])
+        self.x11.send_client_message(router_id, self.atoms["XBLOB_UNLINK_V0"], [src_win, self._coerce_blob_id(blob_id)])
 
     def blob_announce_host(self, blob_id: int, host_win_id: int = 0):
         router_id = self.get_router_win_id()
@@ -196,7 +218,7 @@ class XIntentXlibClient:
         payload: dict,
         tx_id: int = 0,
         channel: int = 0,
-        control_word: int = 0,
+        control_word=None,
         data_blob: int = 0,
         sender_win_id=None,
     ) -> int:
@@ -217,7 +239,7 @@ class XIntentXlibClient:
         payload: dict,
         tx_id: int = 0,
         channel: int = 0,
-        control_word: int = 0,
+        control_word=None,
         data_blob: int = 0,
         sender_win_id=None,
     ) -> int:
@@ -239,18 +261,19 @@ class XIntentXlibClient:
         payload: dict,
         tx_id: int = 0,
         channel: int = 0,
-        control_word: int = 0,
+        control_word=None,
         data_blob: int = 0,
         sender_win_id=None,
     ) -> int:
         resolved_target = target_win_id or self.get_router_win_id()
         src_win_id = self._default_win_id(sender_win_id)
+        data_blob_int = self._coerce_blob_id(data_blob)
 
         payload_blob = self.blob_create(payload)
         if resolved_target != src_win_id:
             self.blob_transfer(payload_blob, resolved_target)
-            if data_blob:
-                self.blob_transfer(data_blob, resolved_target)
+            if data_blob_int:
+                self.blob_transfer(data_blob_int, resolved_target)
 
         tx_or_channel = channel if (channel and channel != 0) else (tx_id or 0)
         ctrl_word_to_send = _protocol.resolve_ctrl_word(control_word, tx_or_channel, payload)
@@ -258,7 +281,7 @@ class XIntentXlibClient:
         self.x11.send_client_message(
             resolved_target,
             message_type_atom,
-            [src_win_id, tx_or_channel, ctrl_word_to_send, payload_blob, data_blob],
+            [src_win_id, tx_or_channel, ctrl_word_to_send, payload_blob, data_blob_int],
         )
         return payload_blob
 
@@ -310,6 +333,18 @@ class XIntentXlibClient:
         valid_atoms = [int(self.atoms[k]) for k in ("XINTENT_INTENT_V0", "XINTENT_EVENT_V0") if k in self.atoms]
         if msg_type in valid_atoms:
             _protocol.handle_intent_client_message(self, atom_name, target_win_id, win_hex, event)
+        elif atom_name == "XBLOB_STREAM_CLOSED_V0":
+            data32 = _extract_event_data(event)
+            handler = self.window_handlers.get((target_win_id, atom_name)) or self.handlers.get(atom_name)
+            if handler and len(data32) >= 5:
+                handler({
+                    "event": atom_name,
+                    "sender": data32[0],
+                    "blob": data32[1],
+                    "host": data32[2],
+                    "size": (data32[4] << 32) | data32[3],
+                    "target_win": target_win_id,
+                })
         else:
             sys.stderr.write(f"[libxintent.py warning] Unhandled ClientMessage type '{atom_name}' ({msg_type}) on window {win_hex}\n")
             sys.stderr.flush()

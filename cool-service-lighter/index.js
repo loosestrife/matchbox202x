@@ -48,6 +48,7 @@ const ATOM_MAP_SPEC = {
   xaudioControlStreamAtom: 'XAUDIO_CONTROL_V0',
   xaudioSeekStreamAtom: 'XAUDIO_SEEK_STREAM_V0',
   xblobBroadcastAtom: 'XBLOB_BROADCAST_V0',
+  xblobStreamClosedAtom: 'XBLOB_STREAM_CLOSED_V0',
   xblobDestructorAtom: 'XBLOB_DESTRUCTOR_V0',
   xblobCreateResponseAtom: 'XBLOB_CREATE_RESPONSE_V0',
   xintentDataAtom: 'XINTENT_DATA',

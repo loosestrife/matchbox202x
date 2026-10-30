@@ -115,6 +115,9 @@ async function parseWindowLighterToml(wid) {
               wid,
               computer,
               packageName,
+              name: pkg.name,
+              description: pkg.description,
+              intents: pkg.intents,
               publicKeyHash,
             });
             updated = true;

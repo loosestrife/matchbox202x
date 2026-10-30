@@ -18,12 +18,24 @@ object SendIntentController {
 
     fun extractStreamUri(intent: Intent?): Uri? {
         if (intent == null) return null
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val singleUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
         } else {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra(Intent.EXTRA_STREAM)
         }
+        if (singleUri != null) return singleUri
+
+        val multiUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)?.firstOrNull()
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.firstOrNull()
+        }
+        if (multiUri != null) return multiUri
+
+        val clipUri = intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+        return clipUri ?: intent.data
     }
 
     suspend fun queryDisplayName(context: Context, uri: Uri?): String? {
@@ -94,7 +106,7 @@ object SendIntentController {
                             cursor.getString(nameIdx)?.takeIf { it.isNotBlank() }?.let { fileName = it }
                         }
                         val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
-                        if (sizeIdx != -1) fileSize = cursor.getLong(sizeIdx)
+                        if (sizeIdx != -1 && !cursor.isNull(sizeIdx)) fileSize = cursor.getLong(sizeIdx)
                     }
                 }
             } catch (_: Exception) {}
@@ -134,6 +146,83 @@ object SendIntentController {
             },
         )
         val msg = if (result.success) "Saved $name to $targetApp!" else "Failed to save $name: ${result.errorMessage}"
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    }
+
+    suspend fun performTranscodedUriShare(
+        context: Context,
+        uri: Uri,
+        mimeType: String,
+        target: XIntentClient.SendToTarget,
+        onProgress: (Float, String) -> Unit,
+    ) {
+        val (name, fileSize, actualType) = resolveFileDetails(context, uri, mimeType)
+        val inputStream = context.contentResolver.openInputStream(uri)
+        if (inputStream == null) {
+            Toast.makeText(context, "Failed to read file from URI", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val targetAccept = if (target.accept.isNotBlank() && target.accept != "*/*") {
+            target.accept
+        } else {
+            "video/mpeg; codecs=\"h264, aac\", video/mp4; codecs=\"h264, aac\""
+        }
+
+        val transcodeRes = XIntentDispatcher.sendMediaTranscodeIntent(
+            context = context,
+            name = name,
+            type = actualType,
+            size = fileSize,
+            dataType = "base64",
+            data = "",
+            targetAccept = targetAccept,
+            targetApp = "cool-transcoder",
+            inputStream = inputStream,
+            preferMinimal = true,
+            onUploadProgress = { written, total ->
+                val progress = if (total > 0) (written.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+                val mbWritten = written / (1024 * 1024)
+                val mbTotal = total / (1024 * 1024)
+                onProgress(progress, "Uploading $name (${mbWritten}MB / ${mbTotal}MB)...")
+            },
+            onTranscodeProgress = { pct ->
+                onProgress(pct, "Transcoding $name: ${(pct * 100).toInt()}%...")
+            },
+        )
+        if (!transcodeRes.success) {
+            Toast.makeText(context, "Transcode failed: ${transcodeRes.errorMessage}", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val resJson = XIntentProtocolParser.extractJsonObjects(transcodeRes.responseBody).lastOrNull()
+        val rawBlobId = transcodeRes.attachedBlobId.takeIf { it.isNotBlank() }
+        val transcodedUrl = resJson?.optString("url", "").orEmpty()
+        val transcodedMime = resJson?.optString("mimeType", actualType) ?: actualType
+
+        if (rawBlobId.isNullOrBlank() && transcodedUrl.isBlank()) {
+            Toast.makeText(context, "Transcode failed: No blob ID returned", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        onProgress(1f, "Sending transcoded Blob ${rawBlobId ?: ""} to ${target.name}...")
+        val playRes = XIntentDispatcher.sendMediaPlayIntent(
+            context = context,
+            name = name,
+            type = transcodedMime,
+            size = 0L,
+            dataType = if (rawBlobId.isNullOrBlank()) "url" else "",
+            data = if (rawBlobId.isNullOrBlank()) transcodedUrl else "",
+            targetApp = target.appId,
+            title = name,
+            dataBlob = rawBlobId,
+            xblobType = if (!rawBlobId.isNullOrBlank()) "Blob" else null,
+        )
+        val msg = if (playRes.success) {
+            "Playing transcoded $name on ${target.name}!"
+        } else {
+            "Failed to play transcoded $name: ${playRes.errorMessage}"
+        }
         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
     }
 

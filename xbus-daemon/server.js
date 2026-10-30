@@ -38,6 +38,7 @@ function buildDispatchAtomsMap() {
     XBLOB_UNLINK_V0: xblob.handleXBlobUnlinkV0,
     XBLOB_TRANSFER_V0: xblob.handleXBlobTransferV0,
     XBLOB_BROADCAST_V0: xblob.handleXBlobBroadcastV0,
+    XBLOB_STREAM_CLOSED_V0: xblob.handleXBlobStreamClosedV0,
     XBLOB_SOFT_LINK_V0: xblob.handleXBlobSoftLinkV0,
     XBLOB_SOFT_UNLINK_V0: xblob.handleXBlobSoftUnlinkV0,
     XBLOB_ANNOUNCE_HOST_V0: xblob.handleXBlobAnnounceHostV0,
@@ -141,13 +142,19 @@ async function processDispatchedClientMessage(ev, msgTypeName, handler) {
   applySecurityDecision(securityPolicy, handler, parsed);
 }
 
-function handleRouterClientMessage(ev, dispatchTable, enqueueClientTask) {
+async function handleRouterClientMessage(ev, dispatchTable, enqueueClientTask) {
   const { atoms, widString } = xintent;
-  const msgTypeName = Object.keys(atoms).find((name) => atoms[name] === ev.message_type) ?? ev.message_type;
+  let msgTypeName = Object.keys(atoms).find((name) => atoms[name] === ev.message_type);
+  if (!msgTypeName) {
+    try {
+      msgTypeName = await daemon.X.GetAtomName(ev.message_type);
+    } catch (_) {}
+  }
+  msgTypeName = msgTypeName || ev.message_type;
   logger.info(`got ClientMessage type ${msgTypeName} sequence number ${ev.seq}`);
 
   if (!(ev.message_type in dispatchTable)) {
-    logger.warn('unknown message type', ev);
+    logger.warn(`unknown message type ${msgTypeName}`, ev);
     return;
   }
 

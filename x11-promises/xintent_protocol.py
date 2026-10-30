@@ -117,15 +117,6 @@ def _read_existing_socket_prop(client, win_id: int, socket_path_atom: int):
 
 
 def resolve_xblob_socket_path(client, host_win_id: int = 0):
-    cached = getattr(client, "_cached_xblob_socket_path", None)
-    if cached and os.path.exists(cached):
-        return cached
-
-    env_sock = os.environ.get("XBLOB_SOCKET_PATH")
-    if env_sock and os.path.exists(env_sock):
-        client._cached_xblob_socket_path = env_sock
-        return env_sock
-
     socket_path_atom = client.x11.intern_atom("XBLOB_SOCKET_PATH")
     from_arg = _read_existing_socket_prop(client, host_win_id, socket_path_atom)
     if from_arg:
@@ -134,13 +125,27 @@ def resolve_xblob_socket_path(client, host_win_id: int = 0):
     hostname = socket.gethostname()
     host_id = client.x11.get_selection_owner(client.x11.intern_atom(f"XBLOB_HOST_{hostname}"))
     if not host_id:
+        host_id = client.x11.get_selection_owner(client.x11.intern_atom("XBLOB_X_SERVER_LOCAL_BLOB_HOST"))
+    if not host_id:
         host_id = client.x11.get_selection_owner(client.x11.intern_atom("XBLOB_HOST"))
-    return _read_existing_socket_prop(client, host_id, socket_path_atom)
+    from_owner = _read_existing_socket_prop(client, host_id, socket_path_atom)
+    if from_owner:
+        return from_owner
+
+    env_sock = os.environ.get("XBLOB_SOCKET_PATH")
+    if env_sock and os.path.exists(env_sock):
+        client._cached_xblob_socket_path = env_sock
+        return env_sock
+
+    cached = getattr(client, "_cached_xblob_socket_path", None)
+    if cached and os.path.exists(cached):
+        return cached
+    return None
 
 
-def resolve_ctrl_word(control_word: int, tx_or_channel: int, payload: dict) -> int:
-    if control_word:
-        return control_word
+def resolve_ctrl_word(control_word, tx_or_channel: int, payload: dict) -> int:
+    if control_word is not None:
+        return int(control_word)
     if not tx_or_channel:
         return 0
     return 2 if payload.get("disposition") in ("final", "error") else 1

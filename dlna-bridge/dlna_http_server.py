@@ -80,15 +80,74 @@ async def _read_http_request(reader: asyncio.StreamReader) -> Optional[Tuple[str
     return method, path_str, headers
 
 
-def _build_dlna_features(clean_mime: str, seekable: bool) -> str:
+def _build_dlna_features(clean_mime: str, seekable: bool, is_transcoded: bool = False) -> str:
     op = "01" if seekable else "00"
-    features = f"DLNA.ORG_OP={op};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    ci = "1" if is_transcoded else "0"
+    features = f"DLNA.ORG_OP={op};DLNA.ORG_CI={ci};DLNA.ORG_FLAGS=01700000000000000000000000000000"
     if clean_mime == "video/mp4":
         return "DLNA.ORG_PN=AVC_MP4_MP_SD_AAC;" + features
     return features
 
 
+async def _stream_live_readable_stream_fd(val: int, clean_mime: str, filename: str, method: str, writer: asyncio.StreamWriter) -> None:
+    file_size = await _wait_for_initial_stream_bytes(val)
+    dlna_features = _build_dlna_features(clean_mime, seekable=False, is_transcoded=True)
+    logger.info(
+        f"[HTTP Media Response] {method} '{filename}' (ReadableStream fd {val}) -> HTTP/1.1 200 OK, "
+        f"asked: continuous live stream, file_size: {file_size} bytes"
+    )
+    res_headers = [
+        "HTTP/1.1 200 OK",
+        f"Content-Type: {clean_mime}",
+        "Accept-Ranges: none",
+        f"contentFeatures.dlna.org: {dlna_features}",
+        "transferMode.dlna.org: Streaming",
+        f'Content-Disposition: inline; filename="{filename}"',
+        "Connection: close",
+        "\r\n",
+    ]
+    writer.write("\r\n".join(res_headers).encode("utf-8"))
+    await writer.drain()
+
+    if method.upper() == "HEAD":
+        return
+
+    offset = 0
+    bytes_sent = 0
+    idle_ticks = 0
+    try:
+        while True:
+            chunk = os.pread(val, 65536, offset)
+            if chunk:
+                writer.write(chunk)
+                await writer.drain()
+                offset += len(chunk)
+                bytes_sent += len(chunk)
+                idle_ticks = 0
+            else:
+                await asyncio.sleep(0.05)
+                idle_ticks += 1
+                if idle_ticks >= 12:
+                    break
+    except Exception:
+        pass
+    finally:
+        try:
+            fd_size = os.fstat(val).st_size
+        except Exception:
+            fd_size = file_size
+        logger.info(
+            f"Streamed '{filename}' from ReadableStream fd {val} -> sent: {bytes_sent} bytes, "
+            f"asked: continuous live stream, file_size: {fd_size} bytes"
+        )
+
+
 async def _stream_pipe_fd(val: int, clean_mime: str, filename: str, method: str, writer: asyncio.StreamWriter) -> None:
+    try:
+        pipe_size = os.fstat(val).st_size
+    except Exception:
+        pipe_size = 0
+    logger.info(f"[HTTP Media Response] {method} '{filename}' (pipe fd {val}) -> 200 OK, file_size: {pipe_size} bytes")
     dlna_features = _build_dlna_features(clean_mime, seekable=False)
     res_headers = [
         "HTTP/1.1 200 OK",
@@ -117,7 +176,7 @@ async def _stream_pipe_fd(val: int, clean_mime: str, filename: str, method: str,
             bytes_sent += len(chunk)
         except Exception:
             break
-    logger.info(f"Streamed '{filename}' from pipe fd {val} -> sent: {bytes_sent} bytes")
+    logger.info(f"Streamed '{filename}' from pipe fd {val} -> sent: {bytes_sent} bytes, file_size: {pipe_size} bytes")
 
 
 def _parse_range_header(range_header: Optional[str], file_size: int) -> Tuple[int, int, bool]:
@@ -143,48 +202,62 @@ def _parse_range_header(range_header: Optional[str], file_size: int) -> Tuple[in
     return start_byte, end_byte, is_open_ended
 
 
-async def _read_pread_chunk_with_wait(val: int, chunk_max: int, offset: int, is_open_ended: bool, stuck_count: int) -> Tuple[bytes, int]:
+async def _read_pread_chunk_with_wait(val: int, chunk_max: int, offset: int, stuck_count: int) -> Tuple[bytes, int]:
     chunk = os.pread(val, chunk_max, offset)
-    if chunk or not is_open_ended:
+    if chunk:
         return chunk, 0
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.05)
     chunk = os.pread(val, chunk_max, offset)
     if chunk:
         return chunk, 0
     return b"", stuck_count + 1
 
 
-async def _stream_seekable_fd_chunks(val: int, start_byte: int, content_len: int, is_open_ended: bool, writer: asyncio.StreamWriter) -> int:
+async def _stream_seekable_fd_chunks(val: int, start_byte: int, content_len: int, writer: asyncio.StreamWriter) -> int:
     offset = start_byte
     bytes_sent = 0
     stuck_count = 0
-    while is_open_ended or (bytes_sent < content_len):
-        chunk_max = 65536 if is_open_ended else min(65536, content_len - bytes_sent)
-        chunk, stuck_count = await _read_pread_chunk_with_wait(val, chunk_max, offset, is_open_ended, stuck_count)
-        if not chunk:
-            if is_open_ended and stuck_count <= 30:
-                continue
-            break
-        writer.write(chunk)
-        await writer.drain()
-        offset += len(chunk)
-        bytes_sent += len(chunk)
+    try:
+        while bytes_sent < content_len:
+            chunk_max = min(65536, content_len - bytes_sent)
+            chunk, stuck_count = await _read_pread_chunk_with_wait(val, chunk_max, offset, stuck_count)
+            if not chunk:
+                if stuck_count <= 20:
+                    continue
+                break
+            writer.write(chunk)
+            await writer.drain()
+            offset += len(chunk)
+            bytes_sent += len(chunk)
+    except Exception:
+        pass
     return bytes_sent
 
 
-async def _stream_seekable_fd(val: int, clean_mime: str, filename: str, method: str, headers: Dict[str, str], writer: asyncio.StreamWriter) -> None:
+async def _wait_for_initial_stream_bytes(val: int) -> int:
+    prev_size = -1
     for _ in range(30):
-        if os.fstat(val).st_size >= 1024:
-            break
+        cur_size = os.fstat(val).st_size
+        if cur_size >= 262144 or (cur_size > 0 and cur_size == prev_size):
+            return cur_size
+        prev_size = cur_size
         await asyncio.sleep(0.05)
+    return os.fstat(val).st_size
 
-    file_size = os.fstat(val).st_size
+
+async def _stream_seekable_fd(val: int, clean_mime: str, filename: str, method: str, headers: Dict[str, str], writer: asyncio.StreamWriter) -> None:
+    file_size = await _wait_for_initial_stream_bytes(val)
     range_header = headers.get("range")
     start_byte, end_byte, is_open_ended = _parse_range_header(range_header, file_size)
     content_len = max(0, end_byte - start_byte + 1)
 
     status_line = "HTTP/1.1 206 Partial Content" if range_header else "HTTP/1.1 200 OK"
     dlna_features = _build_dlna_features(clean_mime, seekable=True)
+    asked_str = f"range {start_byte}-{end_byte} ({content_len} bytes)" if not is_open_ended else f"range {start_byte}-EOF (open-ended, initial {content_len} bytes)"
+    logger.info(
+        f"[HTTP Media Response] {method} '{filename}' (fd {val}) -> {status_line}, "
+        f"asked: {asked_str}, file_size: {file_size} bytes"
+    )
 
     res_headers = [
         status_line,
@@ -208,17 +281,18 @@ async def _stream_seekable_fd(val: int, clean_mime: str, filename: str, method: 
     if method.upper() == "HEAD":
         return
 
-    bytes_sent = await _stream_seekable_fd_chunks(val, start_byte, content_len, is_open_ended, writer)
+    bytes_sent = await _stream_seekable_fd_chunks(val, start_byte, content_len, writer)
     fd_size = os.fstat(val).st_size
-    asked_str = f"range {start_byte}-{end_byte} ({content_len} bytes)" if not is_open_ended else f"range {start_byte}-EOF (open-ended)"
-    logger.info(f"Streamed '{filename}' from fd {val} -> sent: {bytes_sent} bytes, asked: {asked_str}, fd_size: {fd_size} bytes")
+    logger.info(f"Streamed '{filename}' from fd {val} -> sent: {bytes_sent} bytes, asked: {asked_str}, file_size: {fd_size} bytes")
 
 
-async def _stream_fd_item(val: int, mime_type: str, filename: str, method: str, headers: Dict[str, str], writer: asyncio.StreamWriter) -> None:
+async def _stream_fd_item(val: int, mime_type: str, filename: str, method: str, headers: Dict[str, str], writer: asyncio.StreamWriter, is_live_stream: bool = False) -> None:
     try:
         clean_mime = mime_type.split(";")[0].strip().lower()
         if is_fd_pipe_or_socket(val):
             await _stream_pipe_fd(val, clean_mime, filename, method, writer)
+        elif is_live_stream:
+            await _stream_live_readable_stream_fd(val, clean_mime, filename, method, writer)
         else:
             await _stream_seekable_fd(val, clean_mime, filename, method, headers, writer)
     except Exception as e:
@@ -230,6 +304,7 @@ async def _stream_fd_item(val: int, mime_type: str, filename: str, method: str, 
 async def _stream_file_path_item(file_path: str, mime_type: str, filename: str, method: str, writer: asyncio.StreamWriter) -> None:
     try:
         file_size = os.path.getsize(file_path)
+        logger.info(f"[HTTP Media Response] {method} '{filename}' ('{file_path}') -> HTTP/1.1 200 OK, file_size: {file_size} bytes")
         res_headers = [
             "HTTP/1.1 200 OK",
             f"Content-Type: {mime_type}",
@@ -250,7 +325,7 @@ async def _stream_file_path_item(file_path: str, mime_type: str, filename: str, 
                         break
                     writer.write(chunk)
                     await writer.drain()
-            logger.info(f"Streamed '{filename}' (0-{file_size} bytes) from fd to DLNA renderer")
+            logger.info(f"Streamed '{filename}' (0-{file_size} bytes, file_size: {file_size} bytes) from '{file_path}' to DLNA renderer")
     except Exception as e:
         logger.error(f"Error streaming file descriptor '{file_path}': {e}")
     finally:
@@ -259,10 +334,12 @@ async def _stream_file_path_item(file_path: str, mime_type: str, filename: str, 
 
 async def _stream_bytes_item(val: object, mime_type: str, filename: str, writer: asyncio.StreamWriter) -> None:
     data_bytes = val if isinstance(val, (bytes, bytearray)) else str(val).encode("utf-8")
+    file_size = len(data_bytes)
+    logger.info(f"[HTTP Media Response] '{filename}' (in-memory) -> HTTP/1.1 200 OK, file_size: {file_size} bytes")
     res_headers = [
         "HTTP/1.1 200 OK",
         f"Content-Type: {mime_type}",
-        f"Content-Length: {len(data_bytes)}",
+        f"Content-Length: {file_size}",
         "Accept-Ranges: bytes",
         f'Content-Disposition: inline; filename="{filename}"',
         "Connection: close",
@@ -305,9 +382,10 @@ async def serve_http_media_request(hosted_files: Dict[str, Tuple[object, str, st
             await _send_not_found(writer, with_body=False)
             return
 
-        val, mime_type, filename = item
+        val, mime_type, filename = item[0], item[1], item[2]
+        is_live_stream = bool(item[3]) if len(item) > 3 else False
         if isinstance(val, int):
-            await _stream_fd_item(val, mime_type, filename, method, headers, writer)
+            await _stream_fd_item(val, mime_type, filename, method, headers, writer, is_live_stream=is_live_stream)
         elif isinstance(val, str) and (os.path.isfile(val) or val.startswith("/proc/")):
             await _stream_file_path_item(val, mime_type, filename, method, writer)
         else:

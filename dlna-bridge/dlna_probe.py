@@ -36,8 +36,8 @@ CONTAINER_DEFAULTS: Dict[str, Set[str]] = {
 }
 
 PRIORITY_CONTAINERS = [
-    "video/mp4", "video/x-msvideo", "video/avi", "video/x-mkv",
-    "video/webm", "video/hevc", "video/x-ms-wmv", "video/mpeg"
+    "video/mpeg", "video/vnd.dlna.mpeg-tts", "video/mp4", "video/x-msvideo",
+    "video/avi", "video/x-mkv", "video/webm", "video/hevc", "video/x-ms-wmv"
 ]
 
 PROFILE_CODEC_RULES: List[Tuple[Tuple[str, ...], List[str]]] = [
@@ -181,7 +181,7 @@ class DLNADevice:
         self.av_transport_control_url = ""
         self.connection_manager_control_url = ""
         self.supported_mime_types: Set[str] = set()
-        self.accept_header_val = 'video/mp4; codecs="h264, aac", video/webm; codecs="vp8, vorbis", text/plain'
+        self.accept_header_val = 'video/mpeg; codecs="h264, aac", video/mp4; codecs="h264, aac", video/webm; codecs="vp8, vorbis", text/plain'
         self.xintent_client = None
         self.xintent_win_id: Optional[int] = None
 

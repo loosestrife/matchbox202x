@@ -84,17 +84,24 @@ class SendIntentActivity : ComponentActivity() {
         var isUploading by remember { mutableStateOf(false) }
         var uploadProgress by remember { mutableStateOf(0f) }
         var uploadStatusText by remember { mutableStateOf("") }
+        val coroutineScope = rememberCoroutineScope()
+
+        fun refreshTargets() {
+            coroutineScope.launch {
+                isLoading = true
+                val (fetchedTargets, err) = SendIntentController.fetchSendToTargets(applicationContext)
+                targets = fetchedTargets
+                statusMessage = err
+                isLoading = false
+            }
+        }
 
         LaunchedEffect(streamUri) {
             SendIntentController.queryDisplayName(this@SendIntentActivity, streamUri)?.let { fileName = it }
         }
 
         LaunchedEffect(Unit) {
-            isLoading = true
-            val (fetchedTargets, err) = SendIntentController.fetchSendToTargets(applicationContext)
-            targets = fetchedTargets
-            statusMessage = err
-            isLoading = false
+            refreshTargets()
         }
 
         Scaffold(
@@ -102,7 +109,7 @@ class SendIntentActivity : ComponentActivity() {
                 TopAppBar(
                     title = {
                         Column {
-                            Text("Send to XIntent Desktop", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text("Flammenwerfer Send To", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Text(
                                 if (streamUri != null) "File: $fileName ($mimeType)" else "Text Attachment",
                                 style = MaterialTheme.typography.bodySmall,
@@ -125,20 +132,29 @@ class SendIntentActivity : ComponentActivity() {
                     else -> DestinationListContent(
                         statusMessage = statusMessage,
                         targets = targets,
+                        isMediaAttachment = streamUri != null && (mimeType.startsWith("video/") || mimeType.startsWith("audio/")),
+                        onRefresh = { refreshTargets() },
                         onDismiss = onDismiss,
-                        onSelectTarget = { appId ->
+                        onSelectTarget = { target, transcodeFirst ->
                             if (streamUri != null) {
                                 isUploading = true
-                                uploadStatusText = "Preparing upload..."
+                                uploadStatusText = if (transcodeFirst) "Preparing transcode..." else "Preparing upload..."
                                 lifecycleScope.launch {
-                                    SendIntentController.performUriShare(applicationContext, streamUri, mimeType, appId) { prog, text ->
-                                        uploadProgress = prog
-                                        uploadStatusText = text
+                                    if (transcodeFirst) {
+                                        SendIntentController.performTranscodedUriShare(applicationContext, streamUri, mimeType, target) { prog, text ->
+                                            uploadProgress = prog
+                                            uploadStatusText = text
+                                        }
+                                    } else {
+                                        SendIntentController.performUriShare(applicationContext, streamUri, mimeType, target.appId) { prog, text ->
+                                            uploadProgress = prog
+                                            uploadStatusText = text
+                                        }
                                     }
                                     finish()
                                 }
                             } else {
-                                onTargetSelected(appId)
+                                onTargetSelected(target.appId)
                             }
                         },
                     )
@@ -171,7 +187,7 @@ private fun LoadingDestinationsBox() {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator()
             Spacer(modifier = Modifier.height(16.dp))
-            Text("Discovering active desktop destinations (/api/tags)...")
+            Text("Discovering active fs.SendTo destinations (/api/tags)...")
         }
     }
 }
@@ -180,8 +196,10 @@ private fun LoadingDestinationsBox() {
 private fun ColumnScope.DestinationListContent(
     statusMessage: String?,
     targets: List<XIntentClient.SendToTarget>,
+    isMediaAttachment: Boolean,
+    onRefresh: () -> Unit,
     onDismiss: () -> Unit,
-    onSelectTarget: (String) -> Unit,
+    onSelectTarget: (XIntentClient.SendToTarget, Boolean) -> Unit,
 ) {
     statusMessage?.let { msg ->
         Text(
@@ -191,25 +209,50 @@ private fun ColumnScope.DestinationListContent(
             modifier = Modifier.padding(bottom = 12.dp),
         )
     }
-    Text(
-        text = "Select Destination App:",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(bottom = 8.dp),
-    )
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Select fs.SendTo Target:",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        OutlinedButton(onClick = onRefresh) {
+            Text("Refresh")
+        }
+    }
     LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(targets) { target ->
             Card(
-                modifier = Modifier.fillMaxWidth().clickable { onSelectTarget(target.appId) },
+                modifier = Modifier.fillMaxWidth().clickable { onSelectTarget(target, false) },
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(target.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Target ID: ${target.appId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    if (target.description.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(target.description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(target.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Target ID: ${target.appId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        if (target.description.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(target.description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    if (isMediaAttachment && target.supportsMediaPlay) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalAlignment = Alignment.End) {
+                            Button(onClick = { onSelectTarget(target, false) }) {
+                                Text("Send / Live")
+                            }
+                            OutlinedButton(onClick = { onSelectTarget(target, true) }) {
+                                Text("Transcode")
+                            }
+                        }
                     }
                 }
             }

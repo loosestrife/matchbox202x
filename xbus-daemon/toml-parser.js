@@ -15,6 +15,19 @@ function addAppToIntent(aggregate, intentName, appName) {
   }
 }
 
+function mergeAppMetadata(aggregate, appName, meta = {}, intents = {}) {
+  if (!appName) return;
+  if (!aggregate.apps) aggregate.apps = {};
+  const existing = aggregate.apps[appName] || {};
+  const mergedIntents = { ...(existing.intents || {}), ...(intents || {}) };
+  const name = (meta.name && meta.name !== appName) ? meta.name : (existing.name || meta.name || appName);
+  const description = meta.description || existing.description || '';
+  const appEntry = { name };
+  if (description) appEntry.description = description;
+  if (Object.keys(mergedIntents).length > 0) appEntry.intents = mergedIntents;
+  aggregate.apps[appName] = appEntry;
+}
+
 function recordAudioObjectEntry(sectionObj, item, appName, wid) {
   const sinkName = item.name || item.id;
   const widField = wid ? { wid: widString(wid) } : {};
@@ -52,6 +65,7 @@ function collectWindowEntries(aggregate, windowRegistry) {
     for (const intentName of Object.keys(matchboxToml.intents || {})) {
       addAppToIntent(aggregate, intentName, appName);
     }
+    mergeAppMetadata(aggregate, appName, matchboxToml.app || {}, matchboxToml.intents || {});
     processAudioSection(aggregate, 'XAudioSink', matchboxToml.XAudioSink, appName, wid);
     processAudioSection(aggregate, 'XAudioSource', matchboxToml.XAudioSource, appName, wid);
   }
@@ -60,7 +74,14 @@ function collectWindowEntries(aggregate, windowRegistry) {
 function collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry) {
   for (const [intentName, entries] of Object.entries(lighterRegistry)) {
     for (const entry of entries) {
-      addAppToIntent(aggregate, intentName, entry.packageName || entry.package);
+      const appName = entry.packageName || entry.package;
+      addAppToIntent(aggregate, intentName, appName);
+      mergeAppMetadata(
+        aggregate,
+        appName,
+        { name: entry.name, description: entry.description },
+        entry.intents || { [intentName]: true },
+      );
     }
   }
   for (const [pakName, entry] of Object.entries(lighterAudioRegistry)) {
@@ -70,9 +91,9 @@ function collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry)
 }
 
 async function updateAggregateToml({ windowRegistry, lighterRegistry, lighterAudioRegistry }) {
-  const aggregate = { intents: {} };
-  collectWindowEntries(aggregate, windowRegistry);
+  const aggregate = { intents: {}, apps: {} };
   collectLighterEntries(aggregate, lighterRegistry, lighterAudioRegistry);
+  collectWindowEntries(aggregate, windowRegistry);
 
   const aggregateAtom = atoms.AGGREGATE_TOML || atoms.XINTENT_AGGREGATE_TOML;
   if (!aggregateAtom || !routerWin) return;

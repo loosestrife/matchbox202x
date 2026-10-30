@@ -19,7 +19,7 @@ import os
 from typing import Optional, Tuple
 
 from dlna_media_manager import DLNADevice, DLNAMediaManager
-from xintent_bridge import X11DeviceManager, ensure_readable_fd
+from xintent_bridge import X11DeviceManager, ensure_readable_fd, is_readable_stream_blob
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,25 +61,53 @@ def _send_fin_response_if_needed(dev: DLNADevice, event_name: str, tx_id: int, s
         logger.debug(f"Error sending FIN response for {event_name}: {ex_resp}")
 
 
+def _coerce_blob_id(val) -> int:
+    if val is None:
+        return 0
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if not s or s == "null":
+            return 0
+        try:
+            return int(s, 16) if s.startswith("0x") else int(s, 0)
+        except ValueError:
+            return 0
+    return int(val)
+
+
 def _unlink_incoming_blob(dev: DLNADevice, data_blob_id: Optional[int], was_transcoded: bool) -> None:
-    if was_transcoded or not data_blob_id or not dev.xintent_client or not hasattr(dev.xintent_client, "blob_unlink"):
+    blob_id_int = _coerce_blob_id(data_blob_id)
+    if was_transcoded or not blob_id_int or not dev.xintent_client or not hasattr(dev.xintent_client, "blob_unlink"):
         return
     try:
-        dev.xintent_client.blob_unlink(data_blob_id, win_id=dev.xintent_win_id)
-        logger.info(f"Unlinked incoming XBlob {hex(data_blob_id)} after intent handling completed")
+        dev.xintent_client.blob_unlink(blob_id_int, win_id=dev.xintent_win_id)
+        logger.info(f"Unlinked incoming XBlob {hex(blob_id_int)} after intent handling completed")
     except Exception as ex_u:
-        logger.debug(f"XBlobUnlink error for blob {hex(data_blob_id)}: {ex_u}")
+        logger.debug(f"XBlobUnlink error for blob {hex(blob_id_int)}: {ex_u}")
+
+
+def _should_accept_readable_stream(payload: dict) -> bool:
+    if payload.get("acceptReadableStream") is False or payload.get("xblobType") == "Blob":
+        return False
+    inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    if inner.get("acceptReadableStream") is False or inner.get("xblobType") == "Blob":
+        return False
+    return True
 
 
 def _extract_send_to_raw_blob(dev: DLNADevice, payload: dict, data_blob_id: Optional[int], name: str) -> Optional[dict]:
-    if data_blob_id and dev.xintent_client and hasattr(dev.xintent_client, "blob_read"):
+    blob_id_int = _coerce_blob_id(data_blob_id)
+    if blob_id_int and dev.xintent_client and hasattr(dev.xintent_client, "blob_read"):
         try:
-            raw_blob = dev.xintent_client.blob_read(data_blob_id)
-            logger.info(f"Read XBlob {hex(data_blob_id)} for fs.SendTo")
+            accept_stream = _should_accept_readable_stream(payload)
+            raw_blob = dev.xintent_client.blob_read(blob_id_int, receive_fd=True, accept_readable_stream=accept_stream)
+            logger.info(f"Read XBlob {hex(blob_id_int)} (xblobType={raw_blob.get('xblobType') if isinstance(raw_blob, dict) else 'unknown'}, accept_readable_stream={accept_stream}) for fs.SendTo")
             if raw_blob:
                 return raw_blob
         except Exception as ex:
-            logger.error(f"Error reading XBlob {data_blob_id} for fs.SendTo: {ex}")
+            logger.error(f"Error reading XBlob {blob_id_int} for fs.SendTo: {ex}")
 
     blob = payload.get("payload") or payload.get("blob") or {}
     if isinstance(blob, dict) and blob:
@@ -159,8 +187,8 @@ class DLNAXIntentBridgeDaemon:
 
     async def handle_send_to_intent(self, app_id: str, payload: dict):
         dev = self.media_mgr.devices.get(app_id)
-        data_blob_id = payload.get("dataBlob") or payload.get("data_blob")
-        logger.info(f"handle_send_to_intent START for app_id '{app_id}' (device: '{dev.friendly_name if dev else 'NOT FOUND'}', dataBlob: {hex(data_blob_id) if data_blob_id else 'None'})")
+        data_blob_id = _coerce_blob_id(payload.get("data_blob"))
+        logger.info(f"handle_send_to_intent START for app_id '{app_id}' (device: '{dev.friendly_name if dev else 'NOT FOUND'}', data_blob: {hex(data_blob_id) if data_blob_id else 'None'})")
         if not dev:
             logger.error(f"Device for app '{app_id}' NOT FOUND in media_mgr.devices! Registered devices: {list(self.media_mgr.devices.keys())}")
             return
@@ -178,37 +206,40 @@ class DLNAXIntentBridgeDaemon:
 
         try:
             logger.info("handle_send_to_intent: Resolving raw_blob via ensure_readable_fd()...")
+            is_live_stream = is_readable_stream_blob(raw_blob)
             fd, mime_type, file_name = ensure_readable_fd(raw_blob)
             if name and name != "media_payload":
                 file_name = name
 
-            logger.info(f"handle_send_to_intent: Resolved readable fd {fd} ('{file_name}', {mime_type}) for '{dev.friendly_name}'. Calling play_media()...")
+            logger.info(f"handle_send_to_intent: Resolved readable fd {fd} ('{file_name}', {mime_type}, is_live_stream={is_live_stream}) for '{dev.friendly_name}'. Calling play_media()...")
             was_transcoded = False
             try:
-                was_transcoded = await self.media_mgr.play_media(app_id, fd, mime_type, file_name, tx_id=tx_id, x11_client=dev.xintent_client, data_blob_id=data_blob_id)
+                was_transcoded = await self.media_mgr.play_media(app_id, fd, mime_type, file_name, tx_id=tx_id, x11_client=dev.xintent_client, data_blob_id=data_blob_id, is_live_stream=is_live_stream)
                 logger.info(f"handle_send_to_intent: play_media completed for '{dev.friendly_name}' (was_transcoded: {was_transcoded})")
             finally:
                 _unlink_incoming_blob(dev, data_blob_id, bool(was_transcoded))
         except Exception as ex_st:
             logger.error(f"Unhandled error in handle_send_to_intent for '{dev.friendly_name}': {ex_st}", exc_info=True)
 
-    async def _play_from_xblob(self, app_id: str, dev: DLNADevice, data_blob_id: int, title: str, tx_id: int, sender_win: int, channel_id: int, is_syn: bool) -> bool:
+    async def _play_from_xblob(self, app_id: str, dev: DLNADevice, data_blob_id: int, title: str, tx_id: int, sender_win: int, channel_id: int, is_syn: bool, accept_stream: bool = True) -> bool:
         if not dev.xintent_client or not hasattr(dev.xintent_client, "blob_read"):
             return False
+        blob_id_int = _coerce_blob_id(data_blob_id)
         try:
-            raw_blob = dev.xintent_client.blob_read(data_blob_id)
+            raw_blob = dev.xintent_client.blob_read(blob_id_int, receive_fd=True, accept_readable_stream=accept_stream)
             _send_fin_response_if_needed(dev, "media.PlayResponseV0", tx_id, sender_win, channel_id, is_syn)
             if not raw_blob:
                 return False
+            is_live_stream = is_readable_stream_blob(raw_blob)
             fd, mime_type, _ = ensure_readable_fd(raw_blob)
             was_transcoded = False
             try:
-                was_transcoded = await self.media_mgr.play_media(app_id, fd, mime_type, title, tx_id=tx_id, x11_client=dev.xintent_client, data_blob_id=data_blob_id)
+                was_transcoded = await self.media_mgr.play_media(app_id, fd, mime_type, title, tx_id=tx_id, x11_client=dev.xintent_client, data_blob_id=blob_id_int, is_live_stream=is_live_stream)
             finally:
-                _unlink_incoming_blob(dev, data_blob_id, bool(was_transcoded))
+                _unlink_incoming_blob(dev, blob_id_int, bool(was_transcoded))
             return True
         except Exception as ex:
-            logger.error(f"Error reading XBlob {data_blob_id} for media.Play: {ex}")
+            logger.error(f"Error reading XBlob {blob_id_int} for media.Play: {ex}")
             return False
 
     async def handle_play_intent(self, app_id: str, payload: dict):
@@ -218,13 +249,15 @@ class DLNAXIntentBridgeDaemon:
             return
 
         tx_id, sender_win, channel_id, is_syn = _is_syn_channel_request(payload)
-        media_url = payload.get("url") or payload.get("uri") or payload.get("data")
-        mime_type = payload.get("mimeType") or "video/mp4"
-        title = payload.get("title") or "XIntent Media Stream"
-        data_blob_id = payload.get("dataBlob") or payload.get("data_blob")
+        inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        media_url = payload.get("url") or payload.get("uri") or payload.get("data") or inner.get("url") or inner.get("uri") or inner.get("data")
+        mime_type = payload.get("mimeType") or inner.get("mimeType") or "video/mp4"
+        title = payload.get("title") or inner.get("title") or "XIntent Media Stream"
+        data_blob_id = _coerce_blob_id(payload.get("data_blob"))
+        accept_stream = _should_accept_readable_stream(payload)
 
         if not media_url and data_blob_id:
-            if await self._play_from_xblob(app_id, dev, data_blob_id, title, tx_id, sender_win, channel_id, is_syn):
+            if await self._play_from_xblob(app_id, dev, data_blob_id, title, tx_id, sender_win, channel_id, is_syn, accept_stream=accept_stream):
                 return
 
         blob = payload.get("blob")

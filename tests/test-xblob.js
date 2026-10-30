@@ -11,6 +11,7 @@ const {
   handleXBlobUnlinkV0,
   handleXBlobTransferV0,
   handleXBlobBroadcastV0,
+  handleXBlobStreamClosedV0,
   handleXBlobSoftLinkV0,
   handleXBlobSoftUnlinkV0,
   handleXBlobAnnounceHostV0,
@@ -109,6 +110,27 @@ async function runUnitTests() {
 
     await handleXBlobBroadcastV0.accept({ senderWin: 0x100001, blobId: testBlobId, host: 0x200003, version: 1 });
     assert(xblobRegistry[testBlobId].hosts.includes(0x200003), 'Broadcasting host 0x200003 should be registered in hosts');
+    console.log('  -> PASS');
+  }
+
+  // Test 4b: handleXBlobStreamClosedV0 updates size and host in registry
+  {
+    console.log('[Test 4b] XBlobStreamClosed size & host tracking');
+    const testBlobId = 0x30003b;
+    xblobRegistry[testBlobId] = {
+      links: [0x100001, 0x100002],
+      softLinks: [],
+      hosts: [0x200001],
+    };
+
+    const parsed = handleXBlobStreamClosedV0.parse({
+      wid: 0x500001,
+      data: [0x200004, testBlobId, 0x200004, 258805312, 0],
+    });
+    assert.strictEqual(parsed.size, 258805312);
+    await handleXBlobStreamClosedV0.accept(parsed);
+    assert.strictEqual(xblobRegistry[testBlobId].size, 258805312);
+    assert(xblobRegistry[testBlobId].hosts.includes(0x200004), 'StreamClosed host 0x200004 should be registered in hosts');
     console.log('  -> PASS');
   }
 

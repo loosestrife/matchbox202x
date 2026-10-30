@@ -53,6 +53,8 @@ name = "user-phone:flammenwerfer"
         val appId: String,
         val name: String,
         val description: String,
+        val accept: String = "*/*",
+        val supportsMediaPlay: Boolean = false,
     )
 
     data class MediaPlayTarget(
@@ -69,6 +71,7 @@ name = "user-phone:flammenwerfer"
         val responseBody: String = "",
         val rawBytes: ByteArray = ByteArray(0),
         val replacementText: String = "",
+        val attachedBlobId: String = "",
     )
 
     fun startUdpWakeListener(context: Context) =
@@ -101,6 +104,9 @@ name = "user-phone:flammenwerfer"
     fun trimWavBinaryBytes(bytes: ByteArray): ByteArray = XIntentProtocolParser.trimWavBinaryBytes(bytes)
     fun extractAudioBytesFromRawResponse(rawBytes: ByteArray): ByteArray? =
         XIntentProtocolParser.extractAudioBytesFromRawResponse(rawBytes)
+
+    fun parseSendToTargets(tagsJsonResponse: String): List<SendToTarget> =
+        XIntentCatalogParser.parseSendToTargets(tagsJsonResponse)
 
     fun parseMediaPlayTargets(tagsJsonResponse: String): List<MediaPlayTarget> =
         XIntentCatalogParser.parseMediaPlayTargets(tagsJsonResponse)

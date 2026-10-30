@@ -57,7 +57,7 @@ object XIntentBlobClient {
                 connectTimeout = 15000
                 readTimeout = 60000
                 setRequestProperty("Content-Type", type)
-                if (size >= 0) {
+                if (size > 0) {
                     setFixedLengthStreamingMode(size)
                     setRequestProperty("Content-Length", size.toString())
                 }

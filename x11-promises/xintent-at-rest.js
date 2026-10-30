@@ -11,6 +11,9 @@ function isBlobWrapper(blobData) {
   if (typeof blobData !== 'object' || blobData === null || Buffer.isBuffer(blobData)) {
     return false;
   }
+  if (blobData.intent || blobData.event || blobData.action) {
+    return false;
+  }
   return blobData.data !== undefined || blobData.xblobType !== undefined;
 }
 

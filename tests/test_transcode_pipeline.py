@@ -12,12 +12,14 @@ import json
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import urllib.request
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../cool-transcoder")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../dlna-bridge")))
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from dlna_media_manager import DLNAMediaManager, probe_media_codecs
@@ -25,6 +27,12 @@ from cool_transcoder import CoolTranscoderServer
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("test_transcode_pipeline")
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def generate_test_xvid_avi(output_path: str) -> bool:
@@ -77,9 +85,12 @@ async def run_simulation():
 
         # Open file descriptor for input media
         input_fd = os.open(avi_path, os.O_RDONLY)
+        dlna_port = _find_free_port()
+        transcoder_port = _find_free_port()
 
         logger.info("\n=== STEP 2: Initializing DLNA Media Manager & Mock Samsung TV ===")
-        dlna_mgr = DLNAMediaManager(http_port=8089, mock_device=True)
+        dlna_mgr = DLNAMediaManager(http_port=dlna_port, mock_device=True)
+        dlna_mgr.local_ip = "127.0.0.1"
         dev = dlna_mgr.register_mock_device()
 
         # Probe codecs of input AVI file using ffprobe
@@ -93,9 +104,9 @@ async def run_simulation():
         assert is_supported is False, "Expected Samsung TV to reject XviD AVI media format"
 
         logger.info("\n=== STEP 3: Initializing Cool Transcoder Server ===")
-        transcoder_server = CoolTranscoderServer(http_port=8088)
+        transcoder_server = CoolTranscoderServer(http_port=transcoder_port)
         transcoder_server.local_ip = "127.0.0.1"
-        transcoder_http_server = await asyncio.start_server(transcoder_server.handle_http_connection, "127.0.0.1", 8088)
+        transcoder_http_server = await asyncio.start_server(transcoder_server.handle_http_connection, "127.0.0.1", transcoder_port)
 
         logger.info("\n=== STEP 4: Dispatching media.Transcode Intent ===")
         transcode_payload = {
@@ -115,10 +126,8 @@ async def run_simulation():
 
         logger.info("\n=== STEP 5: Hosting Transcoded Live Stream on DLNA Media Server ===")
         # Start HTTP server for DLNA Media Manager
-        media_server = await asyncio.start_server(dlna_mgr.handle_http_media_request, "127.0.0.1", 8089)
+        media_server = await asyncio.start_server(dlna_mgr.handle_http_media_request, "127.0.0.1", dlna_port)
 
-        # Host the transcoded output on DLNA Media Manager HTTP server
-        # (simulating dlna-bridge receiving the transcoded fd and hosting it for the TV)
         # Fetch initial stream from transcoder HTTP server using run_in_executor
         loop = asyncio.get_event_loop()
         def fetch_stream():
@@ -131,12 +140,12 @@ async def run_simulation():
         logger.info(f"Downloaded transcoded live stream: {len(transcoded_bytes)} bytes")
         assert len(transcoded_bytes) > 5000, "Expected transcoded stream to contain video bytes (>5KB)"
 
-        # Save transcoded stream to temporary file for ffprobe verification
-        tmp_transcoded = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        # Save transcoded stream to temporary file for ffprobe verification & DLNA HTTP Range test
+        tmp_transcoded = tempfile.NamedTemporaryFile(suffix=".ts", delete=False)
         tmp_transcoded.write(transcoded_bytes)
         tmp_transcoded.close()
 
-        logger.info("\n=== STEP 6: Verifying Transcoded Output with ffprobe ===")
+        logger.info("\n=== STEP 6: Verifying Transcoded Output with ffprobe & DLNA HTTP Range Seek ===")
         transcoded_fd = os.open(tmp_transcoded.name, os.O_RDONLY)
         out_probe = probe_media_codecs(transcoded_fd)
         logger.info(f"ffprobe transcoded output codecs: {out_probe}")
@@ -144,12 +153,25 @@ async def run_simulation():
         assert out_probe.get("video") == "h264", f"Expected transcoded video codec 'h264', got {out_probe.get('video')}"
         assert out_probe.get("audio") == "aac", f"Expected transcoded audio codec 'aac', got {out_probe.get('audio')}"
 
+        hosted_url = dlna_mgr.host_readable_fd(transcoded_fd, transcode_resp.get("mimeType", "video/mpeg"), "transcoded_test.ts")
+        def fetch_range():
+            req = urllib.request.Request(hosted_url, headers={"Range": "bytes=0-4095"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, resp.read()
+
+        status_code, range_bytes = await loop.run_in_executor(None, fetch_range)
+        assert status_code == 206, f"Expected HTTP 206 Partial Content, got {status_code}"
+        assert len(range_bytes) == 4096, f"Expected 4096 range bytes, got {len(range_bytes)}"
+
         logger.info("\n=== SUCCESS: End-to-End Transcode Pipeline Simulation PASSED! ===")
-        logger.info(f"Original XviD AVI ({file_size_orig} bytes) -> Successfully transcoded to MP4 H.264/AAC ({len(transcoded_bytes)} bytes)")
+        logger.info(f"Original XviD AVI ({file_size_orig} bytes) -> Successfully transcoded to MPEG-TS H.264/AAC ({len(transcoded_bytes)} bytes)")
 
         os.close(transcoded_fd)
         os.unlink(tmp_transcoded.name)
-        os.close(input_fd)
+        try:
+            os.close(input_fd)
+        except OSError:
+            pass
         media_server.close()
         transcoder_http_server.close()
         return True

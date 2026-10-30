@@ -231,14 +231,14 @@ function handleGetBlobResponse(res, chunks, hexBlobId, transportLabel, resolve, 
   }
 }
 
-function executeGetBlobRequest(reqOptions, hexBlobId, timeoutMsg, transportLabel) {
+function executeGetBlobRequest(reqOptions, hexBlobId, timeoutMsg, transportLabel, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const req = http.request(reqOptions, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => handleGetBlobResponse(res, chunks, hexBlobId, transportLabel, resolve, reject));
     });
-    req.setTimeout(5000, () => {
+    req.setTimeout(timeoutMs, () => {
       req.destroy(new Error(timeoutMsg));
     });
     req.on('error', reject);
@@ -246,40 +246,43 @@ function executeGetBlobRequest(reqOptions, hexBlobId, timeoutMsg, transportLabel
   });
 }
 
-function buildGetRequestHeaders(userAgent) {
+function buildGetRequestHeaders(userAgent, acceptReadableStream = false) {
   return {
     'User-Agent': userAgent || buildXBlobUserAgent(0, 'xintent'),
     'Accept': 'application/json, */*',
     'Accept-Encoding': 'identity, base64, fd-rights',
+    'X-Accept-XBlob-Type': acceptReadableStream ? 'ReadableStream, Blob, File' : 'Blob, File',
   };
 }
 
-function httpGetBlobOverSocket(sockPath, hexBlobId, userAgent) {
+function httpGetBlobOverSocket(sockPath, hexBlobId, userAgent, acceptReadableStream = false) {
   return executeGetBlobRequest(
     {
       socketPath: sockPath,
       path: `/blobs/${hexBlobId}`,
       method: 'GET',
-      headers: buildGetRequestHeaders(userAgent),
+      headers: buildGetRequestHeaders(userAgent, acceptReadableStream),
     },
     hexBlobId,
     `Socket GET /blobs/${hexBlobId} timeout`,
-    'socket'
+    'socket',
+    acceptReadableStream ? 5000 : 30000
   );
 }
 
-function httpGetBlobOverHttp(port, hexBlobId, userAgent) {
+function httpGetBlobOverHttp(port, hexBlobId, userAgent, acceptReadableStream = false) {
   return executeGetBlobRequest(
     {
       hostname: 'localhost',
       port,
       path: `/blobs/${hexBlobId}`,
       method: 'GET',
-      headers: buildGetRequestHeaders(userAgent),
+      headers: buildGetRequestHeaders(userAgent, acceptReadableStream),
     },
     hexBlobId,
     `HTTP GET /blobs/${hexBlobId} timeout`,
-    'HTTP'
+    'HTTP',
+    acceptReadableStream ? 5000 : 30000
   );
 }
 

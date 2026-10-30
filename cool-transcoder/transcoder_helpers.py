@@ -16,12 +16,23 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger("cool_transcoder")
 
+MPEGTS_MIME = 'video/mpeg; codecs="h264, aac"'
+MPEGTS_FLAGS = [
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-aac_coder", "fast",
+    "-f", "mpegts",
+]
+
 MP4_MIME = 'video/mp4; codecs="h264, aac"'
 MP4_FLAGS = [
     "-c:v", "libx264",
     "-preset", "ultrafast",
-    "-tune", "zerolatency",
+    "-pix_fmt", "yuv420p",
     "-c:a", "aac",
+    "-aac_coder", "fast",
     "-f", "mp4",
     "-movflags", "frag_keyframe+empty_moov+default_base_moof"
 ]
@@ -60,13 +71,17 @@ def _unwrap_blob_dict(raw_blob) -> dict:
 
 def _try_open_fd_rights(blob_val) -> Optional[int]:
     if isinstance(blob_val, int) and blob_val >= 0:
-        return os.dup(blob_val)
+        try:
+            os.lseek(blob_val, 0, os.SEEK_SET)
+        except Exception:
+            pass
+        return blob_val
 
     clean_path = str(blob_val or "").strip()
     if clean_path.startswith("file://"):
         clean_path = urllib.parse.unquote(clean_path.removeprefix("file://"))
 
-    if clean_path and os.path.exists(clean_path):
+    if clean_path and (clean_path.startswith("/proc/") or os.path.exists(clean_path)):
         try:
             return os.open(clean_path, os.O_RDONLY | os.O_CLOEXEC)
         except Exception as e:
@@ -98,7 +113,7 @@ def ensure_readable_fd(raw_blob: dict) -> Tuple[int, str, str]:
     data_type = unwrapped.get("_dataType") or unwrapped.get("contentEncoding")
     blob_val = unwrapped.get("data")
 
-    if data_type == "fd-rights":
+    if data_type in ("fd-rights", "file-path"):
         fd = _try_open_fd_rights(blob_val)
         if fd is not None:
             return (fd, mime_type, file_name)
@@ -124,13 +139,54 @@ class TranscodeSession:
 
     def _select_ffmpeg_pipeline(self, accept: str) -> Tuple[str, List[str]]:
         accept_lower = accept.lower()
+        if any(tok in accept_lower for tok in ("video/mpeg", "mpeg-tts", "mpegts")):
+            return MPEGTS_MIME, list(MPEGTS_FLAGS)
         if any(tok in accept_lower for tok in ("mp4", "h264", "avc", "*/*")):
             return MP4_MIME, list(MP4_FLAGS)
         if any(tok in accept_lower for tok in ("webm", "vp8", "vp9")):
             return WEBM_MIME, list(WEBM_FLAGS)
         if "mp3" in accept_lower and "video" not in accept_lower and "audio" in accept_lower:
             return MP3_MIME, list(MP3_FLAGS)
-        return MP4_MIME, list(MP4_FLAGS)
+        return MPEGTS_MIME, list(MPEGTS_FLAGS)
+
+
+def probe_media_duration(input_url: str, input_fd: Optional[int] = None) -> float:
+    """Probes input media duration in seconds using ffprobe, rewinding input_fd if seekable."""
+    pass_fds = [input_fd] if input_fd is not None else []
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        input_url,
+    ]
+    try:
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5.0,
+            pass_fds=pass_fds,
+        )
+        if input_fd is not None:
+            try:
+                os.lseek(input_fd, 0, os.SEEK_SET)
+            except Exception:
+                pass
+        val = (res.stdout or "").strip()
+        if val and val != "N/A":
+            dur = float(val)
+            if dur > 0:
+                return dur
+    except Exception as e:
+        logger.debug(f"ffprobe duration check failed for {input_url}: {e}")
+        if input_fd is not None:
+            try:
+                os.lseek(input_fd, 0, os.SEEK_SET)
+            except Exception:
+                pass
+    return 0.0
 
 
 def spawn_ffmpeg_pipe_pipeline(input_url: str, ffmpeg_flags: List[str], input_fd: Optional[int]) -> int:
@@ -156,3 +212,39 @@ def spawn_ffmpeg_pipe_pipeline(input_url: str, ffmpeg_flags: List[str], input_fd
     )
     os.close(pipe_write)
     return pipe_read
+
+
+def spawn_ffmpeg_pipe_pipeline_with_progress(
+    input_url: str, ffmpeg_flags: List[str], input_fd: Optional[int]
+) -> Tuple[int, int]:
+    """Spawns FFmpeg writing media to pipe_read and machine-readable progress to prog_read."""
+    pipe_read, pipe_write = os.pipe()
+    prog_read, prog_write = os.pipe()
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-nostats",
+        "-progress", f"/proc/self/fd/{prog_write}",
+        "-stats_period", "0.1",
+        "-y",
+        "-i", input_url,
+    ] + ffmpeg_flags + ["pipe:1"]
+
+    pass_fds = [pipe_write, prog_write]
+    if input_fd is not None:
+        pass_fds.append(input_fd)
+
+    logger.info(
+        f"Spawning FFmpeg transcode pipeline with progress fd {prog_write} into pipe write fd {pipe_write}: "
+        f"{' '.join(ffmpeg_cmd)}"
+    )
+    subprocess.Popen(
+        ffmpeg_cmd,
+        stdout=pipe_write,
+        stderr=subprocess.DEVNULL,
+        pass_fds=pass_fds,
+    )
+    os.close(pipe_write)
+    os.close(prog_write)
+    return pipe_read, prog_read
