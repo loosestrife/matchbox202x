@@ -12,7 +12,7 @@
 ## High-Level Architectural Description
 
 ### Executive Overview
-The modern UNIX desktop ecosystem suffers from severe fragmentation, redundant abstractions, and excessive resource overhead. Over the past two decades, traditional system interfaces have been systematically obscured by multi-layered IPC frameworks that nobody understands.  Despite 1995 being the the height of the one cpu paradigm, the modern desktop has lost the concept of network transparency.
+Over the past two decades, traditional system interfaces have been systematically obscured by multi-layered IPC frameworks that nobody understands.  Despite 1995 being the the height of the one cpu paradigm, the modern desktop has lost the concept of network transparency.
 
 This specification defines a unified, lightweight desktop platform constructed entirely from proven, off-the-shelf X11 primitives.
 
@@ -28,12 +28,6 @@ This specification defines a unified, lightweight desktop platform constructed e
 * **Credentials ride the same channel they protect.** sshd wrote a fake cookie and set XAUTHORITY; the secret and the address arrived together.
 * **One forwarded channel per machine-pair**, everything multiplexed. Ten windows, one connection.  Single control channel.
 * **Membership is the connection.** Client dies → socket closes → server notices → gone. No unregister protocol, no keepalives, no ghosts.
-
-# 0.2 The 90's Future
-* sound follows your ssh -X connection
-* multimedia over ssh -X automatically uses secondary data streams
-* java-based apps can freeze on one device and thaw on another device
-* the 90's future did not include `curl | bash` it included `apt install package`, perhaps, after `apt-add-repository`.  the 90's future would have been ok with `curl > ~/.packages/app.toml` followed by `app-manager sync` where app-manager would expressly ask for permission to do anything more than install deps from trusted sources and run the app with some sandboxing
 
 ---
 
@@ -196,6 +190,7 @@ bridge.Peer({host}) // host from the whatwg url spec, instructs the bridge to pe
 bridge.Unpeer({host})
 media.Play
 media.FindDevices
+sys.LiveMigrate
 ```
 
 So mozilla firefox will fire a `fs.PickFile({image/*})` and XINTENT will select nemo and matchbox-service-lighter will launch a nemo and then the user will say "Hold on.  I didn't want `localhost:nemo`" and `Super-I` or whatever user set the intent rerouting hotkey to and switch that intent to using `user-desktop:caja` so `user-desktop:matchbox-service-lighter` will launch a `user-desktop:caja` and the user will select the file and caja will do an `open(...)` and a `XBlobCreate(fd)` and then fire an `XIntent(fs.PickFileResponse)` then exit and the blob will be attached to firefox by XINTENT before the `fs.PickFileResponse` is delivered and firefox will slurp the blob and attach it to the form data.  Because firefox currently only reads uri's, the blob has to be stowed to /tmp/xblob-bounce-buffers 
@@ -225,7 +220,7 @@ text: "how do i restore unix"
 Content-Type: multipart/mixed; boundary=boundary-string
 ```
 
-no json equivalent, XINTENT just opens the channel, a `{event: http.204NoContent, disposition: final}` is needed to close the channel if the message had an `Accept` header thereby opening a channel.
+no json equivalent, XINTENT just opens the channel, a `{event: http.204NoContent, disposition: final}` is needed to close the channel if the message opened one.
 
 ```http
 --boundary-string
@@ -257,12 +252,12 @@ Content-Type: audio/wav
 blob id -> {type, size, data} out here
 ```
 
-## 4. Application Package Format (`index.toml`)
+## 4. Application Package Format (`matchbox.toml`)
 
-Applications are distributed as compressed `.zip` archives (or single ELF binaries with an embedded `.index_toml` segment).
+
 ```
-my-app.zip
-├── index.toml          # Package manifest & IPC contracts
+my-app
+├── matchbox.toml       # Package manifest & IPC contracts
 ├── bin/
 │   └── app_binary      # Compiled entrypoint (optional)
 ├── cards/
@@ -273,7 +268,7 @@ my-app.zip
 ```
 Applications not installed in `/wherever/matchbox/` are simply `my-cool-app.toml` files.  These refer intents and events to other processes.
 
-### 4.1 Canonical `index.toml` Schema
+### 4.1 `matchbox.toml` Schema
 
 ```toml
 #!/usr/bin/matchbox202x
@@ -326,30 +321,10 @@ card = "main"
 [events]
 "sys.DisplayRotated" = { invocation = "command", exec = "bin/app_binary", args = ["process-event"] }
 "net.StateChanged"   = { invocation = "card", card = "settings" }
-
-# lets try and merge these apps with system services
-[service]
-# Maps directly to systemd [Service] directives
-exec = "bin/emacsd"
-type = "simple"
-restart = "on-failure"
-restart_sec = "2s"
-nice = -5
-
-# Sandboxing & Security (mapped to systemd isolation flags)
-protect_system = "strict"
-protect_home = "read-only"
-private_tmp = true
-memory_max = "2G"
-
-[service.targets]
-# Systemd target bindings
-wanted_by = ["default.target"]
-after = ["network.target", "sound.target"]
 ```
 
 ### 4.2 Service Discovery
-* Any window that wants to advertise services can add a property XINTENT-MATCHBOX-TOML and xintent-router having a cache of these is a performance optimization.
+* Any window that wants to advertise services can add a property MATCHBOX-TOML and xintent-router will copy it into its AGGREGATE-TOML so other processes only need to inspect the AGGREGATE-TOML of the xintent router to find out whats available
 * When matchbox-service-lighter starts, it opens a window with XINTENT-SERVICE-MANIFEST as a toml of what services it can launch.  The user can inspect its toml with xprops just like xintent-router does.
 * X isnt just a session bus, its also a database.
 
@@ -366,7 +341,8 @@ Inter-Card Communication: HTML Cards within the same app session communicate sta
 
 System Styling: The shared Web Browser reads the system themes, DPI, and scaling directly from the _XSETTINGS_SETTINGS root window property.
 
-First Steps: Use an http bridge to render them in a normal web browser
+### 5.2 Live Migration of XHTML cards
+The XHTML cards can be live migrated with their attached blobs and channels between systems.  You can take your cool-terminal window with you when you leave the house by live migrating it to your phone.
 
 # 6 C API Struct (libplatform.h)
 
