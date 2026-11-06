@@ -1,3 +1,8 @@
+# How to Use
+1) `bun cool-service-lighter`
+2) run flammenwerfer on your phone
+3) you now have personal distributed computing
+
 # UNIX Desktop & Application Platform Specification
 **Version 0.1.0-DRAFT**  
 **Status:** Proposal / Reference Specification
