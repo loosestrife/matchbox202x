@@ -69,6 +69,7 @@ async function startDaemon() {
           await sendXIntentEventV0(X, xintent.routerWin, {
             senderWin: serviceWin,
             channel,
+            controlWord: xintent.FIN,
             payload: {
               event: 'ui.TextProcessResponse',
               text: resultText,

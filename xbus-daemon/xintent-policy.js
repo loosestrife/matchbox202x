@@ -54,7 +54,13 @@ function selectTargetServiceEntry(registryEntries, windowRegistry, intent, targe
     ? registryEntries.find(
         (entry) =>
           matchesAppIdOrPkg(entry.matchboxToml?.app, targetAppId, targetPkg) &&
-          entry.matchboxToml?.computer?.host === targetHost
+          (entry.matchboxToml?.computer?.host === targetHost ||
+            String(entry.matchboxToml?.app?.id || '').startsWith(`${targetHost}:`))
+      ) ||
+      registryEntries.find(
+        (entry) =>
+          entry.matchboxToml?.computer?.host === targetHost ||
+          String(entry.matchboxToml?.app?.id || '').startsWith(`${targetHost}:`)
       )
     : null;
   const matched =
@@ -71,6 +77,18 @@ function selectTargetServiceEntry(registryEntries, windowRegistry, intent, targe
   }
 
   logger.info(`[intent-router] Target app '${targetAppId}' not found in active intentRegistry for ${intent}, checking windowRegistry...`);
+  if (targetHost) {
+    for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
+      if (
+        matchesAppIdOrPkg(matchboxToml?.app, targetAppId, targetPkg) &&
+        matchboxToml?.computer?.host === targetHost
+      ) {
+        const numWid = Number(widStr);
+        logger.info(`[intent-router] PolicyEngine matched host-qualified target app '${targetAppId}' to windowRegistry window (${widString(numWid)})`);
+        return { wid: numWid, matchboxToml };
+      }
+    }
+  }
   for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
     if (matchesAppIdOrPkg(matchboxToml?.app, targetAppId, targetPkg)) {
       const numWid = Number(widStr);

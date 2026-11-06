@@ -206,8 +206,29 @@ object CardsWebViewSupport {
             }
             activity?.cardWebView = this
             addJavascriptInterface(XIntentJSBridge(activity ?: CardsActivity()), "XIntentNative")
-            loadUrl(cardUrl)
+            val initialUrl = activity?.pendingCardUrl ?: cardUrl
+            loadUrl(initialUrl)
         }
+    }
+
+    fun buildCardUrl(
+        baseUrl: String,
+        appName: String,
+        cardName: String,
+        cardWin: String? = null,
+        hydrateBlob: String? = null,
+    ): String {
+        val cleanBase = baseUrl.trimEnd('/')
+        val queryParts = mutableListOf<String>()
+        if (!cardWin.isNullOrBlank()) {
+            queryParts.add("cardWin=${Uri.encode(cardWin)}")
+            queryParts.add("cardId=${Uri.encode(cardName)}")
+        }
+        if (!hydrateBlob.isNullOrBlank()) {
+            queryParts.add("hydrateBlob=${Uri.encode(hydrateBlob)}")
+        }
+        val querySuffix = if (queryParts.isNotEmpty()) "?${queryParts.joinToString("&")}" else ""
+        return "$cleanBase/apps/$appName/$cardName$querySuffix"
     }
 }
 
@@ -217,10 +238,20 @@ fun CardScreen(
     cardName: String,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    cardWin: String? = null,
+    hydrateBlob: String? = null,
 ) {
     val context = LocalContext.current
     val activity = context as? CardsActivity
-    val cardUrl = remember { "${XIntentPreferences.getServerUrl(context)}/apps/$appName/$cardName" }
+    val cardUrl = remember(appName, cardName, cardWin, hydrateBlob) {
+        CardsWebViewSupport.buildCardUrl(
+            XIntentPreferences.getServerUrl(context),
+            appName,
+            cardName,
+            cardWin,
+            hydrateBlob,
+        )
+    }
     val jsBridgeScript = remember(context) { CardsWebViewSupport.loadXIntentJs(context) }
     var webViewRef: WebView? = remember { null }
 

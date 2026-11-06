@@ -67,8 +67,12 @@ object XIntentPreferences {
         "${getHostname(context)}:flammenwerfer"
 
     fun getManifest(context: Context): String {
+        val hostname = getHostname(context)
         val advertisedName = getAdvertisedName(context)
-        return """[app]
+        return """[computer]
+host = "$hostname"
+
+[app]
 id = "$advertisedName"
 
 [intents]
@@ -78,6 +82,9 @@ id = "$advertisedName"
 "fs.PickFile" = true
 "fs.SendTo" = true
 "fs.SaveAs" = true
+"xhtml.LoadCard" = true
+"xhtml.LiveMigrate" = true
+"sys.LiveMigrate" = true
 
 [XAudioSink]
 name = "$advertisedName"

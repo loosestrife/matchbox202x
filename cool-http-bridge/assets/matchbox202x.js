@@ -1,7 +1,8 @@
 (function(window) {
   'use strict';
 
-  if (window.xintent && typeof window.xintent.readMultipartStream === 'function' && typeof window.xintent.getFsMode === 'function') return;
+  if (window.__matchbox202xInitialized) return;
+  window.__matchbox202xInitialized = true;
 
   function getForwardedByHeader(existingHeader = null) {
     let forwardedBy = 'matchbox202x.js';
@@ -41,6 +42,20 @@
     return ctrlStrings.length > 0 ? ctrlStrings.join(',') : null;
   }
 
+  function normalizeBlobHex(id) {
+    if (id === null || id === undefined) return null;
+    if (typeof id === 'number') return isNaN(id) ? null : `0x${(id >>> 0).toString(16)}`;
+    const s = String(id).trim();
+    if (!s) return null;
+    const num = (s.startsWith('0x') || s.startsWith('0X')) ? parseInt(s, 16) : Number(s);
+    return isNaN(num) ? s : `0x${(num >>> 0).toString(16)}`;
+  }
+
+  function translateVirtualBlobId(rawId) {
+    if (!rawId || !window.xhtml || typeof window.xhtml.getNatInfo !== 'function') return rawId;
+    return window.xhtml.getNatInfo('blob', rawId) || rawId;
+  }
+
   function getActiveCardWin() {
     if (window.xhtml && window.xhtml.cardWin) return window.xhtml.cardWin;
     try {
@@ -55,6 +70,66 @@
     const cardWin = getActiveCardWin();
     if (cardWin) headers['X-Card-Window'] = String(cardWin);
     return headers;
+  }
+
+  if (typeof window.fetch === 'function' && !window.__matchboxFetchWrapped) {
+    const nativeFetch = window.fetch.bind(window);
+    window.__matchboxFetchWrapped = true;
+    window.fetch = async function(input, init = {}) {
+      let urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
+      const isSameOriginApi =
+        urlStr.startsWith('/xblob') ||
+        urlStr.startsWith('/blobs') ||
+        urlStr.startsWith('/intent/') ||
+        urlStr.startsWith('/api/');
+
+      if (isSameOriginApi) {
+        init = Object.assign({}, init);
+        const hdrs = Object.assign({}, init.headers || {});
+        const cardWin = getActiveCardWin();
+        if (cardWin && !hdrs['X-Card-Window'] && !hdrs['x-card-window']) {
+          hdrs['X-Card-Window'] = String(cardWin);
+        }
+        const attachedBlob = hdrs['X-Attached-Blob-Id'] || hdrs['x-attached-blob-id'];
+        if (attachedBlob) {
+          const mappedAttached = translateVirtualBlobId(attachedBlob);
+          if (hdrs['X-Attached-Blob-Id']) hdrs['X-Attached-Blob-Id'] = String(mappedAttached);
+          if (hdrs['x-attached-blob-id']) hdrs['x-attached-blob-id'] = String(mappedAttached);
+          if (window.xhtml?.heldBlobs) {
+            window.xhtml.heldBlobs.add(normalizeBlobHex(attachedBlob));
+          }
+        }
+        init.headers = hdrs;
+
+        const blobPathMatch = urlStr.match(/^(\/(?:xblob|blobs)\/)(0x[0-9a-fA-F]+|\d+)(\b.*)?$/);
+        if (blobPathMatch) {
+          const origId = blobPathMatch[2];
+          const mappedId = translateVirtualBlobId(origId);
+          if (mappedId) {
+            urlStr = `${blobPathMatch[1]}${mappedId}${blobPathMatch[3] || ''}`;
+            input = urlStr;
+          }
+        }
+      }
+
+      const response = await nativeFetch(input, init);
+      try {
+        if (
+          (urlStr === '/xblob' || urlStr === '/blobs' || urlStr === '/xblob/XBlobCreate') &&
+          (init?.method === 'PUT' || init?.method === 'POST')
+        ) {
+          const createdBlobHeader = response.headers?.get?.('x-blob-id');
+          if (createdBlobHeader && window.xhtml?.heldBlobs) {
+            const normCreated = normalizeBlobHex(createdBlobHeader);
+            window.xhtml.heldBlobs.add(normCreated);
+            if (!window.xhtml.blobNatTable.has(normCreated)) {
+              window.xhtml.blobNatTable.set(normCreated, normCreated);
+            }
+          }
+        }
+      } catch (_) {}
+      return response;
+    };
   }
 
   function buildIntentHeaders(payload) {
@@ -628,7 +703,9 @@
     const inputs = {};
     try {
       if (typeof document === 'undefined' || !document.querySelectorAll) return inputs;
-      const els = document.querySelectorAll('input, select, textarea');
+      const els = Array.from(document.querySelectorAll('input, select, textarea')).filter(
+        (el) => !(el.closest && el.closest('[data-xhtml-runtime-ui="true"]'))
+      );
       els.forEach((el, idx) => {
         const key = el.id ? `#${el.id}` : (el.name ? `[name="${el.name}"]` : `input:${idx}`);
         if (el.type === 'checkbox' || el.type === 'radio') {
@@ -666,16 +743,114 @@
 
   // --- window.xhtml ---
   const initialIdentity = inferCardIdentity();
-  window.xhtml = window.xhtml || {
-    cardWin: getActiveCardWin(),
-    cardApp: initialIdentity.cardApp,
-    cardId: initialIdentity.cardId,
-    heldBlobs: new Set(),
-    softLinkedBlobs: new Set(),
-    openChannels: new Map(),
-    onfreeze: null,
-    onthaw: null,
-    _cardWs: null,
+  function parseNatArgs(blobOrKind, id) {
+    if (id === undefined) {
+      return { kind: 'blob', id: blobOrKind };
+    }
+    const isChannel =
+      blobOrKind === 'channel' ||
+      blobOrKind === 'xchannel' ||
+      blobOrKind === window.xintent;
+    return { kind: isChannel ? 'channel' : 'blob', id };
+  }
+
+  const existingXhtml = window.xhtml || {};
+  window.xhtml = Object.assign(existingXhtml, {
+    cardWin: getActiveCardWin() || existingXhtml.cardWin || null,
+    cardApp: initialIdentity.cardApp || existingXhtml.cardApp,
+    cardId: initialIdentity.cardId || existingXhtml.cardId,
+    heldBlobs: existingXhtml.heldBlobs instanceof Set ? existingXhtml.heldBlobs : new Set(),
+    softLinkedBlobs: existingXhtml.softLinkedBlobs instanceof Set ? existingXhtml.softLinkedBlobs : new Set(),
+    openChannels: existingXhtml.openChannels instanceof Map ? existingXhtml.openChannels : new Map(),
+    blobNatTable: existingXhtml.blobNatTable instanceof Map ? existingXhtml.blobNatTable : new Map(),
+    channelNatTable: existingXhtml.channelNatTable instanceof Map ? existingXhtml.channelNatTable : new Map(),
+    _remapWaiters: existingXhtml._remapWaiters instanceof Map ? existingXhtml._remapWaiters : new Map(),
+    _remappedHistory: existingXhtml._remappedHistory instanceof Map ? existingXhtml._remappedHistory : new Map(),
+    _migrateCompleteWaiters: Array.isArray(existingXhtml._migrateCompleteWaiters) ? existingXhtml._migrateCompleteWaiters : [],
+    onfreeze: existingXhtml.onfreeze || null,
+    onthaw: existingXhtml.onthaw || null,
+    _cardWs: existingXhtml._cardWs || null,
+
+    getNatInfo: function(blobOrKind, id) {
+      const parsed = parseNatArgs(blobOrKind, id);
+      if (parsed.kind === 'channel') {
+        const chKey = Number(parsed.id);
+        return this.channelNatTable.get(chKey) ?? this.channelNatTable.get(String(parsed.id)) ?? chKey;
+      }
+      const normKey = normalizeBlobHex(parsed.id);
+      if (!normKey) return parsed.id;
+      return this.blobNatTable.get(normKey) || this.blobNatTable.get(String(parsed.id)) || normKey;
+    },
+
+    whenRemapped: function(blobOrKind, id) {
+      const parsed = parseNatArgs(blobOrKind, id);
+      const key = parsed.kind === 'channel'
+        ? `channel:${Number(parsed.id)}`
+        : `blob:${normalizeBlobHex(parsed.id)}`;
+
+      if (this._remappedHistory.has(key)) {
+        return Promise.resolve(this._remappedHistory.get(key));
+      }
+      if (parsed.kind === 'blob') {
+        const normKey = normalizeBlobHex(parsed.id);
+        const existingLocal = this.blobNatTable.get(normKey);
+        if (existingLocal && existingLocal !== normKey) {
+          return Promise.resolve(existingLocal);
+        }
+      } else {
+        const chKey = Number(parsed.id);
+        const existingLocalCh = this.channelNatTable.get(chKey);
+        if (existingLocalCh !== undefined && existingLocalCh !== chKey) {
+          return Promise.resolve(existingLocalCh);
+        }
+      }
+      return new Promise((resolve) => {
+        const list = this._remapWaiters.get(key) || [];
+        list.push(resolve);
+        this._remapWaiters.set(key, list);
+      });
+    },
+
+    _recordRemap: function(kind, virtualId, localId) {
+      if (kind === 'channel') {
+        const vTx = Number(virtualId);
+        const lTx = Number(localId);
+        if (isNaN(vTx) || isNaN(lTx)) return;
+        this.channelNatTable.set(vTx, lTx);
+        const key = `channel:${vTx}`;
+        this._remappedHistory.set(key, lTx);
+        const waiters = this._remapWaiters.get(key) || [];
+        this._remapWaiters.delete(key);
+        waiters.forEach((fn) => { try { fn(lTx); } catch (_) {} });
+        return;
+      }
+      const vHex = normalizeBlobHex(virtualId);
+      const lHex = normalizeBlobHex(localId);
+      if (!vHex || !lHex) return;
+      const existingLocal = this.blobNatTable.get(vHex);
+      if (existingLocal && existingLocal !== vHex && lHex === vHex) {
+        this.heldBlobs.add(vHex);
+        return;
+      }
+      this.blobNatTable.set(vHex, lHex);
+      this.heldBlobs.add(vHex);
+      if (lHex !== vHex) {
+        const key = `blob:${vHex}`;
+        this._remappedHistory.set(key, lHex);
+        const waiters = this._remapWaiters.get(key) || [];
+        this._remapWaiters.delete(key);
+        waiters.forEach((fn) => { try { fn(lHex); } catch (_) {} });
+        if (!this._isHydrating && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+          try {
+            window.dispatchEvent(
+              new CustomEvent('xhtml:blob-transferred', {
+                detail: { blobId: vHex, virtualBlobId: vHex, nattedBlobId: lHex, localBlobId: lHex },
+              })
+            );
+          } catch (_) {}
+        }
+      }
+    },
 
     ensureCardSession: async function(options = {}) {
       const existing = getActiveCardWin();
@@ -685,21 +860,53 @@
       const appId = options.cardApp || this.cardApp || 'xhtml-card';
       const cardId = options.cardId || this.cardId || 'main';
       try {
+        const reqBody = {
+          appId,
+          cardId,
+          cardWin: this.cardWin || undefined,
+        };
+        if (!options.skipNatUpload) {
+          reqBody.blobNatTable = Object.fromEntries(this.blobNatTable);
+          reqBody.channelNatTable = Object.fromEntries(this.channelNatTable);
+        }
         const res = await fetch('/api/card-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Forwarded-By': getForwardedByHeader() },
-          body: JSON.stringify({ appId, cardId, cardWin: this.cardWin || undefined })
+          body: JSON.stringify(reqBody)
         });
         if (res.ok) {
           const data = await res.json();
           if (data.cardWin) this.cardWin = data.cardWin;
+          if (data.runtimeHost) this.runtimeHost = data.runtimeHost;
+          if (data.browserDisplay) this.browserDisplay = data.browserDisplay;
+          if (data.blobNatTable && typeof data.blobNatTable === 'object') {
+            for (const [k, v] of Object.entries(data.blobNatTable)) {
+              this._recordRemap('blob', k, v);
+            }
+          }
+          if (data.channelNatTable && typeof data.channelNatTable === 'object') {
+            for (const [k, v] of Object.entries(data.channelNatTable)) {
+              this._recordRemap('channel', k, v);
+            }
+          }
         }
       } catch (_) {}
+      this.connectCardWs();
+      if (typeof this.refreshRuntimeMigrateBar === 'function') {
+        try { this.refreshRuntimeMigrateBar(); } catch (_) {}
+      }
       return this.cardWin;
     },
 
     connectCardWs: function(reattachTxIds = []) {
       if (!this.cardWin) return null;
+      if (
+        this._cardWs &&
+        (this._cardWs.readyState === WebSocket.OPEN || this._cardWs.readyState === WebSocket.CONNECTING) &&
+        (!Array.isArray(reattachTxIds) || reattachTxIds.length === 0)
+      ) {
+        return this._cardWs;
+      }
       const wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
       const txParam = Array.isArray(reattachTxIds) && reattachTxIds.length > 0
         ? `&reattachTxIds=${encodeURIComponent(reattachTxIds.join(','))}`
@@ -708,10 +915,38 @@
       try {
         const ws = new WebSocket(wsUrl, 'message-http');
         this._cardWs = ws;
-        ws.onmessage = (event) => {
+        ws.onmessage = async (event) => {
           try {
             const frame = parseWsAudioEventData(event.data);
             if (!frame) return;
+            const evName = frame.event || frame.intent;
+            if (evName === 'sys.XBlobTransferred') {
+              const virtId = frame.blobId || frame.virtualBlobId;
+              const locId = frame.dataBlob || frame.nattedBlobId || frame.localBlobId;
+              if (virtId && locId) {
+                this._recordRemap('blob', virtId, locId);
+              }
+            } else if (evName === 'sys.ChannelRedirect') {
+              const vTx = frame.cardTxId ?? frame.txId ?? frame.channel;
+              const lTx = frame.localChannelId ?? frame.txId ?? frame.channel;
+              if (vTx !== undefined && lTx !== undefined) {
+                this._recordRemap('channel', vTx, lTx);
+              }
+            } else if (evName === 'sys.LiveMigrateComplete') {
+              const waiters = this._migrateCompleteWaiters.splice(0);
+              waiters.forEach((fn) => { try { fn(frame); } catch (_) {} });
+            } else if (evName === 'xhtml.RequestSnapshot') {
+              const snap = await this.serializeState();
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  event: 'xhtml.SnapshotResponse',
+                  cardWin: this.cardWin,
+                  snapshot: snap,
+                }));
+              }
+              return;
+            }
+
             const txId = Number(frame.txId || frame.channel || 0);
             if (txId && this.openChannels.has(txId)) {
               const ch = this.openChannels.get(txId);
@@ -743,6 +978,14 @@
           console.warn('[xhtml] onfreeze hook error:', err);
         }
       }
+      const blobNatObj = {};
+      for (const [k, v] of this.blobNatTable.entries()) {
+        blobNatObj[k] = v;
+      }
+      const channelNatObj = {};
+      for (const [k, v] of this.channelNatTable.entries()) {
+        channelNatObj[String(k)] = v;
+      }
       return {
         version: '0.1',
         cardApp: this.cardApp,
@@ -765,12 +1008,17 @@
           intent: ch.intent || null,
           app: ch.app || null,
         })),
+        natTables: {
+          blobNat: blobNatObj,
+          channelNat: channelNatObj,
+        },
         customState,
       };
     },
 
     hydrateState: async function(snapshot) {
       if (!snapshot || typeof snapshot !== 'object') return false;
+      this._isHydrating = true;
       if (snapshot.cardApp) this.cardApp = snapshot.cardApp;
       if (snapshot.cardId) this.cardId = snapshot.cardId;
 
@@ -787,10 +1035,16 @@
         }
       }
       if (Array.isArray(snapshot.heldBlobs)) {
-        snapshot.heldBlobs.forEach((b) => this.heldBlobs.add(String(b)));
+        snapshot.heldBlobs.forEach((b) => {
+          const norm = normalizeBlobHex(b);
+          this.heldBlobs.add(norm);
+          if (!this.blobNatTable.has(norm)) {
+            this.blobNatTable.set(norm, norm);
+          }
+        });
       }
       if (Array.isArray(snapshot.softLinkedBlobs)) {
-        snapshot.softLinkedBlobs.forEach((b) => this.softLinkedBlobs.add(String(b)));
+        snapshot.softLinkedBlobs.forEach((b) => this.softLinkedBlobs.add(normalizeBlobHex(b)));
       }
 
       const txIdsToReattach = Array.isArray(snapshot.openChannels)
@@ -802,8 +1056,27 @@
             this.openChannels.set(Number(ch.txId), { txId: Number(ch.txId), intent: ch.intent, app: ch.app });
           }
         }
-        this.connectCardWs(txIdsToReattach);
       }
+      await this.ensureCardSession({ skipNatUpload: true });
+      if (snapshot.natTables && (!snapshot.cardWin || snapshot.cardWin === this.cardWin)) {
+        if (snapshot.natTables.blobNat && typeof snapshot.natTables.blobNat === 'object') {
+          for (const [vId, lId] of Object.entries(snapshot.natTables.blobNat)) {
+            const normV = normalizeBlobHex(vId);
+            if (!this.blobNatTable.get(normV) || this.blobNatTable.get(normV) === normV) {
+              this._recordRemap('blob', vId, lId);
+            }
+          }
+        }
+        if (snapshot.natTables.channelNat && typeof snapshot.natTables.channelNat === 'object') {
+          for (const [vTx, lTx] of Object.entries(snapshot.natTables.channelNat)) {
+            const numV = Number(vTx);
+            if (!this.channelNatTable.has(numV) || this.channelNatTable.get(numV) === numV) {
+              this._recordRemap('channel', vTx, lTx);
+            }
+          }
+        }
+      }
+      this.connectCardWs(txIdsToReattach);
 
       if (typeof this.onthaw === 'function') {
         try {
@@ -812,9 +1085,13 @@
           console.warn('[xhtml] onthaw hook error:', err);
         }
       }
+      this._isHydrating = false;
       if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
         try {
           window.dispatchEvent(new CustomEvent('xhtml:thaw', { detail: snapshot }));
+          if (this.blobNatTable.size > 0) {
+            window.dispatchEvent(new CustomEvent('xhtml:blob-transferred', { detail: Object.fromEntries(this.blobNatTable) }));
+          }
         } catch (_) {}
       }
       return true;
@@ -834,7 +1111,25 @@
       return parts[0]?.json || { status: res.ok ? 'ok' : 'error', cardApp, cardId };
     },
 
-    liveMigrate: async function(targetApp = 'user-laptop:cool-xhtml-runtime', options = {}) {
+    liveMigrate: async function(targetApp = 'user-desktop:cool-xhtml-runtime', options = {}) {
+      await this.ensureCardSession();
+      const oldCardWin = this.cardWin;
+
+      // Step 1: Send sys.BeginLiveMigrate to local busmaster; busmaster holds mail & drains channels until sys.BeginLiveMigrateResponse
+      const beginRes = await window.xintent.intent(
+        'sys.BeginLiveMigrate',
+        {
+          intent: 'sys.BeginLiveMigrate',
+          cardWin: oldCardWin,
+          oldCardWin: oldCardWin,
+          controlWord: 1,
+        },
+        'xbus-daemon'
+      );
+      const beginParts = typeof beginRes.parseMultipart === 'function' ? await beginRes.parseMultipart() : [];
+      const beginAck = beginParts[0]?.json || { status: 'ok' };
+
+      // Step 2: Freeze process, grab current state, and migrate state with sys.LiveMigrate to remote XHTML runtime with Connection: keep-alive
       const snapshot = await this.serializeState();
       const created = await window.xblob.XBlobCreate({
         xblobType: 'Blob',
@@ -844,23 +1139,64 @@
       });
       const stateBlobId = created.blobId || created.blob;
       if (this.heldBlobs) {
+        this.heldBlobs.delete(normalizeBlobHex(stateBlobId));
         this.heldBlobs.delete(String(stateBlobId));
       }
 
+      const migrateIntentName = options.intent || 'sys.LiveMigrate';
       const migratePayload = {
-        intent: 'xhtml.LiveMigrate',
+        intent: migrateIntentName,
         app: targetApp,
         cardApp: this.cardApp,
         cardId: this.cardId,
-        oldCardWin: this.cardWin,
+        oldCardWin: oldCardWin,
         dataBlob: stateBlobId,
+        Connection: 'keep-alive',
+        deferCommit: true,
         controlWord: 1,
         ...options,
       };
 
-      const res = await window.xintent.intent('xhtml.LiveMigrate', migratePayload, targetApp);
-      const parts = typeof res.parseMultipart === 'function' ? await res.parseMultipart() : [];
-      const result = parts[0]?.json || { status: res.ok ? 'ok' : 'error' };
+      const migrateRes = await window.xintent.intent(migrateIntentName, migratePayload, targetApp);
+      const migrateParts = typeof migrateRes.parseMultipart === 'function' ? await migrateRes.parseMultipart() : [];
+      const migrateResponse = migrateParts[0]?.json || { status: migrateRes.ok ? 'ok' : 'error' };
+      const newCardWin = migrateResponse.remoteWin || migrateResponse.newCardWin;
+      const remoteRuntimeWin = migrateResponse.remoteRuntimeWin || null;
+
+      // Step 3 & 4: Send sys.LiveMigrateCommit to local X busmaster
+      let commitResponse = null;
+      if (newCardWin) {
+        const commitRes = await window.xintent.intent(
+          'sys.LiveMigrateCommit',
+          {
+            intent: 'sys.LiveMigrateCommit',
+            oldCardWin: oldCardWin,
+            newCardWin: newCardWin,
+            remoteWin: newCardWin,
+            remoteRuntimeWin: remoteRuntimeWin,
+            stateBlobId: stateBlobId,
+            excludeBlobs: [stateBlobId],
+            heldBlobs: snapshot.heldBlobs || [],
+            openChannels: snapshot.openChannels || [],
+            natTables: snapshot.natTables || {},
+            controlWord: 1,
+          },
+          'xbus-daemon'
+        );
+        const commitParts = typeof commitRes.parseMultipart === 'function' ? await commitRes.parseMultipart() : [];
+        commitResponse = commitParts[0]?.json || null;
+      }
+
+      const result = {
+        ...migrateResponse,
+        ...(commitResponse || {}),
+        status: 'ok',
+        beginLiveMigrate: beginAck,
+        oldCardWin,
+        newCardWin: newCardWin || migrateResponse.newCardWin,
+        remoteWin: newCardWin || migrateResponse.remoteWin,
+        stateBlobId,
+      };
 
       if (window.XIntentNative && typeof window.XIntentNative.onCardMigrated === 'function') {
         try { window.XIntentNative.onCardMigrated(); } catch (_) {}
@@ -874,6 +1210,12 @@
         const cardWinParam = params.get('cardWin');
         if (cardWinParam) this.cardWin = cardWinParam;
         const migrateBlob = params.get('hydrateBlob') || params.get('migrateBlob') || params.get('migrate');
+        if (migrateBlob) {
+          this._isHydrating = true;
+        }
+        if (this.cardWin) {
+          await this.ensureCardSession({ skipNatUpload: Boolean(migrateBlob) });
+        }
         if (!migrateBlob) {
           if (this.cardWin) {
             setTimeout(async () => {
@@ -894,6 +1236,8 @@
                     heldBlobs: Array.from(this.heldBlobs),
                     softLinkedBlobs: Array.from(this.softLinkedBlobs),
                     openChannels: Array.from(this.openChannels.keys()),
+                    blobNatTable: Object.fromEntries(this.blobNatTable),
+                    channelNatTable: Object.fromEntries(this.channelNatTable),
                   }),
                 });
               } catch (_) {}
@@ -905,6 +1249,9 @@
         let snapshot = readRes?.blob?.data ?? readRes?.data ?? readRes;
         if (typeof snapshot === 'string') {
           try { snapshot = JSON.parse(snapshot); } catch (_) {}
+        }
+        if (typeof document !== 'undefined' && document.readyState === 'loading') {
+          await new Promise((r) => window.addEventListener('DOMContentLoaded', r, { once: true }));
         }
         await this.hydrateState(snapshot);
         this.hydratedSnapshot = snapshot;
@@ -932,6 +1279,8 @@
                 heldBlobs: Array.from(this.heldBlobs),
                 softLinkedBlobs: Array.from(this.softLinkedBlobs),
                 openChannels: Array.from(this.openChannels.keys()),
+                blobNatTable: Object.fromEntries(this.blobNatTable),
+                channelNatTable: Object.fromEntries(this.channelNatTable),
               }),
             });
           } catch (_) {}
@@ -941,8 +1290,211 @@
         console.warn('[xhtml] autoHydrateFromUrl warning:', err);
         return false;
       }
+    },
+
+    discoverRuntimeHosts: async function() {
+      const hosts = [];
+      const seen = new Set();
+      try {
+        const tags = await window.xintent.getTags();
+        const providers = [
+          ...((tags && tags.intents && tags.intents['sys.LiveMigrate']) || []),
+          ...((tags && tags.intents && tags.intents['xhtml.LiveMigrate']) || []),
+        ];
+        for (const p of providers) {
+          if (typeof p === 'string' && p.includes(':')) {
+            const host = p.split(':')[0].trim();
+            if (host && !seen.has(host)) {
+              seen.add(host);
+              hosts.push(host);
+            }
+          }
+        }
+      } catch (_) {}
+      return hosts;
+    },
+
+    refreshRuntimeMigrateBar: async function() {
+      if (typeof document === 'undefined') return;
+      const hostBadge = document.getElementById('xhtml-runtime-current-host');
+      const selectEl = document.getElementById('xhtml-migrate-host-select');
+      const inputEl = document.getElementById('xhtml-migrate-host-input');
+      const datalistEl = document.getElementById('xhtml-migrate-host-datalist');
+      if (hostBadge) {
+        const hostStr = this.runtimeHost || 'local';
+        const winStr = this.cardWin || 'unassigned';
+        hostBadge.textContent = `Host: ${hostStr} | Win: ${winStr}`;
+        hostBadge.dataset.runtimeHost = String(this.runtimeHost || '');
+        hostBadge.dataset.cardWin = String(this.cardWin || '');
+      }
+      const hosts = await this.discoverRuntimeHosts();
+      if (selectEl) {
+        const prevVal = selectEl.value || (inputEl && inputEl.value) || '';
+        selectEl.innerHTML = '';
+        for (const h of hosts) {
+          const opt = document.createElement('option');
+          opt.value = h;
+          opt.textContent = this.runtimeHost && h === this.runtimeHost ? `${h} (current)` : h;
+          selectEl.appendChild(opt);
+        }
+        const remoteHost = hosts.find((h) => !this.runtimeHost || h !== this.runtimeHost) || hosts[0] || '';
+        const chosen = (prevVal && hosts.includes(prevVal)) ? prevVal : remoteHost;
+        if (chosen) {
+          selectEl.value = chosen;
+          if (inputEl && !inputEl.dataset.userEdited) {
+            inputEl.value = chosen;
+          }
+        }
+      }
+      if (datalistEl) {
+        datalistEl.innerHTML = '';
+        for (const h of hosts) {
+          const opt = document.createElement('option');
+          opt.value = h;
+          datalistEl.appendChild(opt);
+        }
+      }
+    },
+
+    mountRuntimeMigrateBar: function() {
+      if (typeof document === 'undefined' || !document.body) return;
+      if (document.getElementById('xhtml-runtime-migrate-bar')) {
+        this.refreshRuntimeMigrateBar();
+        return;
+      }
+
+      const bar = document.createElement('div');
+      bar.id = 'xhtml-runtime-migrate-bar';
+      bar.setAttribute('data-xhtml-runtime-ui', 'true');
+      bar.style.cssText = [
+        'width: 100%',
+        'max-width: 960px',
+        'margin: 0 auto 10px auto',
+        'padding: 6px 12px',
+        'background: #14191f',
+        'border: 1px solid #2e4052',
+        'border-radius: 6px',
+        'color: #d8dee9',
+        'font-family: monospace',
+        'font-size: 12px',
+        'display: flex',
+        'align-items: center',
+        'justify-content: space-between',
+        'gap: 10px',
+        'flex-wrap: wrap',
+        'box-sizing: border-box',
+        'z-index: 9999',
+      ].join(';');
+
+      const leftGroup = document.createElement('div');
+      leftGroup.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;';
+
+      const titleBadge = document.createElement('span');
+      titleBadge.style.cssText = 'color:#8be9fd;font-weight:bold;';
+      titleBadge.textContent = `XHTML Runtime [${this.cardApp}/${this.cardId}]`;
+
+      const hostBadge = document.createElement('span');
+      hostBadge.id = 'xhtml-runtime-current-host';
+      hostBadge.style.cssText = 'background:#1e2630;border:1px solid #3b4b5c;border-radius:4px;padding:2px 6px;color:#50fa7b;';
+      hostBadge.textContent = `Host: ${this.runtimeHost || 'local'} | Win: ${this.cardWin || 'unassigned'}`;
+
+      leftGroup.appendChild(titleBadge);
+      leftGroup.appendChild(hostBadge);
+
+      const rightGroup = document.createElement('div');
+      rightGroup.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+
+      const labelEl = document.createElement('label');
+      labelEl.htmlFor = 'xhtml-migrate-host-input';
+      labelEl.textContent = 'Target Host:';
+      labelEl.style.cssText = 'color:#a6adc8;';
+
+      const selectEl = document.createElement('select');
+      selectEl.id = 'xhtml-migrate-host-select';
+      selectEl.setAttribute('data-xhtml-runtime-ui', 'true');
+      selectEl.style.cssText = 'background:#0d1117;color:#f8f8f2;border:1px solid #3b4b5c;border-radius:4px;padding:3px 6px;font-family:monospace;font-size:12px;';
+
+      const inputEl = document.createElement('input');
+      inputEl.type = 'text';
+      inputEl.id = 'xhtml-migrate-host-input';
+      inputEl.setAttribute('list', 'xhtml-migrate-host-datalist');
+      inputEl.setAttribute('data-xhtml-runtime-ui', 'true');
+      inputEl.placeholder = 'type or select hostname...';
+      inputEl.style.cssText = 'background:#0d1117;color:#f8f8f2;border:1px solid #3b4b5c;border-radius:4px;padding:3px 8px;font-family:monospace;font-size:12px;width:155px;';
+
+      const datalistEl = document.createElement('datalist');
+      datalistEl.id = 'xhtml-migrate-host-datalist';
+
+      const migrateBtn = document.createElement('button');
+      migrateBtn.type = 'button';
+      migrateBtn.id = 'xhtml-migrate-btn';
+      migrateBtn.setAttribute('data-xhtml-runtime-ui', 'true');
+      migrateBtn.textContent = 'Migrate';
+      migrateBtn.style.cssText = 'background:#50fa7b;color:#0b1116;border:none;border-radius:4px;padding:4px 10px;font-family:monospace;font-size:12px;font-weight:bold;cursor:pointer;';
+
+      const statusSpan = document.createElement('span');
+      statusSpan.id = 'xhtml-migrate-status';
+      statusSpan.setAttribute('data-xhtml-runtime-ui', 'true');
+      statusSpan.style.cssText = 'color:#f1fa8c;font-size:11px;';
+
+      selectEl.addEventListener('change', () => {
+        inputEl.value = selectEl.value;
+      });
+      inputEl.addEventListener('input', () => {
+        inputEl.dataset.userEdited = '1';
+      });
+
+      const triggerMigrate = async () => {
+        const rawHost = (inputEl.value || selectEl.value || '').trim();
+        if (!rawHost) {
+          statusSpan.textContent = 'Enter or select a hostname';
+          return;
+        }
+        const targetRuntime = rawHost.includes(':') ? rawHost : `${rawHost}:cool-xhtml-runtime`;
+        statusSpan.textContent = `Migrating to ${rawHost}...`;
+        migrateBtn.disabled = true;
+        try {
+          const res = await this.liveMigrate(targetRuntime);
+          statusSpan.textContent = `Migrated -> ${res?.newCardWin || res?.remoteWin || 'ok'}`;
+        } catch (err) {
+          statusSpan.textContent = `Error: ${err.message}`;
+        } finally {
+          migrateBtn.disabled = false;
+        }
+      };
+
+      migrateBtn.addEventListener('click', triggerMigrate);
+      inputEl.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          triggerMigrate();
+        }
+      });
+
+      rightGroup.appendChild(labelEl);
+      rightGroup.appendChild(selectEl);
+      rightGroup.appendChild(inputEl);
+      rightGroup.appendChild(datalistEl);
+      rightGroup.appendChild(migrateBtn);
+      rightGroup.appendChild(statusSpan);
+
+      bar.appendChild(leftGroup);
+      bar.appendChild(rightGroup);
+      document.body.insertBefore(bar, document.body.firstChild);
+
+      this.refreshRuntimeMigrateBar();
     }
-  };
+  });
+
+  if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', () => {
+        window.xhtml.mountRuntimeMigrateBar();
+      });
+    } else {
+      window.xhtml.mountRuntimeMigrateBar();
+    }
+  }
 
   if (
     typeof window.location !== 'undefined' &&

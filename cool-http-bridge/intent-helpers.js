@@ -168,8 +168,13 @@ function createMessageFromXHandler(ctx) {
       await fetchAndWriteAttachedBlob({ X, res, state, boundary, logger, blobId, intent, payload });
     }
 
-    const isFin = controlWord !== undefined && (controlWord & 2) !== 0;
-    if (isFin && !res.writableEnded && !res.finished) {
+    const isFin =
+      (controlWord !== undefined && (controlWord & 2) !== 0) ||
+      eventData?.disposition === 'final';
+    const isKeepAliveInitialResponse =
+      eventData?.event === 'sys.LiveMigrateResponse' ||
+      eventData?.event === 'term.GetOutStreamResponse';
+    if ((isFin || isKeepAliveInitialResponse) && !res.writableEnded && !res.finished) {
       finalizeStreamOnFin({ res, state, boundary, logger, senderWin, txId, controlWord, eventData, activeHttpAudioStreams, channelNatTable, deleteChannelSession, resolve });
     }
   };

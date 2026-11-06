@@ -13,7 +13,10 @@ object XIntentClient {
     const val DEFAULT_UDP_PORT = XIntentPreferences.DEFAULT_UDP_PORT
     const val DEFAULT_REMOTE_DEVICE = XIntentPreferences.DEFAULT_REMOTE_DEVICE
 
-    const val FLAMMENWERFER_MANIFEST = """[app]
+    const val FLAMMENWERFER_MANIFEST = """[computer]
+host = "user-phone"
+
+[app]
 id = "user-phone:flammenwerfer"
 
 [intents]
@@ -23,6 +26,9 @@ id = "user-phone:flammenwerfer"
 "fs.PickFile" = true
 "fs.SendTo" = true
 "fs.SaveAs" = true
+"xhtml.LoadCard" = true
+"xhtml.LiveMigrate" = true
+"sys.LiveMigrate" = true
 
 [XAudioSink]
 name = "user-phone:flammenwerfer"

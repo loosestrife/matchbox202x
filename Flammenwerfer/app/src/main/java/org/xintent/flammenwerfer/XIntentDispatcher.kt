@@ -165,6 +165,87 @@ object XIntentDispatcher {
                 if (XIntentPreferences.isLocalAudioEnabled(context)) handleWsAudioControl(webSocket, json, txId)
             "ui.TextToSpeech" ->
                 if (XIntentPreferences.isLocalTtsEnabled(context)) handleWsTts(webSocket, json, txId)
+            "sys.LiveMigrate", "xhtml.LiveMigrate", "xhtml.LoadCard" ->
+                handleWsLiveMigrateOrLoadCard(webSocket, json, txId, intentName, context)
+            "sys.LiveMigrateComplete" ->
+                XIntentLogManager.addLog("[sys.LiveMigrateComplete ✅] Completed incoming live migration for ${json.optString("newCardWin", "")}")
+        }
+    }
+
+    private fun handleWsLiveMigrateOrLoadCard(
+        webSocket: WebSocket,
+        json: JSONObject,
+        txId: Int,
+        intentName: String,
+        context: Context,
+    ) {
+        val cardApp = json.optString("cardApp", json.optString("appId", "cool-terminal")).ifBlank { "cool-terminal" }
+        val cardId = json.optString("cardId", json.optString("card", "index")).ifBlank { "index" }
+        val oldCardWin = json.optString("oldCardWin", json.optString("cardWin", ""))
+        val stateBlob = json.optString("dataBlob", json.optString("stateBlob", "")).takeIf { it.isNotBlank() && it != "0" && it != "0x0" }
+        val hostname = XIntentPreferences.getHostname(context)
+        val serverUrl = XIntentPreferences.getServerUrl(context)
+
+        val sessionPayload = JSONObject().apply {
+            put("appId", cardApp)
+            put("cardId", cardId)
+            put("runtimeHost", hostname)
+        }
+        val newCardWin = try {
+            val res = executeJsonPost("$serverUrl/api/card-session", sessionPayload, connectTimeoutMs = 4000, readTimeoutMs = 4000)
+            if (res.isSuccess) JSONObject(res.text).optString("cardWin", "") else ""
+        } catch (_: Exception) {
+            ""
+        }
+
+        val responseEvent = when (intentName) {
+            "xhtml.LoadCard" -> "xhtml.LoadCardResponse"
+            "xhtml.LiveMigrate" -> "xhtml.LiveMigrateResponse"
+            else -> "sys.LiveMigrateResponse"
+        }
+        val responseJson = JSONObject().apply {
+            put("event", responseEvent)
+            put("intent", responseEvent)
+            put("disposition", "final")
+            put("status", "ok")
+            put("host", hostname)
+            put("cardApp", cardApp)
+            put("cardId", cardId)
+            if (oldCardWin.isNotBlank()) put("oldCardWin", oldCardWin)
+            if (!stateBlob.isNullOrBlank()) put("stateBlob", stateBlob)
+            if (newCardWin.isNotBlank()) {
+                put("newCardWin", newCardWin)
+                put("remoteWin", newCardWin)
+                put("cardWin", newCardWin)
+            }
+            put("controlWord", 2)
+            if (txId != 0) put("txId", txId)
+        }
+        webSocket.send(responseJson.toString())
+        XIntentLogManager.addLog("[$intentName 📥] Accepted card $cardApp/$cardId -> newCardWin=$newCardWin on $hostname")
+
+        if (intentName == "sys.LiveMigrate") {
+            try {
+                Thread.sleep(120)
+            } catch (_: InterruptedException) {}
+        }
+
+        val activeInstance = CardsActivity.instance
+        if (activeInstance != null) {
+            activeInstance.openIncomingMigratedCard(cardApp, cardId, newCardWin, stateBlob)
+        } else {
+            try {
+                val launchIntent = android.content.Intent(context, CardsActivity::class.java).apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(CardsActivity.EXTRA_APP_NAME, cardApp)
+                    putExtra(CardsActivity.EXTRA_CARD_NAME, cardId)
+                    if (newCardWin.isNotBlank()) putExtra(CardsActivity.EXTRA_CARD_WIN, newCardWin)
+                    if (!stateBlob.isNullOrBlank()) putExtra(CardsActivity.EXTRA_HYDRATE_BLOB, stateBlob)
+                }
+                context.startActivity(launchIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to launch CardsActivity for incoming $intentName: ${e.message}")
+            }
         }
     }
 

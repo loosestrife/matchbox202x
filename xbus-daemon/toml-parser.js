@@ -68,9 +68,14 @@ function collectWindowEntries(aggregate, windowRegistry) {
   for (const [widStr, matchboxToml] of Object.entries(windowRegistry)) {
     const wid = parseInt(widStr, 10);
     const appName = matchboxToml?.app?.id || `win-${wid}`;
+    const hostName = matchboxToml?.computer?.host || null;
+    const hostQualifiedName = hostName ? `${hostName}:${appName}` : null;
 
     for (const intentName of Object.keys(matchboxToml.intents || {})) {
       addAppToIntent(aggregate, intentName, appName);
+      if (hostQualifiedName) {
+        addAppToIntent(aggregate, intentName, hostQualifiedName);
+      }
     }
     mergeAppMetadata(
       aggregate,
@@ -82,6 +87,18 @@ function collectWindowEntries(aggregate, windowRegistry) {
         cards: matchboxToml.cards,
       },
     );
+    if (hostQualifiedName) {
+      mergeAppMetadata(
+        aggregate,
+        hostQualifiedName,
+        matchboxToml.app || {},
+        matchboxToml.intents || {},
+        {
+          mainCard: matchboxToml.app?.main?.card || (Array.isArray(matchboxToml.cards) ? matchboxToml.cards[0]?.id : null),
+          cards: matchboxToml.cards,
+        },
+      );
+    }
     processAudioSection(aggregate, 'XAudioSink', matchboxToml.XAudioSink, appName, wid);
     processAudioSection(aggregate, 'XAudioSource', matchboxToml.XAudioSource, appName, wid);
   }

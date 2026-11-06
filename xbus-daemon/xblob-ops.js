@@ -104,16 +104,42 @@ const xblobUnlinkWindow = async (destroyedWin) => {
   }
 };
 
+const linkBlobAlias = (origBlobId, aliasBlobId, newWin = null) => {
+  const regEntry = xblobRegistry[origBlobId];
+  if (!regEntry) return null;
+  const resolvedAliasId = aliasBlobId || nextOpaqueBlobId++;
+  if (resolvedAliasId >= nextOpaqueBlobId) {
+    nextOpaqueBlobId = resolvedAliasId + 1;
+  }
+  xblobRegistry[resolvedAliasId] = regEntry;
+  if (newWin && Array.isArray(regEntry.links) && !regEntry.links.includes(newWin)) {
+    regEntry.links.push(newWin);
+  }
+  if (!Array.isArray(regEntry.aliases)) {
+    regEntry.aliases = [origBlobId];
+  }
+  if (!regEntry.aliases.includes(resolvedAliasId)) {
+    regEntry.aliases.push(resolvedAliasId);
+  }
+  logger.info(
+    `linkBlobAlias: bound NAT blob alias ${xintent.widString(resolvedAliasId)} -> ${xintent.widString(origBlobId)}`
+  );
+  return resolvedAliasId;
+};
+
 const migrateWindowBlobs = (oldWin, newWin) => {
   const migratedLinks = [];
   const migratedSoftLinks = [];
+  const migratedDetails = [];
   if (!oldWin || !newWin || oldWin === newWin) {
-    return { migratedLinks, migratedSoftLinks };
+    return { migratedLinks, migratedSoftLinks, migratedDetails };
   }
 
+  const seenEntries = new Set();
   for (const [blobIdStr, regEntry] of Object.entries(xblobRegistry)) {
     const blobId = Number(blobIdStr);
-    if (!regEntry) continue;
+    if (!regEntry || seenEntries.has(regEntry)) continue;
+    seenEntries.add(regEntry);
 
     if (Array.isArray(regEntry.links) && regEntry.links.includes(oldWin)) {
       if (!regEntry.links.includes(newWin)) {
@@ -121,6 +147,7 @@ const migrateWindowBlobs = (oldWin, newWin) => {
       }
       regEntry.links = regEntry.links.filter((w) => w !== oldWin);
       migratedLinks.push(blobId);
+      migratedDetails.push({ blobId, linkType: 'hard' });
       logger.info(`migrateWindowBlobs: transferred hard link on blob ${xintent.widString(blobId)} from ${xintent.widString(oldWin)} to ${xintent.widString(newWin)}`);
     }
 
@@ -130,11 +157,14 @@ const migrateWindowBlobs = (oldWin, newWin) => {
       }
       regEntry.softLinks = regEntry.softLinks.filter((w) => w !== oldWin);
       migratedSoftLinks.push(blobId);
+      if (!migratedLinks.includes(blobId)) {
+        migratedDetails.push({ blobId, linkType: 'soft' });
+      }
       logger.info(`migrateWindowBlobs: transferred soft link on blob ${xintent.widString(blobId)} from ${xintent.widString(oldWin)} to ${xintent.widString(newWin)}`);
     }
   }
 
-  return { migratedLinks, migratedSoftLinks };
+  return { migratedLinks, migratedSoftLinks, migratedDetails };
 };
 
 module.exports = {
@@ -145,4 +175,5 @@ module.exports = {
   implicitXBlobTransfer,
   xblobUnlinkWindow,
   migrateWindowBlobs,
+  linkBlobAlias,
 };

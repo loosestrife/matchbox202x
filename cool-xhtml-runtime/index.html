@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cool XHTML Runtime — Web Cards on Bus</title>
+  <style>
+    :root {
+      --bg: #1e1e2e;
+      --card-bg: #282a36;
+      --item-bg: #191a21;
+      --item-hover: #313444;
+      --accent: #8be9fd;
+      --accent-pink: #ff79c6;
+      --accent-green: #50fa7b;
+      --text: #f8f8f2;
+      --muted: #a6adc8;
+      --border: #44475a;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: monospace;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 2rem;
+      margin: 0;
+    }
+    .launcher-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 680px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    }
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.75rem;
+    }
+    h2 {
+      margin: 0;
+      color: var(--accent);
+      font-size: 1.25rem;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+    button.refresh-btn {
+      background: var(--accent-pink);
+      color: #000;
+      font-weight: bold;
+      border: none;
+      padding: 0.45rem 0.85rem;
+      border-radius: 4px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    button.refresh-btn:hover {
+      opacity: 0.9;
+    }
+    #cards-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .web-card-item {
+      background: var(--item-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.9rem 1rem;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .web-card-item:hover {
+      background: var(--item-hover);
+      border-color: var(--accent);
+    }
+    .card-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .card-title {
+      font-weight: bold;
+      color: var(--text);
+      font-size: 1rem;
+    }
+    .card-id-badge {
+      color: var(--accent);
+      font-size: 0.8rem;
+    }
+    .card-desc {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .card-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .launch-card-btn {
+      background: var(--accent-green);
+      color: #000;
+      border: none;
+      border-radius: 4px;
+      padding: 0.4rem 0.75rem;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .launch-card-btn:hover {
+      opacity: 0.9;
+    }
+    #status-log {
+      margin-top: 1.25rem;
+      background: #11111b;
+      border: 1px solid var(--border);
+      padding: 0.75rem 1rem;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      color: var(--accent-green);
+      white-space: pre-wrap;
+      min-height: 2.5rem;
+    }
+  </style>
+  <script src="/matchbox202x.js"></script>
+</head>
+<body>
+
+<div class="launcher-container">
+  <div class="header-row">
+    <h2>Matchbox202x Web Cards</h2>
+    <button id="refresh-cards-btn" class="refresh-btn" type="button">Refresh Bus</button>
+  </div>
+  <div class="subtitle">
+    Click any available web card on the XIntent bus to send <code>xhtml.LoadCard</code> to <code>cool-xhtml-runtime</code>.
+  </div>
+
+  <div id="cards-list">Loading available web cards from bus...</div>
+
+  <input type="hidden" id="discovered-cards-input" value="" />
+  <input type="hidden" id="last-loaded-card-input" value="" />
+
+  <div id="status-log">Ready.</div>
+</div>
+
+<script>
+  const cardsListEl = document.getElementById('cards-list');
+  const statusLogEl = document.getElementById('status-log');
+  const discoveredInputEl = document.getElementById('discovered-cards-input');
+  const lastLoadedInputEl = document.getElementById('last-loaded-card-input');
+  const refreshBtn = document.getElementById('refresh-cards-btn');
+
+  function setStatus(msg) {
+    statusLogEl.textContent = msg;
+  }
+
+  async function sendLoadCardIntent(appId, cardId) {
+    setStatus(`Sending xhtml.LoadCard for ${appId}/${cardId}...`);
+    try {
+      let result;
+      if (window.xhtml && typeof window.xhtml.loadCard === 'function') {
+        result = await window.xhtml.loadCard(appId, cardId, 'cool-xhtml-runtime');
+      } else {
+        const res = await window.xintent.intent(
+          'xhtml.LoadCard',
+          {
+            intent: 'xhtml.LoadCard',
+            app: 'cool-xhtml-runtime',
+            cardApp: appId,
+            cardId: cardId,
+            controlWord: 1,
+          },
+          'cool-xhtml-runtime'
+        );
+        const parts = typeof res.parseMultipart === 'function' ? await res.parseMultipart() : [];
+        result = parts[0]?.json || { status: res.ok ? 'ok' : 'error' };
+      }
+      const targetStr = `${appId}:${cardId}`;
+      lastLoadedInputEl.value = targetStr;
+      try {
+        localStorage.setItem('xhtml.lastLoadedCard', targetStr);
+        if (result && result.cardWin) {
+          localStorage.setItem('xhtml.lastLoadedCardWin', String(result.cardWin));
+        }
+      } catch (_) {}
+      setStatus(`Loaded ${appId}/${cardId} -> cardWin=${result?.cardWin || 'ok'}`);
+      return result;
+    } catch (err) {
+      setStatus(`Error loading ${appId}/${cardId}: ${err.message}`);
+      throw err;
+    }
+  }
+
+  function extractWebCardsFromTags(tags) {
+    const apps = (tags && tags.apps) || {};
+    const discovered = [];
+    for (const [appId, appObj] of Object.entries(apps)) {
+      if (!appObj || typeof appObj !== 'object') continue;
+      const rawCards = Array.isArray(appObj.cards) ? appObj.cards.filter(Boolean) : [];
+      const mainCard = appObj.mainCard || rawCards[0] || null;
+      if (!mainCard && rawCards.length === 0) continue;
+      const cards = rawCards.length > 0 ? rawCards : [mainCard];
+      discovered.push({
+        appId,
+        name: appObj.name || appId,
+        description: appObj.description || '',
+        mainCard: mainCard || cards[0],
+        cards,
+      });
+    }
+    return discovered;
+  }
+
+  function renderWebCards(discovered) {
+    cardsListEl.innerHTML = '';
+    if (discovered.length === 0) {
+      cardsListEl.textContent = 'No web cards discovered on the bus.';
+      return;
+    }
+
+    for (const item of discovered) {
+      const row = document.createElement('div');
+      row.className = 'web-card-item';
+      row.dataset.appId = item.appId;
+      row.dataset.cardId = item.mainCard;
+
+      const info = document.createElement('div');
+      info.className = 'card-info';
+
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = item.name;
+
+      const badge = document.createElement('div');
+      badge.className = 'card-id-badge';
+      badge.textContent = `${item.appId} (card: ${item.mainCard})`;
+
+      info.appendChild(title);
+      info.appendChild(badge);
+
+      if (item.description) {
+        const desc = document.createElement('div');
+        desc.className = 'card-desc';
+        desc.textContent = item.description;
+        info.appendChild(desc);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'card-actions';
+
+      for (const cardName of item.cards) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'launch-card-btn';
+        btn.dataset.appId = item.appId;
+        btn.dataset.cardId = cardName;
+        btn.textContent = item.cards.length > 1 ? `Open ${cardName}` : 'Open Card';
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          sendLoadCardIntent(item.appId, cardName);
+        });
+        actions.appendChild(btn);
+      }
+
+      row.addEventListener('click', () => {
+        sendLoadCardIntent(item.appId, item.mainCard);
+      });
+
+      row.appendChild(info);
+      row.appendChild(actions);
+      cardsListEl.appendChild(row);
+    }
+  }
+
+  async function refreshAvailableCards() {
+    try {
+      const tags = await window.xintent.getTags();
+      const discovered = extractWebCardsFromTags(tags);
+      const summaryIds = discovered.map((d) => d.appId).join(',');
+      discoveredInputEl.value = summaryIds;
+      try {
+        localStorage.setItem('xhtml.discoveredCards', summaryIds);
+      } catch (_) {}
+      renderWebCards(discovered);
+      setStatus(`Discovered ${discovered.length} web card app(s) on the bus.`);
+      return discovered;
+    } catch (err) {
+      setStatus(`Failed to query /api/tags: ${err.message}`);
+      return [];
+    }
+  }
+
+  refreshBtn.addEventListener('click', () => refreshAvailableCards());
+
+  window.addEventListener('DOMContentLoaded', async () => {
+    const discovered = await refreshAvailableCards();
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const autoClick = params.get('autoClickCard');
+      if (autoClick) {
+        const [targetApp, targetCard] = autoClick.includes(':')
+          ? autoClick.split(':')
+          : [autoClick, null];
+        const matched = discovered.find((d) => d.appId === targetApp);
+        const resolvedCard = targetCard || matched?.mainCard || 'index';
+        const btn = document.querySelector(`.web-card-item[data-app-id="${targetApp}"]`);
+        if (btn) {
+          btn.click();
+        } else {
+          await sendLoadCardIntent(targetApp, resolvedCard);
+        }
+      }
+    } catch (_) {}
+  });
+</script>
+</body>
+</html>

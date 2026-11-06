@@ -48,6 +48,14 @@ xvfb-run -a bash -c "
   echo ''
   echo '--- 9. Running XHTML LiveMigrate E2E Test ---'
   bun /home/user/matchbox202x/tests/test_xhtml_live_migrate.js
+
+  echo ''
+  echo '--- 10. Running Cool-Terminal E2E Test ---'
+  bun /home/user/matchbox202x/tests/test_cool_terminal.js
+
+  echo ''
+  echo '--- 11. Running Dual-Xvfb + WebDriver Cool-Terminal Live Migration Test ---'
+  bun /home/user/matchbox202x/tests/test_cool_terminal_live_migrate.js
 "
 
 echo ""

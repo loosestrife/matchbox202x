@@ -148,6 +148,20 @@ async function createOutputStreamFromTty(X, termWin, ttyFd, ttyPath, session) {
     try { fs.closeSync(ttyFd); } catch (_) {}
     activeSessions.delete(session);
     xintent.XBlobStreamClosed(X, xintent.routerWin, termWin, outBlobId, termWin, bytesWritten).catch(() => {});
+    if (session.channel && session.keepAlive) {
+      xintent.sendXIntentEventV0(X, xintent.routerWin, {
+        senderWin: termWin,
+        channel: session.channel,
+        controlWord: 2,
+        payload: {
+          event: 'term.SessionClosed',
+          disposition: 'final',
+          status: 'ok',
+          tty: ttyPath,
+          bytesWritten,
+        },
+      }).catch(() => {});
+    }
   };
 
   const ttyReadStream = fs.createReadStream(null, { fd: ttyFd, autoClose: false });
@@ -155,7 +169,10 @@ async function createOutputStreamFromTty(X, termWin, ttyFd, ttyPath, session) {
     try {
       fs.writeSync(outWriteFd, chunk);
       bytesWritten += chunk.length;
-    } catch (_) {
+    } catch (err) {
+      if (err && (err.code === 'EAGAIN' || err.code === 'EWOULDBLOCK')) {
+        return;
+      }
       closeOutStream();
     }
   });
@@ -181,6 +198,11 @@ async function handleGetOutStreamIntent(X, termWin, frame) {
   );
 
   const session = allocatePtySession(payload);
+  session.channel = channel;
+  session.clientWin = frame.senderWin;
+  session.inBlobId = inBlobId;
+  const connHdr = String(payload.Connection || payload.connection || payload.headers?.Connection || '').toLowerCase();
+  session.keepAlive = connHdr === 'keep-alive' || payload.keepChannelOpen === true;
   activeSessions.add(session);
 
   if (inBlobId) {
@@ -188,6 +210,7 @@ async function handleGetOutStreamIntent(X, termWin, frame) {
   }
 
   const outBlobId = await createOutputStreamFromTty(X, termWin, session.ttyFd, session.ttyPath, session);
+  session.outBlobId = outBlobId;
 
   const requestedIntent = payload.intent || payload.action || 'term.GetOutStream';
   const responseEventName = requestedIntent === 'term.getOutStream'
@@ -246,6 +269,22 @@ async function startTerminalService() {
       } catch (err) {
         logger.error('Error handling term.GetOutStream in cool-terminal:', err);
       }
+    } else if (ev.type === 33 && ev.message_type === xintent.atoms.XINTENT_EVENT_V0) {
+      try {
+        const frame = await xintent.parseXIntentEventV0(X, xintent.routerWin, ev);
+        const evName = frame.payload?.event || frame.payload?.intent;
+        if (evName === 'sys.ChannelRedirected') {
+          const chNum = frame.channel || frame.payload?.channel;
+          for (const s of activeSessions) {
+            if (s.channel === chNum || s.channel === frame.payload?.txId) {
+              s.clientWin = frame.payload?.newCardWin || s.clientWin;
+              logger.info(
+                `[cool-terminal] Channel ${chNum} (tty=${s.ttyPath}) redirected from ${frame.payload?.oldCardWin} to ${frame.payload?.newCardWin}`
+              );
+            }
+          }
+        }
+      } catch (_) {}
     }
   });
 }

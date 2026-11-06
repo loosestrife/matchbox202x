@@ -354,6 +354,7 @@ module.exports = {
   xblobUnlink: ops.xblobUnlink,
   xblobUnlinkWindow: ops.xblobUnlinkWindow,
   migrateWindowBlobs: ops.migrateWindowBlobs,
+  linkBlobAlias: ops.linkBlobAlias,
   corkWindowBlobEvents,
   uncorkAndFlushWindowBlobEvents,
 };

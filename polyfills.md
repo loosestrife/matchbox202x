@@ -239,6 +239,16 @@ Service lighters advertise this and get `sys.Launch` intents
 ## AGGREGATE_TOML
 Intent routers advertise this and bridges propagate it.
 
+# XHtml Live Migration
+* each xhtml card lives in a virtual private bus.  when migrated, the xhtml card continues using the same blob and channel ids but the card runtime holds nat tables which migrate with the cards
+* the xhtml runtime provides window.xhtml.getNatInfo(blob, 0x123) listing the actual local blob id and a promise window.xhtml.whenRemapped(blob, 0x123) that fires when the blob is remapped, so the card can opt in to being aware of whats going on
+
+1) send sys.BeginLiveMigrate to the local x busmaster.  the local x busmaster then holds all mail for the card.  the runtime then has to drain the channels until sys.BeginLiveMigrateResponse.
+2) freeze the process, grab its current state, migrate its current state with sys.LiveMigrate to the remote xhtml runtime with Connection: keep-alive
+3) sys.LiveMigrateResponse comes with the remote window id
+4) send sys.LiveMigrateCommit to the local x busmaster. the local x busmaster then sends sys.ChannelRedirected to the other end of every channel as a courtesy, and sends the migrated process's end to the remote x busmaster with the remote window id from sys.LiveMigrateResponse, using a sys.ChannelRedirect.  When the sys.ChannelRedirect is delivered to the remote window, it includes the card's txId/channelId for the channel, to fill the card's virtual private bus nat table.  It also does the xblob transfers, and sends sys.XBlobTransferred containing the local blob id in the payload and the blob id in the data would be natted, so the remote xhtml runtime can fill its virtual private bus nat table
+5) When the local x busmaster finishes and gets its responses from all the sys.XBlobTransferred and sys.ChannelRedirect, it sends sys.LiveMigrateCommitResponse to the local xhtml runtime and sys.LiveMigrateComplete to the remote xhtml runtime, so the remote xhtml runtime can know to resume the card 
+6) (optional) sys.TraceRoute to find and sys.AdjustChannel to remove hairpins in the channel route
 
 # Rationale
 ## Why XINTENT V0 is based on XBLOB V0

@@ -103,7 +103,23 @@ const xblobDestructor = async (message, X = null, lighterWin = 0) => {
   const blob = message.blob;
   const numBlob = parseBlobId(blob);
   const blobData = hostBlobs.get(blob) || (numBlob !== null ? hostBlobs.get(numBlob) : null);
+  delete softLinks[blob];
+  hostBlobs.delete(blob);
+  if (numBlob !== null) {
+    hostBlobs.delete(numBlob);
+    hostBlobs.delete(`0x${numBlob.toString(16)}`);
+    hostBlobs.delete(String(numBlob));
+  }
+  let stillReferenced = false;
   if (blobData) {
+    for (const v of hostBlobs.values()) {
+      if (v === blobData) {
+        stillReferenced = true;
+        break;
+      }
+    }
+  }
+  if (blobData && !stillReferenced) {
     if (blobData.streamCompletedPromise && !blobData.streamCompleted) {
       try {
         await blobData.streamCompletedPromise;
@@ -118,13 +134,6 @@ const xblobDestructor = async (message, X = null, lighterWin = 0) => {
     if (blobData.storagePath) {
       try { fs.unlinkSync(blobData.storagePath); } catch (_) {}
     }
-  }
-  delete softLinks[blob];
-  hostBlobs.delete(blob);
-  if (numBlob !== null) {
-    hostBlobs.delete(numBlob);
-    hostBlobs.delete(`0x${numBlob.toString(16)}`);
-    hostBlobs.delete(String(numBlob));
   }
   if (X && lighterWin) {
     xintent.XBlobSoftUnlink(X, xintent.routerWin, lighterWin, blob);

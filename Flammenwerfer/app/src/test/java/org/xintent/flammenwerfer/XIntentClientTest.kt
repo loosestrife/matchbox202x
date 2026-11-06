@@ -11,9 +11,13 @@ class XIntentClientTest {
     fun testDefaultConstants() {
         assertEquals("http://10.0.2.2:12345", XIntentClient.DEFAULT_SERVER_URL)
         assertNotNull(XIntentClient.FLAMMENWERFER_MANIFEST)
+        assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("[computer]"))
         assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("[app]"))
         assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("id ="))
         assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("\"ui.TextToSpeech\" = true"))
+        assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("\"xhtml.LoadCard\" = true"))
+        assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("\"xhtml.LiveMigrate\" = true"))
+        assertTrue(XIntentClient.FLAMMENWERFER_MANIFEST.contains("\"sys.LiveMigrate\" = true"))
     }
 
     @Test

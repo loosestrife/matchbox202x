@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const xintent = require('../x11-promises/xintent');
 const { Logger } = require('../server-tools');
+const serverGlobals = require('./server-globals');
 
 const logger = new Logger({ module: 'route-xblob' });
 
@@ -87,7 +88,7 @@ function wantsRawHttpBlobResponse(req) {
   return rawTypes.some((t) => acceptHeader.includes(t));
 }
 
-function tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId) {
+function tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId, senderWin = 0) {
   const bodyPayload = blobData.data !== undefined ? blobData.data : blobData;
   const isNumericFd = typeof bodyPayload === 'number' && bodyPayload >= 0;
   const fdPath = typeof bodyPayload === 'string' ? bodyPayload.trim() : null;
@@ -108,6 +109,9 @@ function tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId) {
   const readStream = isNumericFd
     ? fs.createReadStream(null, { fd: bodyPayload, autoClose: true })
     : fs.createReadStream(fdPath);
+  if (senderWin) {
+    serverGlobals.registerCardStream(senderWin, readStream, res);
+  }
   res.on('close', () => {
     try { readStream.destroy(); } catch (_) {}
   });
@@ -132,7 +136,7 @@ function convertBlobPayloadToBuffer(blobData) {
   return Buffer.from(String(bodyPayload), 'utf8');
 }
 
-function sendRawHttpBlob(req, res, blobData, hexBlobId) {
+function sendRawHttpBlob(req, res, blobData, hexBlobId, senderWin = 0) {
   const mimeType = blobData.type || (blobData._dataType === 'json' ? 'application/json' : 'application/octet-stream');
   const dataType = blobData._dataType || (mimeType.includes('application/json') ? 'json' : 'binary');
   const isStream =
@@ -142,7 +146,7 @@ function sendRawHttpBlob(req, res, blobData, hexBlobId) {
     req.headers['x-xblob-type'] === 'BufferedReadableStream' ||
     req.headers['x-xblob-type'] === 'ReadableStream';
 
-  if (tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId)) {
+  if (tryPipeFdStream(res, blobData, mimeType, isStream, hexBlobId, senderWin)) {
     return;
   }
 
@@ -172,11 +176,17 @@ module.exports = ({ X, clientWin }) => {
     return !isNaN(parsed) && parsed > 0 ? (parsed >>> 0) : clientWin;
   };
 
+  const resolveLocalBlobId = (senderWin, rawId) => {
+    const parsed = parseBlobId(rawId);
+    if (isNaN(parsed)) return NaN;
+    return parseBlobId(serverGlobals.translateCardBlobToLocal(senderWin, parsed));
+  };
+
   const routeXBlobCreate = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const blobData = parseBlobCreatePayload(req);
     const rawBlob = req.params?.blobId;
-    const targetBlob = rawBlob ? parseBlobId(rawBlob) : null;
+    const targetBlob = rawBlob ? resolveLocalBlobId(senderWin, rawBlob) : null;
 
     let blobId = targetBlob;
     if (targetBlob) {
@@ -185,7 +195,7 @@ module.exports = ({ X, clientWin }) => {
       blobId = await xintent.XBlobCreate(X, routerWin(), senderWin, blobData);
     }
 
-    const hexBlobId = toHexBlobId(blobId);
+    const hexBlobId = toHexBlobId(rawBlob ? parseBlobId(rawBlob) : blobId);
     const fileNameStr = blobData.name ? ` "${blobData.name}"` : '';
     const sizeStr = blobData.size ? `${blobData.size.toLocaleString()} bytes` : '0 bytes';
     logger.info(`Finished receiving XBlob upload${fileNameStr} -> created blob ${hexBlobId} (${blobData.type || 'unknown type'}, ${sizeStr})`);
@@ -201,11 +211,12 @@ module.exports = ({ X, clientWin }) => {
   };
 
   const routeXBlobRead = async (req, res) => {
+    const senderWin = resolveSenderWin(req);
     const rawId = req.body?.blobId || req.body?.blob || req.params?.blobId;
-    const targetBlob = parseBlobId(rawId);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     const userAgent = req.headers['user-agent'] || 'unknown';
-    logger.info(`GET/POST /xblob/XBlobRead blob=${targetBlob} from User-Agent "${userAgent}"`);
+    logger.info(`GET/POST /xblob/XBlobRead blob=${targetBlob} (requested=${rawId}) from User-Agent "${userAgent}"`);
     try {
       const blobData = await xintent.XBlobRead(
         X,
@@ -213,7 +224,7 @@ module.exports = ({ X, clientWin }) => {
         targetBlob,
         null,
         null,
-        resolveSenderWin(req),
+        senderWin,
         'cool-http-bridge',
         { acceptReadableStream: true }
       );
@@ -222,7 +233,7 @@ module.exports = ({ X, clientWin }) => {
       res.setHeader('Accept-Encoding', 'identity, base64, fd-rights');
 
       if (wantsRawHttpBlobResponse(req)) {
-        return sendRawHttpBlob(req, res, blobData, hexBlobId);
+        return sendRawHttpBlob(req, res, blobData, hexBlobId, senderWin);
       }
       res.status(200).json({ status: 'ok', blobId: hexBlobId, blob: blobData });
     } catch (err) {
@@ -233,8 +244,9 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobTransfer = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const { blobId, blob, grantee } = req.body || {};
-    const targetBlob = parseBlobId(req.params?.blobId || blobId || blob);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const rawId = req.params?.blobId || blobId || blob;
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     const granteeWin = parseBlobId(grantee) || Number(grantee || routerWin());
     logger.info(`${req.method} ${req.path} blob=${targetBlob} sender=${xintent.widString(senderWin)} grantee=${granteeWin}`);
     if (isNaN(targetBlob)) {
@@ -250,8 +262,9 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobGrant = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const { blobId, blob, grantee } = req.body || {};
-    const targetBlob = parseBlobId(req.params?.blobId || blobId || blob);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const rawId = req.params?.blobId || blobId || blob;
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     const granteeWin = parseBlobId(grantee) || Number(grantee || routerWin());
     logger.info(`${req.method} ${req.path} blob=${targetBlob} sender=${xintent.widString(senderWin)} grantee=${granteeWin}`);
     if (isNaN(targetBlob)) {
@@ -267,8 +280,9 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobUnlink = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const { blobId, blob } = req.body || {};
-    const targetBlob = parseBlobId(req.params?.blobId || blobId || blob);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const rawId = req.params?.blobId || blobId || blob;
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     logger.info(`${req.method} ${req.path} blob=${targetBlob} sender=${xintent.widString(senderWin)}`);
     if (isNaN(targetBlob)) {
       res.setHeader('Matchbox-Bridge', '1.0');
@@ -283,8 +297,9 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobSoftLink = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const { blobId, blob, grantee } = req.body || {};
-    const targetBlob = parseBlobId(req.params?.blobId || blobId || blob);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const rawId = req.params?.blobId || blobId || blob;
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     const linkWin = parseBlobId(grantee) || senderWin;
     logger.info(`${req.method} ${req.path} blob=${targetBlob} softLinker=${xintent.widString(linkWin)}`);
     if (isNaN(targetBlob)) {
@@ -300,8 +315,9 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobSoftUnlink = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const { blobId, blob, grantee } = req.body || {};
-    const targetBlob = parseBlobId(req.params?.blobId || blobId || blob);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const rawId = req.params?.blobId || blobId || blob;
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     const linkWin = parseBlobId(grantee) || senderWin;
     logger.info(`${req.method} ${req.path} blob=${targetBlob} softUnlinker=${xintent.widString(linkWin)}`);
     if (isNaN(targetBlob)) {
@@ -317,8 +333,9 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobAnnounceHost = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const { blobId, blob, host } = req.body || {};
-    const targetBlob = parseBlobId(req.params?.blobId || blobId || blob);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const rawId = req.params?.blobId || blobId || blob;
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     const hostWin = Number(host || senderWin);
     logger.info(`${req.method} ${req.path} blob=${targetBlob} host=${hostWin}`);
     if (isNaN(targetBlob)) {
@@ -334,8 +351,9 @@ module.exports = ({ X, clientWin }) => {
   const routeXBlobBroadcast = async (req, res) => {
     const senderWin = resolveSenderWin(req);
     const { blobId, blob, host, version } = req.body || {};
-    const targetBlob = parseBlobId(req.params?.blobId || blobId || blob);
-    const hexBlobId = toHexBlobId(targetBlob);
+    const rawId = req.params?.blobId || blobId || blob;
+    const targetBlob = resolveLocalBlobId(senderWin, rawId);
+    const hexBlobId = toHexBlobId(parseBlobId(rawId) || targetBlob);
     logger.info(`${req.method} ${req.path} blob=${targetBlob} version=${version}`);
     if (isNaN(targetBlob)) {
       res.setHeader('Matchbox-Bridge', '1.0');

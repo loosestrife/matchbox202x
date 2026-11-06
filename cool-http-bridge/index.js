@@ -105,7 +105,128 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes, { X, root }) {
       logger.info(`Allocated dedicated X11 card proxy window ${xintent.widString(wid)} for ${appId}/${cardId}`);
     }
     const record = serverGlobals.registerCardWindow(wid, appId, cardId);
-    res.json({ status: 'ok', cardWin: record.widHex, wid: record.wid, appId: record.appId, cardId: record.cardId });
+    if (req.body?.runtimeHost) record.runtimeHost = req.body.runtimeHost;
+    if (req.body?.browserDisplay) record.browserDisplay = req.body.browserDisplay;
+    if (req.body?.webdriverUrl) record.webdriverUrl = req.body.webdriverUrl;
+    if (req.body?.webdriverSessionId !== undefined) record.webdriverSessionId = req.body.webdriverSessionId;
+    if (req.body?.blobNatTable && typeof req.body.blobNatTable === 'object') {
+      for (const [vId, lId] of Object.entries(req.body.blobNatTable)) {
+        serverGlobals.setCardBlobNat(wid, vId, lId);
+      }
+    }
+    if (req.body?.channelNatTable && typeof req.body.channelNatTable === 'object') {
+      for (const [vTx, lTx] of Object.entries(req.body.channelNatTable)) {
+        serverGlobals.setCardChannelNat(wid, vTx, lTx);
+      }
+    }
+    res.json({
+      status: 'ok',
+      cardWin: record.widHex,
+      wid: record.wid,
+      appId: record.appId,
+      cardId: record.cardId,
+      runtimeHost: record.runtimeHost || null,
+      browserDisplay: record.browserDisplay || null,
+      blobNatTable: record.blobNatTable,
+      channelNatTable: record.channelNatTable,
+    });
+  });
+
+  app.post('/api/card-nat', (req, res) => {
+    const wid = serverGlobals.parseWindowId(req.body?.cardWin || req.headers['x-card-window']);
+    if (!wid) {
+      return res.status(400).json({ status: 'error', message: 'Invalid cardWin' });
+    }
+    const record = serverGlobals.registerCardWindow(wid);
+    if (req.body?.blobNatTable && typeof req.body.blobNatTable === 'object') {
+      for (const [vId, lId] of Object.entries(req.body.blobNatTable)) {
+        serverGlobals.setCardBlobNat(wid, vId, lId);
+      }
+    }
+    if (req.body?.channelNatTable && typeof req.body.channelNatTable === 'object') {
+      for (const [vTx, lTx] of Object.entries(req.body.channelNatTable)) {
+        serverGlobals.setCardChannelNat(wid, vTx, lTx);
+      }
+    }
+    res.json({
+      status: 'ok',
+      cardWin: record.widHex,
+      blobNatTable: record.blobNatTable,
+      channelNatTable: record.channelNatTable,
+    });
+  });
+
+  app.all('/api/card-snapshot/:cardWin', async (req, res) => {
+    const wid = serverGlobals.parseWindowId(req.params.cardWin);
+    if (!wid) {
+      return res.status(400).json({ status: 'error', message: 'Invalid cardWin' });
+    }
+    const shouldFreeze = req.body?.freeze !== false && req.query?.freeze !== 'false';
+    if (shouldFreeze) {
+      serverGlobals.closeCardStreams(wid);
+    }
+    const widHex = xintent.widString(wid);
+    const record = serverGlobals.registerCardWindow(wid);
+    const openWsList = [];
+    if (record.ws && record.ws.readyState === WebSocket.OPEN) openWsList.push(record.ws);
+    if (record.wsSet) {
+      for (const w of record.wsSet) {
+        if (w.readyState === WebSocket.OPEN && !openWsList.includes(w)) openWsList.push(w);
+      }
+    }
+
+    let wsSnapshot = null;
+    if (openWsList.length > 0) {
+      wsSnapshot = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          record.resolveSnapshotWaiter = null;
+          resolve(null);
+        }, 1200);
+        record.resolveSnapshotWaiter = (snap) => {
+          clearTimeout(timer);
+          record.resolveSnapshotWaiter = null;
+          resolve(snap);
+        };
+        const reqMsg = JSON.stringify({
+          event: 'xhtml.RequestSnapshot',
+          cardWin: widHex,
+          freeze: shouldFreeze,
+        });
+        for (const w of openWsList) {
+          try { w.send(reqMsg); } catch (_) {}
+        }
+      });
+    }
+
+    if (wsSnapshot && typeof wsSnapshot === 'object') {
+      return res.json({ status: 'ok', cardWin: widHex, snapshot: wsSnapshot });
+    }
+
+    const rep = record.hydratedReport || {};
+    const fallbackSnapshot = {
+      version: '0.1',
+      cardApp: record.appId || rep.cardApp || 'xhtml-card',
+      cardId: record.cardId || rep.cardId || 'main',
+      cardWin: widHex,
+      timestamp: Date.now(),
+      storage: {
+        localStorage: rep.localStorage || {},
+        sessionStorage: rep.sessionStorage || {},
+      },
+      domState: {
+        scroll: { x: 0, y: 0 },
+        inputs: rep.domInputs || {},
+      },
+      heldBlobs: rep.heldBlobs || [],
+      softLinkedBlobs: rep.softLinkedBlobs || [],
+      openChannels: (rep.openChannels || []).map((tx) => (typeof tx === 'object' ? tx : { txId: Number(tx) })),
+      natTables: {
+        blobNat: record.blobNatTable || {},
+        channelNat: record.channelNatTable || {},
+      },
+      customState: rep.customState || null,
+    };
+    return res.json({ status: 'ok', cardWin: widHex, snapshot: fallbackSnapshot });
   });
 
   app.post('/api/card-hydrated', (req, res) => {
@@ -114,13 +235,31 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes, { X, root }) {
       return res.status(400).json({ status: 'error', message: 'Invalid cardWin' });
     }
     const record = serverGlobals.registerCardWindow(wid, req.body?.cardApp, req.body?.cardId);
+    if (req.body?.blobNatTable && typeof req.body.blobNatTable === 'object') {
+      for (const [vId, lId] of Object.entries(req.body.blobNatTable)) {
+        serverGlobals.setCardBlobNat(wid, vId, lId);
+      }
+    }
+    if (req.body?.channelNatTable && typeof req.body.channelNatTable === 'object') {
+      for (const [vTx, lTx] of Object.entries(req.body.channelNatTable)) {
+        serverGlobals.setCardChannelNat(wid, vTx, lTx);
+      }
+    }
     record.hydratedReport = {
+      ...(record.hydratedReport || {}),
       ...(req.body || {}),
+      blobNatTable: record.blobNatTable,
+      channelNatTable: record.channelNatTable,
       userAgent: req.headers['user-agent'] || 'unknown',
       hydratedAt: Date.now(),
     };
     logger.info(`Browser hydrated card window ${record.widHex} (${record.appId}/${record.cardId}) via ${record.hydratedReport.userAgent}`);
-    res.json({ status: 'ok', cardWin: record.widHex });
+    res.json({
+      status: 'ok',
+      cardWin: record.widHex,
+      blobNatTable: record.blobNatTable,
+      channelNatTable: record.channelNatTable,
+    });
   });
 
   app.delete('/api/card-session/:cardWin', async (req, res) => {
@@ -128,6 +267,7 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes, { X, root }) {
     if (!wid) {
       return res.status(400).json({ status: 'error', message: 'Invalid cardWin' });
     }
+    serverGlobals.closeCardStreams(wid);
     const widHex = xintent.widString(wid);
     delete serverGlobals.cardWindows[widHex];
     try {
@@ -172,7 +312,13 @@ function registerRoutes(app, logger, intentRoutes, xblobRoutes, { X, root }) {
         widHex: c.widHex,
         appId: c.appId,
         cardId: c.cardId,
+        runtimeHost: c.runtimeHost || null,
+        browserDisplay: c.browserDisplay || null,
+        webdriverUrl: c.webdriverUrl || null,
+        webdriverSessionId: c.webdriverSessionId || null,
         hasWs: Boolean(c.ws && c.ws.readyState === WebSocket.OPEN),
+        blobNatTable: c.blobNatTable || {},
+        channelNatTable: c.channelNatTable || {},
         hydratedReport: c.hydratedReport || null,
         createdAt: c.createdAt,
       })),

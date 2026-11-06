@@ -18,5 +18,14 @@ exec = "bun run index.js"
 [intents."xhtml.LiveMigrate"]
 exec = "bun run index.js"
 
+[intents."sys.LiveMigrate"]
+exec = "bun run index.js"
+
+[intents."xhtml.MigrateCard"]
+exec = "bun run index.js"
+
+[intents."sys.MigrateCard"]
+exec = "bun run index.js"
+
 [intents."fs.Open"]
 exec = "bun run index.js"

@@ -137,18 +137,43 @@ const redirectChannel = (channelNum, newHandlerWin) => {
   return true;
 };
 
+const corkedWindows = new Set();
+const beginLiveMigrateWindows = new Set();
+
+const LIVE_MIGRATE_INTENTS = [
+  "xhtml.LiveMigrate",
+  "sys.LiveMigrate",
+  "sys.BeginLiveMigrate",
+  "sys.LiveMigrateCommit",
+  "sys.ChannelRedirect",
+  "sys.ChannelRedirected",
+  "sys.XBlobTransferred",
+  "sys.LiveMigrateComplete",
+  "xhtml.MigrateCard",
+  "sys.MigrateCard",
+  "sys.TraceRoute",
+  "sys.AdjustChannel",
+];
+
 const isLiveMigrateChannel = (channelObj) => {
   if (!channelObj) return false;
-  if (typeof channelObj.intent === "string" && channelObj.intent.includes("xhtml.LiveMigrate")) {
-    return true;
+  if (typeof channelObj.intent === "string") {
+    for (const migIntent of LIVE_MIGRATE_INTENTS) {
+      if (channelObj.intent.includes(migIntent)) return true;
+    }
   }
   const p = channelObj.xintentIntent?.payload;
-  return p?.intent === "xhtml.LiveMigrate";
+  const pIntent = p?.intent || p?.event || p?.action;
+  if (typeof pIntent === "string" && LIVE_MIGRATE_INTENTS.includes(pIntent)) {
+    return true;
+  }
+  return false;
 };
 
 const corkWindowChannels = (cardWin) => {
   const corked = [];
   if (!cardWin) return corked;
+  corkedWindows.add(cardWin);
   for (const channelObj of Object.values(activeChannels)) {
     if (isLiveMigrateChannel(channelObj)) continue;
     if (channelObj.senderWin === cardWin || channelObj.handlerWin === cardWin) {
@@ -164,6 +189,8 @@ const corkWindowChannels = (cardWin) => {
 const migrateWindowChannels = (oldWin, newWin) => {
   const migrated = [];
   if (!oldWin || !newWin || oldWin === newWin) return migrated;
+  corkedWindows.delete(oldWin);
+  beginLiveMigrateWindows.delete(oldWin);
 
   for (const channelObj of Object.values(activeChannels)) {
     if (isLiveMigrateChannel(channelObj)) continue;
@@ -188,6 +215,7 @@ const migrateWindowChannels = (oldWin, newWin) => {
         role: "sender",
         txId: channelObj.senderCookie,
         intent: channelObj.intent,
+        otherEndWin: channelObj.handlerWin,
       });
       logger.info(
         `Migrated channel ${channelObj.channelNum} sender from ${widString(oldWin)} to ${widString(newWin)} (preserved txId: ${channelObj.senderCookie})`
@@ -202,6 +230,7 @@ const migrateWindowChannels = (oldWin, newWin) => {
         role: "handler",
         txId: channelObj.channelNum,
         intent: channelObj.intent,
+        otherEndWin: channelObj.senderWin,
       });
       logger.info(
         `Migrated channel ${channelObj.channelNum} handler from ${widString(oldWin)} to ${widString(newWin)}`
@@ -214,6 +243,8 @@ const migrateWindowChannels = (oldWin, newWin) => {
 module.exports = {
   activeChannels,
   txidToChannel,
+  corkedWindows,
+  beginLiveMigrateWindows,
   newChannel,
   createVirtualChannel,
   closeChannel,
@@ -222,6 +253,7 @@ module.exports = {
   getChannelForMessage,
   listActiveChannels,
   redirectChannel,
+  isLiveMigrateChannel,
   corkWindowChannels,
   migrateWindowChannels,
 };

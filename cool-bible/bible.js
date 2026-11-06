@@ -168,7 +168,8 @@ function getBibleSection(book, chapter, startVerse = undefined, endVerse = undef
   const finalVerse = endVerse ?? startVerse;
   const out = {};
   Object.keys(chapterVerses).forEach(v => {
-    if(v >= startVerse && v <= finalVerse){
+    const vNum = Number(v);
+    if(vNum >= startVerse && vNum <= finalVerse){
       out[v] = chapterVerses[v];
     }
   });
@@ -199,7 +200,10 @@ function lookupReferenceFormatted(refString) {
 
 function parseReferenceString(refString) {
   console.log["bible.js: looking up ref", refString];
-  const trimmed = refString.trim();
+  const trimmed = String(refString ?? '')
+    .trim()
+    .replace(/^\[+|\]+$/g, '')
+    .trim();
 
   // Match the book string (anything) followed by trailing digits/ranges at the end
   const match = trimmed.match(/^(.*?)\s+([\d:a-bA-B\-]+)$/);
@@ -212,14 +216,14 @@ function parseReferenceString(refString) {
     refPart = match[2];
   }
 
-  bookRef = bookRef2shortFn(rawBook);
+  const bookRef = bookRef2shortFn(rawBook);
   // Standardize book lookup check
   const isSingleChapter = SINGLE_CHAPTER_BOOKS.has(bookRef);
 
   // Case 1: No trailing reference numbers (e.g., "John" or "Jude")
   if (!refPart) {
     return {
-      book: rawBook,
+      book: bookRef,
       chapter: isSingleChapter ? 1 : undefined,
       startVerse: undefined,
       endVerse: undefined
@@ -264,7 +268,7 @@ function parseReferenceString(refString) {
     }
   }
 
-  return { book: rawBook, chapter, startVerse, endVerse };
+  return { book: bookRef, chapter, startVerse, endVerse };
 }
 
 module.exports = {labeledVerses, bibleData,

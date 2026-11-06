@@ -29,6 +29,8 @@ class CardsActivity : ComponentActivity() {
         var instance: CardsActivity? = null
         const val EXTRA_APP_NAME = "extra_app_name"
         const val EXTRA_CARD_NAME = "extra_card_name"
+        const val EXTRA_CARD_WIN = "extra_card_win"
+        const val EXTRA_HYDRATE_BLOB = "extra_hydrate_blob"
 
         fun loadXIntentJs(context: Context): String = CardsWebViewSupport.loadXIntentJs(context)
     }
@@ -40,6 +42,7 @@ class CardsActivity : ComponentActivity() {
     private var pendingSaveCallback: ((String) -> Unit)? = null
 
     var cardWebView: WebView? = null
+    var pendingCardUrl: String? = null
 
     var isPinned by mutableStateOf(false)
         private set
@@ -83,6 +86,8 @@ class CardsActivity : ComponentActivity() {
 
         val appName = intent.getStringExtra(EXTRA_APP_NAME) ?: "intent-test-card"
         val cardName = intent.getStringExtra(EXTRA_CARD_NAME) ?: "index"
+        val cardWin = intent.getStringExtra(EXTRA_CARD_WIN)
+        val hydrateBlob = intent.getStringExtra(EXTRA_HYDRATE_BLOB)
 
         setContent {
             FlammenwerferTheme {
@@ -90,11 +95,28 @@ class CardsActivity : ComponentActivity() {
                     CardScreen(
                         appName = appName,
                         cardName = cardName,
+                        cardWin = cardWin,
+                        hydrateBlob = hydrateBlob,
                         onClose = { finish() },
                         modifier = Modifier.padding(innerPadding),
                     )
                 }
             }
+        }
+    }
+
+    fun openIncomingMigratedCard(appName: String, cardName: String, cardWin: String?, hydrateBlob: String?) {
+        val url = CardsWebViewSupport.buildCardUrl(
+            XIntentPreferences.getServerUrl(applicationContext),
+            appName,
+            cardName,
+            cardWin,
+            hydrateBlob,
+        )
+        pendingCardUrl = url
+        XIntentLogManager.addLog("[CardsActivity 📥] Loading incoming migrated card $appName/$cardName (cardWin=$cardWin, hydrateBlob=$hydrateBlob)")
+        runOnUiThread {
+            cardWebView?.loadUrl(url)
         }
     }
 

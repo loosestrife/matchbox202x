@@ -239,7 +239,7 @@ async function runTest() {
   lighterProc = spawn('bun', [lighterScript], {
     cwd: path.join(__dirname, '..'),
     env: { ...process.env, PORT: String(HTTP_PORT), XHTML_HEADLESS: '1' },
-    stdio: 'ignore',
+    stdio: process.env.DEBUG_LOGS ? 'inherit' : 'ignore',
   });
 
   await pollHttpReady();

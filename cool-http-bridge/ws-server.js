@@ -37,7 +37,15 @@ function formatMessageHttp(payload, blobData, txId, controlWord) {
   return Buffer.concat([headerBuf, bodyBuf, footerBuf]);
 }
 
-function shouldFetchChannelBlob(msgPayload) {
+function shouldFetchChannelBlob(msgPayload, incomingMsg) {
+  const intentName = incomingMsg?.payload?.intent || incomingMsg?.payload?.event || msgPayload?.intent;
+  if (
+    intentName === 'sys.LiveMigrate' ||
+    intentName === 'xhtml.LiveMigrate' ||
+    intentName === 'sys.XBlobTransferred'
+  ) {
+    return false;
+  }
   if (!msgPayload) return true;
   const flags = [
     msgPayload.receive_data,
@@ -61,15 +69,20 @@ async function readChannelBlob(X, root, logger, txId, dataBlob) {
 }
 
 function sendWsChannelFrame(ws, txId, msg, blobData) {
+  const attachedHex = msg.dataBlob ? xintent.widString(msg.dataBlob) : undefined;
+  const payloadWithBlob = {
+    ...(msg.payload || {}),
+    ...(attachedHex ? { dataBlob: attachedHex, stateBlob: msg.payload?.stateBlob || attachedHex } : {}),
+  };
   if (ws.isMessageHttp || ws.protocol === 'message/http') {
-    const httpMsg = formatMessageHttp(msg.payload || {}, blobData, txId, msg.controlWord);
+    const httpMsg = formatMessageHttp(payloadWithBlob, blobData, txId, msg.controlWord);
     ws.send(httpMsg);
     return;
   }
   const responseFrame = {
     txId,
     controlWord: msg.controlWord,
-    ...msg.payload,
+    ...payloadWithBlob,
     ...(blobData ? { blob: blobData } : {}),
   };
   ws.send(JSON.stringify(responseFrame));
@@ -88,7 +101,7 @@ function createWebSocketXChannel({ X, root, logger }, txId, ws, xaudioSink, msgP
     controlWord: controlWord || 1,
     createdAt: Date.now(),
     messageFromX: async (msg) => {
-      const fetchBlob = msg.dataBlob && shouldFetchChannelBlob(msgPayload);
+      const fetchBlob = msg.dataBlob && shouldFetchChannelBlob(msgPayload, msg);
       const blobData = fetchBlob ? await readChannelBlob(X, root, logger, txId, msg.dataBlob) : null;
       const widHex = cardWin ? xintent.widString(cardWin) : null;
       const cardRecord = widHex ? serverGlobals.cardWindows[widHex] : null;
@@ -223,12 +236,29 @@ async function handlePlayResponse({ X, root, clientWin }, ws, msg) {
   if (!txId) return;
 
   const routerWin = await xintent.getValidRouterWin(X, root);
-  const sendResponseFn = xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0;
+  if (
+    (msg.event === 'sys.LiveMigrateResponse' || msg.event === 'xhtml.LiveMigrateResponse') &&
+    (msg.newCardWin || msg.remoteWin) &&
+    (msg.stateBlob || msg.dataBlob)
+  ) {
+    const newCardWinNum = serverGlobals.parseWindowId(msg.newCardWin || msg.remoteWin);
+    const stateBlobNum = serverGlobals.parseWindowId(msg.stateBlob || msg.dataBlob);
+    if (newCardWinNum && stateBlobNum && ws.proxyWin) {
+      try {
+        await xintent.XBlobGrant(X, routerWin, ws.proxyWin, stateBlobNum, newCardWinNum);
+      } catch (_) {}
+    }
+  }
+  const isAudioResp = msg.event === 'XAudioPlayResponseV0' || msg.event === 'XAudioControlResponseV0';
+  const sendResponseFn = isAudioResp
+    ? (xintent.sendXAudioPlayResponseV0 || xintent.sendXIntentEventV0)
+    : xintent.sendXIntentEventV0;
 
   await sendResponseFn(X, routerWin, {
     senderWin: ws.proxyWin || clientWin,
     txId,
-    controlWord: msg.controlWord || 1,
+    channel: txId,
+    controlWord: msg.controlWord || 2,
     payload: msg,
   });
 
@@ -287,10 +317,28 @@ async function handleWsIntent(ctx, ws, msg) {
   }
 }
 
+function handleSnapshotResponse(ctx, ws, msg) {
+  const wid = serverGlobals.parseWindowId(msg.cardWin || ws.cardWin);
+  if (!wid) return;
+  const widHex = xintent.widString(wid);
+  const cardRecord = serverGlobals.cardWindows[widHex];
+  if (cardRecord && typeof cardRecord.resolveSnapshotWaiter === 'function') {
+    cardRecord.resolveSnapshotWaiter(msg.snapshot || msg);
+  }
+}
+
 const WS_EVENT_HANDLERS = {
   'sys.Advertise': handleSysAdvertise,
+  'bridge.Advertise': handleSysAdvertise,
   'sys.Deadvertise': handleSysDeadvertise,
+  'bridge.Deadvertise': handleSysDeadvertise,
   'XAudioPlayResponseV0': handlePlayResponse,
+  'XAudioControlResponseV0': handlePlayResponse,
+  'ui.TextToSpeechResponse': handlePlayResponse,
+  'sys.LiveMigrateResponse': handlePlayResponse,
+  'xhtml.LiveMigrateResponse': handlePlayResponse,
+  'xhtml.LoadCardResponse': handlePlayResponse,
+  'xhtml.SnapshotResponse': handleSnapshotResponse,
 };
 
 async function dispatchWsMessage(ctx, ws, data) {
@@ -354,9 +402,13 @@ async function handleWsClose(ctx, ws) {
   await closeWsChannels(ctx, ws);
 }
 
-function findMatchingWsClient(wsClients, targetSink) {
+function findMatchingWsClient(wsClients, targetSink, targetWid) {
   for (const ws of wsClients) {
-    if (ws.readyState === WebSocket.OPEN && (ws.xaudioSink === targetSink || ws.appName === targetSink)) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (targetWid && ws.proxyWin === targetWid) {
+      return ws;
+    }
+    if (targetSink && (ws.xaudioSink === targetSink || ws.appName === targetSink)) {
       return ws;
     }
   }
@@ -390,8 +442,8 @@ function resolveOrCreateXChannelSession(ctx, ev, parsed) {
   const isPlayOrIntent = ev.message_type === xintent.atoms.XAUDIO_PLAY_V0 || ev.message_type === xintent.atoms.XINTENT_INTENT_V0;
   if (!isPlayOrIntent) return null;
 
-  const targetSink = payload.app || payload.XAudioSink || payload.sink || 'flammenwerfer-phone';
-  const targetWs = findMatchingWsClient(ctx.wsClients, targetSink);
+  const targetSink = payload.app || payload.XAudioSink || payload.sink || serverGlobals.proxyWindowToDevice[widHex] || 'flammenwerfer-phone';
+  const targetWs = findMatchingWsClient(ctx.wsClients, targetSink, ev.wid);
   if (targetWs) {
     const session = createWebSocketXChannel(ctx, txId, targetWs, targetSink, payload, controlWord);
     serverGlobals.setChannelSession(ev.wid, txId, session);
@@ -401,17 +453,44 @@ function resolveOrCreateXChannelSession(ctx, ev, parsed) {
   return null;
 }
 
+function sendEventToCardRecordWs(cardRecord, eventFrame, logger) {
+  if (!cardRecord || !eventFrame) return;
+  cardRecord.bufferedBlobEvents.push(eventFrame);
+  if (cardRecord.bufferedBlobEvents.length > 50) cardRecord.bufferedBlobEvents.shift();
+
+  const targets = new Set();
+  if (cardRecord.ws && cardRecord.ws.readyState === WebSocket.OPEN) targets.add(cardRecord.ws);
+  if (cardRecord.wsSet) {
+    for (const client of cardRecord.wsSet) {
+      if (client.readyState === WebSocket.OPEN) targets.add(client);
+    }
+  }
+  const serialized = JSON.stringify(eventFrame);
+  for (const targetWs of targets) {
+    try {
+      targetWs.send(serialized);
+    } catch (_) {}
+  }
+  if (targets.size > 0 && logger) {
+    logger.info(`Forwarded ${eventFrame.event || eventFrame.intent} to card WebSocket (${cardRecord.widHex})`);
+  }
+}
+
 function forwardBlobEventToCardWs(ev, logger) {
   const widHex = xintent.widString(ev.wid);
   const cardRecord = serverGlobals.cardWindows[widHex];
   if (!cardRecord) return;
+
+  const rawBlobHex = xintent.widString(ev.data[1]);
+  const virtualBlobHex = serverGlobals.translateCardBlobToVirtual(ev.wid, rawBlobHex);
 
   let eventFrame = null;
   if (ev.message_type === xintent.atoms.XBLOB_BROADCAST_V0) {
     eventFrame = {
       event: 'XBLOB_BROADCAST_V0',
       senderWin: xintent.widString(ev.data[0]),
-      blobId: xintent.widString(ev.data[1]),
+      blobId: virtualBlobHex,
+      localBlobId: rawBlobHex,
       host: xintent.widString(ev.data[2]),
       version: ev.data[3],
       targetWin: widHex,
@@ -422,33 +501,142 @@ function forwardBlobEventToCardWs(ev, logger) {
     eventFrame = {
       event: 'XBLOB_STREAM_CLOSED_V0',
       senderWin: xintent.widString(ev.data[0]),
-      blobId: xintent.widString(ev.data[1]),
+      blobId: virtualBlobHex,
+      localBlobId: rawBlobHex,
       host: xintent.widString(ev.data[2]),
       size: high * 0x100000000 + low,
       targetWin: widHex,
     };
   }
   if (eventFrame) {
-    cardRecord.bufferedBlobEvents.push(eventFrame);
-    if (cardRecord.bufferedBlobEvents.length > 50) cardRecord.bufferedBlobEvents.shift();
+    sendEventToCardRecordWs(cardRecord, eventFrame, logger);
+  }
+}
 
-    const targets = new Set();
-    if (cardRecord.ws && cardRecord.ws.readyState === WebSocket.OPEN) targets.add(cardRecord.ws);
-    if (cardRecord.wsSet) {
-      for (const client of cardRecord.wsSet) {
-        if (client.readyState === WebSocket.OPEN) targets.add(client);
-      }
+async function handleCardMigrationControlFrame(ctx, ev, parsed, routerWin) {
+  const { X, logger } = ctx;
+  const payload = parsed?.payload || {};
+  const intentName = payload.intent || payload.event;
+  if (
+    intentName !== 'sys.XBlobTransferred' &&
+    intentName !== 'sys.ChannelRedirect' &&
+    intentName !== 'sys.LiveMigrateComplete'
+  ) {
+    return false;
+  }
+
+  const targetCardWid = serverGlobals.parseWindowId(payload.newCardWin || payload.remoteWin) || ev.wid;
+  const cardRecord = serverGlobals.registerCardWindow(targetCardWid);
+  const proxyWs = ev.wid !== targetCardWid ? findMatchingWsClient(ctx.wsClients, null, ev.wid) : null;
+  if (intentName === 'sys.XBlobTransferred') {
+    const virtualBlobId = payload.blobId || payload.virtualBlobId;
+    const nattedBlobId = parsed.dataBlob ? xintent.widString(parsed.dataBlob) : null;
+    if (virtualBlobId && nattedBlobId) {
+      serverGlobals.setCardBlobNat(targetCardWid, virtualBlobId, nattedBlobId);
+      logger.info(`[NAT] Mapped card ${cardRecord?.widHex} virtual blob ${virtualBlobId} -> local blob ${nattedBlobId}`);
     }
-    const serialized = JSON.stringify(eventFrame);
-    for (const targetWs of targets) {
+    if (ev.wid === targetCardWid) {
+      sendEventToCardRecordWs(
+        cardRecord,
+        {
+          ...payload,
+          event: 'sys.XBlobTransferred',
+          intent: 'sys.XBlobTransferred',
+          blobId: virtualBlobId,
+          virtualBlobId,
+          dataBlob: nattedBlobId,
+          nattedBlobId,
+          localBlobId: nattedBlobId,
+        },
+        logger
+      );
+    }
+    await xintent.sendXIntentEventV0(X, routerWin, {
+      targetWin: routerWin,
+      senderWin: ev.wid,
+      txId: parsed.channel || 0,
+      controlWord: 2,
+      payload: {
+        event: 'sys.XBlobTransferredResponse',
+        intent: 'sys.XBlobTransferredResponse',
+        status: 'ok',
+        blobId: virtualBlobId,
+        nattedBlobId,
+      },
+    });
+    return true;
+  }
+
+  if (intentName === 'sys.ChannelRedirect') {
+    const cardTxId = Number(payload.cardTxId ?? payload.txId ?? parsed.channel ?? 0);
+    const localChannelId = Number(payload.localChannelId ?? payload.txId ?? parsed.channel ?? 0);
+    if (cardTxId) {
+      serverGlobals.setCardChannelNat(targetCardWid, cardTxId, localChannelId);
+      serverGlobals.advanceTxIdPast(localChannelId);
+      const session = createWebSocketXChannel(
+        ctx,
+        localChannelId,
+        cardRecord?.ws || null,
+        cardRecord?.appId || 'xhtml-card',
+        { cardWin: targetCardWid, intent: payload.intentName },
+        1
+      );
+      serverGlobals.setChannelSession(targetCardWid, localChannelId, session);
+      if (cardTxId !== localChannelId) {
+        serverGlobals.setChannelSession(targetCardWid, cardTxId, session);
+      }
+      logger.info(`[NAT] Redirected card ${cardRecord?.widHex} channel txId=${cardTxId} -> local=${localChannelId}`);
+    }
+    if (ev.wid === targetCardWid) {
+      sendEventToCardRecordWs(
+        cardRecord,
+        {
+          ...payload,
+          event: 'sys.ChannelRedirect',
+          intent: 'sys.ChannelRedirect',
+          cardTxId,
+          localChannelId,
+        },
+        logger
+      );
+    }
+    await xintent.sendXIntentEventV0(X, routerWin, {
+      targetWin: routerWin,
+      senderWin: ev.wid,
+      txId: parsed.channel || 0,
+      controlWord: 2,
+      payload: {
+        event: 'sys.ChannelRedirectResponse',
+        intent: 'sys.ChannelRedirectResponse',
+        status: 'ok',
+        channel: payload.channel,
+        txId: cardTxId,
+      },
+    });
+    return true;
+  }
+
+  if (intentName === 'sys.LiveMigrateComplete') {
+    if (cardRecord) {
+      cardRecord.migrateComplete = true;
+    }
+    const completeFrame = {
+      ...payload,
+      event: 'sys.LiveMigrateComplete',
+      intent: 'sys.LiveMigrateComplete',
+    };
+    if (ev.wid === targetCardWid) {
+      sendEventToCardRecordWs(cardRecord, completeFrame, logger);
+    }
+    if (proxyWs && proxyWs.readyState === WebSocket.OPEN) {
       try {
-        targetWs.send(serialized);
+        proxyWs.send(JSON.stringify(completeFrame));
       } catch (_) {}
     }
-    if (targets.size > 0) {
-      logger.info(`Forwarded ${eventFrame.event} for blob ${eventFrame.blobId} to card WebSocket (${widHex})`);
-    }
+    return true;
   }
+
+  return false;
 }
 
 function setupX11EventDispatcher(ctx) {
@@ -475,6 +663,9 @@ function setupX11EventDispatcher(ctx) {
     try {
       const routerWin = await xintent.getValidRouterWin(X, root);
       const parsed = await xintent.parseXIntentIntentV0(X, routerWin, ev);
+      if (await handleCardMigrationControlFrame(ctx, ev, parsed, routerWin)) {
+        return;
+      }
       if (!parsed.channel) return;
 
       const session = resolveOrCreateXChannelSession(ctx, ev, parsed);

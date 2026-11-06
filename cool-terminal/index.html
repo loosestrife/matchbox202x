@@ -178,6 +178,8 @@
       <div class="terminal-badges">
         <span class="badge" id="geom-badge">80x24</span>
         <span class="badge" id="tty-badge">TTY: connecting...</span>
+        <span class="badge" id="in-blob-badge">IN: bus=- | nat=-</span>
+        <span class="badge" id="out-blob-badge">OUT: bus=- | nat=-</span>
         <span class="badge" id="blob-badge">IN: - / OUT: -</span>
       </div>
     </div>
@@ -197,6 +199,7 @@
       <button class="btn" id="send-btn">SEND</button>
       <button class="btn" id="clear-btn">CLEAR</button>
       <button class="btn" id="reconnect-btn">NEW TTY</button>
+      <button class="btn" id="migrate-btn">MIGRATE</button>
     </div>
   </div>
 
@@ -206,15 +209,113 @@
     const screenEl = document.getElementById('terminal-screen');
     const viewportEl = document.getElementById('crt-viewport');
     const ttyBadgeEl = document.getElementById('tty-badge');
+    const inBlobBadgeEl = document.getElementById('in-blob-badge');
+    const outBlobBadgeEl = document.getElementById('out-blob-badge');
     const blobBadgeEl = document.getElementById('blob-badge');
     const cmdInputEl = document.getElementById('cmd-input');
 
     let grid = [];
     let cursorRow = 0;
     let cursorCol = 0;
+    let ttyName = '/dev/pts/0';
     let inBlobId = null;
     let outBlobId = null;
+    let termTxId = null;
     let streamAbortCtrl = null;
+    let reportSyncTimer = null;
+
+    function getPlainScreenText() {
+      if (!Array.isArray(grid) || grid.length === 0) return '';
+      return grid.map((row) => row.join('').replace(/\s+$/, '')).join('\n').trim();
+    }
+
+    function updateBadges() {
+      ttyBadgeEl.textContent = `TTY: ${ttyName || 'connected'}`;
+      const localIn = (window.xhtml && inBlobId) ? window.xhtml.getNatInfo('blob', inBlobId) : inBlobId;
+      const localOut = (window.xhtml && outBlobId) ? window.xhtml.getNatInfo('blob', outBlobId) : outBlobId;
+      if (inBlobBadgeEl) {
+        inBlobBadgeEl.textContent = `IN: nat=${inBlobId || '-'} | bus=${localIn || '-'}`;
+        inBlobBadgeEl.dataset.nattedBlobId = String(inBlobId || '');
+        inBlobBadgeEl.dataset.busBlobId = String(localIn || '');
+      }
+      if (outBlobBadgeEl) {
+        outBlobBadgeEl.textContent = `OUT: nat=${outBlobId || '-'} | bus=${localOut || '-'}`;
+        outBlobBadgeEl.dataset.nattedBlobId = String(outBlobId || '');
+        outBlobBadgeEl.dataset.busBlobId = String(localOut || '');
+      }
+      const inLabel = inBlobId
+        ? `${inBlobId}->${localIn || inBlobId} (nat=${inBlobId}, bus=${localIn || inBlobId})`
+        : '-';
+      const outLabel = outBlobId
+        ? `${outBlobId}->${localOut || outBlobId} (nat=${outBlobId}, bus=${localOut || outBlobId})`
+        : '-';
+      blobBadgeEl.textContent = `IN: ${inLabel} / OUT: ${outLabel}`;
+      blobBadgeEl.dataset.inNat = String(inBlobId || '');
+      blobBadgeEl.dataset.inBus = String(localIn || '');
+      blobBadgeEl.dataset.outNat = String(outBlobId || '');
+      blobBadgeEl.dataset.outBus = String(localOut || '');
+    }
+
+    function syncTerminalStateToBridge(immediate = false) {
+      try {
+        const screenText = getPlainScreenText();
+        const localIn = (window.xhtml && inBlobId) ? window.xhtml.getNatInfo('blob', inBlobId) : inBlobId;
+        const localOut = (window.xhtml && outBlobId) ? window.xhtml.getNatInfo('blob', outBlobId) : outBlobId;
+        if (window.localStorage) {
+          window.localStorage.setItem('coolTerminal.ttyName', String(ttyName || ''));
+          window.localStorage.setItem('coolTerminal.inBlobId', String(inBlobId || ''));
+          window.localStorage.setItem('coolTerminal.outBlobId', String(outBlobId || ''));
+          window.localStorage.setItem('coolTerminal.localInBlobId', String(localIn || ''));
+          window.localStorage.setItem('coolTerminal.localOutBlobId', String(localOut || ''));
+          window.localStorage.setItem('coolTerminal.screenText', screenText);
+        }
+      } catch (_) {}
+
+      if (!window.xhtml || !window.xhtml.cardWin || window.xhtml._isHydrating) return;
+      const sendReport = () => {
+        reportSyncTimer = null;
+        const localStorageSnap = {};
+        try {
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const k = window.localStorage.key(i);
+            if (k !== null) localStorageSnap[k] = window.localStorage.getItem(k);
+          }
+        } catch (_) {}
+        fetch('/api/card-hydrated', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Card-Window': String(window.xhtml.cardWin),
+          },
+          body: JSON.stringify({
+            cardWin: window.xhtml.cardWin,
+            cardApp: window.xhtml.cardApp || 'cool-terminal',
+            cardId: window.xhtml.cardId || 'index',
+            localStorage: localStorageSnap,
+            heldBlobs: Array.from(window.xhtml.heldBlobs || []),
+            openChannels: Array.from((window.xhtml.openChannels || new Map()).keys()),
+            blobNatTable: Object.fromEntries(window.xhtml.blobNatTable || []),
+            channelNatTable: Object.fromEntries(window.xhtml.channelNatTable || []),
+            customState: {
+              grid,
+              cursorRow,
+              cursorCol,
+              ttyName,
+              inBlobId,
+              outBlobId,
+              termTxId,
+            },
+          }),
+        }).catch(() => {});
+      };
+
+      if (immediate) {
+        if (reportSyncTimer) clearTimeout(reportSyncTimer);
+        sendReport();
+      } else if (!reportSyncTimer) {
+        reportSyncTimer = setTimeout(sendReport, 120);
+      }
+    }
 
     function resetScreenGrid() {
       grid = Array.from({ length: ROWS }, () => Array(COLS).fill(' '));
@@ -327,6 +428,7 @@
         }
       }
       screenEl.innerHTML = lines.join('\n');
+      syncTerminalStateToBridge(false);
     }
 
     async function sendKeystrokes(str) {
@@ -377,6 +479,48 @@
       return { parsedJson, attachedBlob };
     }
 
+    function toHexBlobId(raw) {
+      if (raw === undefined || raw === null || raw === '') return null;
+      const str = String(raw).trim();
+      const num = (str.startsWith('0x') || str.startsWith('0X'))
+        ? parseInt(str, 16)
+        : parseInt(str, 10);
+      return !isNaN(num) && num > 0 ? `0x${num.toString(16)}` : str;
+    }
+
+    function registerTerminalBlobsAndChannels() {
+      if (!window.xhtml) return;
+      inBlobId = toHexBlobId(inBlobId);
+      outBlobId = toHexBlobId(outBlobId);
+      if (inBlobId) {
+        window.xhtml.heldBlobs.add(String(inBlobId));
+        if (!window.xhtml.blobNatTable.has(String(inBlobId))) {
+          window.xhtml.blobNatTable.set(String(inBlobId), String(inBlobId));
+        }
+        window.xhtml.whenRemapped('blob', inBlobId).then(() => {
+          updateBadges();
+          syncTerminalStateToBridge(true);
+        });
+      }
+      if (outBlobId) {
+        window.xhtml.heldBlobs.add(String(outBlobId));
+        if (!window.xhtml.blobNatTable.has(String(outBlobId))) {
+          window.xhtml.blobNatTable.set(String(outBlobId), String(outBlobId));
+        }
+        window.xhtml.whenRemapped('blob', outBlobId).then(() => {
+          updateBadges();
+          syncTerminalStateToBridge(true);
+        });
+      }
+      if (termTxId) {
+        window.xhtml.openChannels.set(Number(termTxId), {
+          txId: Number(termTxId),
+          intent: 'term.GetOutStream',
+          app: 'cool-terminal',
+        });
+      }
+    }
+
     async function startTerminalSession() {
       if (streamAbortCtrl) {
         streamAbortCtrl.abort();
@@ -386,6 +530,10 @@
       stripAndApplyAnsi('COOL-TERMINAL 80x24 // Allocating ReadableStream pipes...\r\n');
 
       try {
+        if (window.xhtml && typeof window.xhtml.ensureCardSession === 'function') {
+          await window.xhtml.ensureCardSession({ cardApp: 'cool-terminal', cardId: 'index' });
+        }
+
         const createRes = await fetch('/xblob', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -397,17 +545,21 @@
         });
         const createData = await createRes.json();
         inBlobId = createData.blobId || createData.blob;
+        termTxId = Math.floor(Math.random() * 100000) + 500;
 
         const intentRes = await fetch('/intent/term/GetOutStream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-Channel-Control': 'SYN',
+            'X-Tx-Id': String(termTxId),
             'X-Attached-Blob-Id': String(inBlobId),
+            'Connection': 'keep-alive',
             'Prefer': 'return=minimal',
           },
           body: JSON.stringify({
             intent: 'term.GetOutStream',
+            Connection: 'keep-alive',
             Prefer: 'return=minimal',
           }),
         });
@@ -415,11 +567,12 @@
         const rawResponse = await intentRes.text();
         const { parsedJson, attachedBlob } = extractOutStreamFromMultipart(rawResponse);
         outBlobId = attachedBlob || parsedJson?.dataBlob || parsedJson?.blobId;
-        const ttyName = parsedJson?.tty || '/dev/pts/0';
+        ttyName = parsedJson?.tty || '/dev/pts/0';
 
-        ttyBadgeEl.textContent = `TTY: ${ttyName}`;
-        blobBadgeEl.textContent = `IN: ${inBlobId} / OUT: ${outBlobId}`;
+        registerTerminalBlobsAndChannels();
+        updateBadges();
         stripAndApplyAnsi(`Connected to ${ttyName} (IN=${inBlobId}, OUT=${outBlobId})\r\n\r\n`);
+        syncTerminalStateToBridge(true);
 
         if (outBlobId) {
           pipeOutStreamToScreen(outBlobId, streamAbortCtrl.signal).catch((err) => {
@@ -432,6 +585,56 @@
         ttyBadgeEl.textContent = 'TTY: error';
         stripAndApplyAnsi(`\r\n[connection failed: ${err.message}]\r\n`);
       }
+    }
+
+    if (window.xhtml) {
+      window.xhtml.onfreeze = async () => {
+        if (streamAbortCtrl) {
+          try { streamAbortCtrl.abort(); } catch (_) {}
+          streamAbortCtrl = null;
+        }
+        return {
+          grid,
+          cursorRow,
+          cursorCol,
+          ttyName,
+          inBlobId,
+          outBlobId,
+          termTxId,
+        };
+      };
+
+      window.xhtml.onthaw = async (customState, snapshot) => {
+        const state = customState || snapshot?.customState || {};
+        if (Array.isArray(state.grid) && state.grid.length === ROWS) {
+          grid = state.grid.map((row) => Array.isArray(row) ? row.slice(0, COLS) : Array(COLS).fill(' '));
+        } else if (grid.length !== ROWS) {
+          resetScreenGrid();
+        }
+        if (typeof state.cursorRow === 'number') cursorRow = state.cursorRow;
+        if (typeof state.cursorCol === 'number') cursorCol = state.cursorCol;
+        if (state.ttyName) ttyName = state.ttyName;
+        if (state.inBlobId) inBlobId = state.inBlobId;
+        if (state.outBlobId) outBlobId = state.outBlobId;
+        if (state.termTxId) termTxId = state.termTxId;
+
+        registerTerminalBlobsAndChannels();
+        updateBadges();
+        renderGrid();
+        syncTerminalStateToBridge(true);
+
+        if (outBlobId) {
+          if (streamAbortCtrl) {
+            try { streamAbortCtrl.abort(); } catch (_) {}
+          }
+          streamAbortCtrl = new AbortController();
+          pipeOutStreamToScreen(outBlobId, streamAbortCtrl.signal).catch((err) => {
+            if (err.name !== 'AbortError') {
+              stripAndApplyAnsi(`\r\n[stream closed: ${err.message}]\r\n`);
+            }
+          });
+        }
+      };
     }
 
     viewportEl.addEventListener('keydown', (ev) => {
@@ -474,8 +677,28 @@
       startTerminalSession();
       viewportEl.focus();
     });
+    document.getElementById('migrate-btn').addEventListener('click', async () => {
+      if (window.xhtml && typeof window.xhtml.liveMigrate === 'function') {
+        const hostInput = document.getElementById('xhtml-migrate-host-input');
+        const hostSelect = document.getElementById('xhtml-migrate-host-select');
+        const rawHost = (hostInput?.value || hostSelect?.value || 'user-desktop').trim();
+        const target = rawHost.includes(':') ? rawHost : `${rawHost}:cool-xhtml-runtime`;
+        await window.xhtml.liveMigrate(target);
+      }
+    });
+
+    window.addEventListener('xhtml:blob-transferred', () => {
+      updateBadges();
+      syncTerminalStateToBridge(true);
+    });
 
     window.addEventListener('DOMContentLoaded', () => {
+      const params = new URLSearchParams(window.location.search || '');
+      const isHydrating = Boolean(params.get('hydrateBlob') || params.get('migrateBlob') || params.get('migrate'));
+      if (isHydrating) {
+        if (grid.length !== ROWS) resetScreenGrid();
+        return;
+      }
       resetScreenGrid();
       startTerminalSession();
     });

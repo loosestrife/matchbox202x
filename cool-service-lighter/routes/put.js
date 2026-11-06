@@ -289,6 +289,54 @@ async function processPutPayload(req, res, body, ctx) {
     logger.info(`[SECURITY CHECK] Verified socket UNIX peer credential against _NET_WM_PID of X-Sender-Win ${toHexBlobId(requestSenderWin)}: MATCH`);
   }
 
+  let aliasOfVal = blobData?.aliasOf;
+  if (aliasOfVal === undefined && blobData?.data) {
+    if (typeof blobData.data === 'object' && blobData.data.aliasOf !== undefined) {
+      aliasOfVal = blobData.data.aliasOf;
+    } else if (typeof blobData.data === 'string' && blobData.data.includes('"aliasOf"')) {
+      try {
+        const parsedInner = JSON.parse(blobData.data);
+        if (parsedInner && parsedInner.aliasOf !== undefined) {
+          aliasOfVal = parsedInner.aliasOf;
+        }
+      } catch (_) {}
+    }
+  }
+
+  if (aliasOfVal !== undefined && aliasOfVal !== null) {
+    const origId = parseBlobId(aliasOfVal);
+    const origBlob =
+      (origId !== null ? hostBlobs.get(origId) : null) ||
+      (origId !== null ? hostBlobs.get(toHexBlobId(origId)) : null) ||
+      hostBlobs.get(String(aliasOfVal));
+    if (origBlob) {
+      const aliasBlobId = targetBlob || (await allocateHostBlobId(origBlob, requestSenderWin));
+      hostBlobs.set(aliasBlobId, origBlob);
+      if (typeof aliasBlobId === 'number') {
+        hostBlobs.set(`0x${aliasBlobId.toString(16)}`, origBlob);
+        hostBlobs.set(String(aliasBlobId), origBlob);
+      }
+      const hexAliasId = toHexBlobId(aliasBlobId);
+      const resHeaders = buildPutResponseHeaders(
+        hexAliasId,
+        origBlob,
+        origBlob.contentEncoding === 'fd-rights',
+        origBlob.contentEncoding === 'file-path'
+      );
+      logger.info(`[xblob-host] Created NAT alias ${hexAliasId} -> ${toHexBlobId(origId)}`);
+      res.writeHead(201, resHeaders);
+      return res.end(
+        JSON.stringify({
+          status: 'ok',
+          blobId: hexAliasId,
+          blob: hexAliasId,
+          aliasOf: toHexBlobId(origId),
+          contentEncoding: origBlob.contentEncoding || 'identity',
+        })
+      );
+    }
+  }
+
   if (targetBlob) {
     const existingBlob = hostBlobs.get(targetBlob) || hostBlobs.get(toHexBlobId(targetBlob)) || hostBlobs.get(String(targetBlob));
     if (appendToHostManagedPipe(existingBlob, blobData, targetBlob, toHexBlobId, logger)) {

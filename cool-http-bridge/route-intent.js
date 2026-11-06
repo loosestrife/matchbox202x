@@ -85,11 +85,15 @@ const aggregateTomlAsObject = async () => {
 
 const resolveDataBlob = async (rawBlob, XClient, rWin, cWin) => {
   if (!rawBlob) return 0;
-  if (typeof rawBlob === 'number') return isNaN(rawBlob) ? 0 : rawBlob;
+  if (typeof rawBlob === 'number') {
+    if (isNaN(rawBlob)) return 0;
+    return server.translateCardBlobToLocal(cWin, rawBlob) || rawBlob;
+  }
   if (typeof rawBlob === 'string') {
     const trimmed = rawBlob.trim();
     const num = (trimmed.startsWith('0x') || trimmed.startsWith('0X')) ? parseInt(trimmed, 16) : Number(trimmed);
-    return isNaN(num) ? 0 : num;
+    if (isNaN(num)) return 0;
+    return server.translateCardBlobToLocal(cWin, num) || num;
   }
   if (typeof rawBlob === 'object') {
     try {
@@ -206,6 +210,20 @@ const routeIntent = async (req, res) => {
   const payload = helpers.validateAndNormalizeIntentPayload(req, intent);
   const targetApp = payload.app;
   const senderWin = server.parseWindowId(req.headers['x-card-window'] || payload.cardWin) || clientWin;
+
+  if (
+    intent === 'sys.BeginLiveMigrate' ||
+    intent === 'sys.LiveMigrate' ||
+    intent === 'xhtml.LiveMigrate' ||
+    intent === 'sys.LiveMigrateCommit' ||
+    intent === 'xhtml.MigrateCard' ||
+    intent === 'sys.MigrateCard'
+  ) {
+    const migratingWin = server.parseWindowId(payload.oldCardWin || payload.cardWin) || senderWin;
+    if (migratingWin && migratingWin !== clientWin) {
+      server.closeCardStreams(migratingWin);
+    }
+  }
 
   const logPayload = helpers.buildIntentLogPayload(req, payload);
   helpers.applyRequestHeadersToPayload(req, payload);
