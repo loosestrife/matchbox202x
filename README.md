@@ -634,44 +634,7 @@ and it could be inspected by XSECURE and sent to the intent router in a few inst
 Once the rules are formalized for ui.Copy transferring the buffer to the clipboard manager and ui.SelectionPaste being only permited from a middle click and not synthetically, the rules can be applied to the old mechanisms.  Emacs from 2000 doesn't need to change, its requests can be validated and translated.
 
 #### XAudio - Add Your Speakers to Your Session
-##### Category A: Server-Side Audio Buckets ("Pixmaps for Sound")
-* 0x01 - PlaySoundBlob - Triggers playback of a blob.
-  Parameters: Blob ID, Output Stream ID, Volume, Looping Flag.
-* 0x02 - PrefetchSoundBlob - Ensures that a sound blob is actually local to the speaker
-* 0x03 - GetAudioOutputs - Enumerates audio outputs available to play or stream to
-* 0x04 - SetVlientVolume
-
-##### Category B: Streaming
-* 0x10 - PlayStream - Plays a stream to an output
-* 0x11 - ControlStream (Low-Latency Jump Ahead) - Lightweight control frame sent via the main X11 protocol socket so it arrives ahead of queued bulk payload data on the secondary socket.
-  Parameters: Stream ID, Action Enum (0=Pause, 1=Resume, 2=Stop, 3=Fast Forward, 4=Rewind, 5=Seek), Payload Value (e.g., skip duration).
-* 0x12 - SeekStream - Seek commands that arent on a local file need to be sent to the sending process so the stream
-  Parameters: SHM ID, Seek Offset (64-bit), Seek Flags (Absolute/Relative).
-
-##### Required XSettings
-XSettings provides desktop-wide configuration and dynamic adjustments without changing the protocol stream layout. To support mixing, multi-stream permissions, and per-client volume controls, you need 6 XSetting properties:
-Mixing & Device Management
-* XAudio/MixingMode (String)
-  Controls server behavior when multiple streams play simultaneously.
-  Values: "FFMPEG_SOFTWARE_MIX" (mix everything into master output), "EXCLUSIVE" (first stream locks device), "PASS_THROUGH".
-
-* XAudio/DefaultOutput (String)
-  Identifies the primary active speaker/sink device string passed to FFmpeg (e.g., "default", "alsa/hw:0,0").
-
-* XAudio/AllowMultiStream (Integer / Boolean)
-  Global toggle (0 or 1) determining whether secondary client streams can play concurrently or get queued.
-
-Per-Client & Security Policy
-
-* XAudio/PerClientVolume/Client_<ID> (Integer)
-  Stores the volume level for individual client connection IDs (scale 0–100 or 0–65535).
-
-* XAudio/ClientInterconnectPolicy (Integer / Enum)
-  Rules governing the client-to-client stream annex.
-  Values: 0=Deny All, 1=Prompt User, 2=Allow Local Only, 3=Allow All.
-
-* XAudio/MaxShmBufferSizeMB (Integer)
-  Cap on total memory a client can allocate for zero-copy file sharing (prevents a client from exhausting system RAM with massive files).
+Get a window opened advertising `XAudioSink.name = "my-speakers"` to recieve XAudio requests from anywhere on the bus or on the network.
 
 #### C and Scripting with No IPC just like Netscape in 1995
 - (1) The C library loads QuickJS which loads the javascript, but, thats more complicated than -lcooljsfun so we can build a javascript elf bundler
